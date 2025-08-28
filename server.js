@@ -122,9 +122,7 @@ ano
 // Endpoint de registro
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { email, password, displayName, name } = req.body;
-    // Usar displayName si está presente, sino usar name, sino undefined
-    const userDisplayName = displayName || name;
+    const { email, password, displayName } = req.body;
 
     if (!auth) {
       return res.status(500).json({
@@ -153,7 +151,7 @@ app.post('/api/auth/signup', async (req, res) => {
     const userRecord = await auth.createUser({
       email,
       password,
-      displayName: userDisplayName,
+      displayName,
       emailVerified: false
     });
 
@@ -163,7 +161,7 @@ app.post('/api/auth/signup', async (req, res) => {
     if (db) {
       await db.collection('users').doc(userRecord.uid).set({
         email,
-        displayName: userDisplayName,
+        displayName,
         createdAt: new Date(),
         updatedAt: new Date(),
         isActive: true
@@ -182,7 +180,6 @@ app.post('/api/auth/signup', async (req, res) => {
         uid: userRecord.uid,
         email: userRecord.email,
         displayName: userRecord.displayName,
-        name: userRecord.displayName, // Para compatibilidad con el cliente
         customToken
       }
     });
@@ -242,7 +239,6 @@ app.post('/api/auth/login', async (req, res) => {
         uid: userRecord.uid,
         email: userRecord.email,
         displayName: userRecord.displayName,
-        name: userRecord.displayName, // Para compatibilidad con el cliente
         customToken
       }
     });
