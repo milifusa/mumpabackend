@@ -490,6 +490,112 @@ app.delete('/api/auth/account', authenticateToken, async (req, res) => {
   }
 });
 
+// Ruta para solicitar restablecimiento de contraseña
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email es requerido'
+      });
+    }
+
+    console.log('🔑 [FORGOT-PASSWORD] Solicitando restablecimiento para:', email);
+
+    // Verificar si el usuario existe
+    const userRecord = await auth.getUserByEmail(email);
+    
+    if (!userRecord) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontró una cuenta con este email'
+      });
+    }
+
+    // Generar link de restablecimiento
+    const resetLink = await auth.generatePasswordResetLink(email, {
+      url: process.env.FRONTEND_URL || 'https://munpa.online/reset-password',
+      handleCodeInApp: true
+    });
+
+    console.log('✅ [FORGOT-PASSWORD] Link generado para:', email);
+
+    // TODO: Aquí deberías enviar el email con el link
+    // Por ahora, lo devolvemos en la respuesta para testing
+    res.json({
+      success: true,
+      message: 'Se ha enviado un email con instrucciones para restablecer tu contraseña',
+      resetLink: process.env.NODE_ENV === 'development' ? resetLink : undefined
+    });
+
+  } catch (error) {
+    console.error('❌ [FORGOT-PASSWORD] Error:', error);
+    
+    if (error.code === 'auth/user-not-found') {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontró una cuenta con este email'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error al procesar la solicitud de restablecimiento'
+    });
+  }
+});
+
+// Ruta para confirmar restablecimiento de contraseña
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { oobCode, newPassword } = req.body;
+
+    if (!oobCode || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Código de restablecimiento y nueva contraseña son requeridos'
+      });
+    }
+
+    console.log('🔑 [RESET-PASSWORD] Procesando restablecimiento...');
+
+    // Verificar el código y cambiar la contraseña
+    const email = await auth.verifyPasswordResetCode(oobCode);
+    await auth.confirmPasswordReset(oobCode, newPassword);
+
+    console.log('✅ [RESET-PASSWORD] Contraseña actualizada para:', email);
+
+    res.json({
+      success: true,
+      message: 'Contraseña actualizada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [RESET-PASSWORD] Error:', error);
+    
+    if (error.code === 'auth/invalid-action-code') {
+      return res.status(400).json({
+        success: false,
+        message: 'Código de restablecimiento inválido o expirado'
+      });
+    }
+
+    if (error.code === 'auth/weak-password') {
+      return res.status(400).json({
+        success: false,
+        message: 'La contraseña debe tener al menos 6 caracteres'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error al restablecer la contraseña'
+    });
+  }
+});
+
 // Endpoint para verificar token
 app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
   try {
