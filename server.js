@@ -294,12 +294,36 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    // Verificar como customToken
-    const decodedToken = await auth.verifyCustomToken(token);
-    
-    // El customToken contiene el uid directamente
-    req.user = { uid: decodedToken };
-    next();
+    // Para customTokens, extraer el uid del token JWT
+    try {
+      // Decodificar el JWT sin verificar (solo para extraer el uid)
+      const tokenParts = token.split('.');
+      if (tokenParts.length === 3) {
+        const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+        const uid = payload.uid;
+        
+        if (uid) {
+          req.user = { uid };
+          next();
+          return;
+        }
+      }
+    } catch (decodeError) {
+      console.error('Error decodificando token:', decodeError);
+    }
+
+    // Si no es un customToken válido, intentar como ID token
+    try {
+      const decodedToken = await auth.verifyIdToken(token);
+      req.user = decodedToken;
+      next();
+    } catch (idTokenError) {
+      console.error('Error verificando ID token:', idTokenError);
+      return res.status(403).json({
+        success: false,
+        message: 'Token inválido o expirado'
+      });
+    }
   } catch (error) {
     console.error('Error al verificar token:', error);
     return res.status(403).json({
