@@ -117,7 +117,27 @@ app.get('/health', (req, res) => {
 });
 
 // Ruta raíz
-ano
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'API de Autenticación con Firebase',
+    version: '1.0.0',
+    firebase: {
+      status: firebaseStatus,
+      ready: firebaseReady
+    },
+    endpoints: {
+      health: '/health',
+      signup: '/api/auth/signup',
+      login: '/api/auth/login',
+      profile: '/api/auth/profile (requiere auth)',
+      'update-profile': '/api/auth/profile (PUT, requiere auth)',
+      'change-password': '/api/auth/change-password (requiere auth)',
+      'delete-account': '/api/auth/account (DELETE, requiere auth)',
+      'verify-token': '/api/auth/verify-token (requiere auth)'
+    }
+  });
+});
 
 // Endpoint de registro
 app.post('/api/auth/signup', async (req, res) => {
