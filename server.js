@@ -277,55 +277,65 @@ app.post('/api/auth/login', async (req, res) => {
 // Middleware de autenticación
 const authenticateToken = async (req, res, next) => {
   try {
+    console.log('🔍 [AUTH] Iniciando verificación de token para:', req.path);
+    
     if (!auth) {
+      console.log('❌ [AUTH] Firebase no está configurado');
       return res.status(500).json({
         success: false,
         message: 'Firebase no está configurado'
       });
     }
-
+    
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
+      console.log('❌ [AUTH] No se encontró token en headers');
       return res.status(401).json({
         success: false,
         message: 'Token de acceso requerido'
       });
     }
 
-    // Para customTokens, extraer el uid del token JWT
-    try {
-      // Decodificar el JWT sin verificar (solo para extraer el uid)
-      const tokenParts = token.split('.');
-      if (tokenParts.length === 3) {
-        const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
-        const uid = payload.uid;
-        
-        if (uid) {
-          req.user = { uid };
-          next();
-          return;
-        }
-      }
-    } catch (decodeError) {
-      console.error('Error decodificando token:', decodeError);
-    }
+    console.log('🔑 [AUTH] Token encontrado, longitud:', token.length);
 
-    // Si no es un customToken válido, intentar como ID token
     try {
-      const decodedToken = await auth.verifyIdToken(token);
-      req.user = decodedToken;
+      // PRIMERO intentar como customToken
+      console.log('🔄 [AUTH] Intentando verificar como customToken...');
+      const decodedCustomToken = await auth.verifyCustomToken(token);
+      console.log('✅ [AUTH] CustomToken verificado exitosamente');
+      console.log('👤 [AUTH] UID del token:', decodedCustomToken.uid);
+      
+      req.user = {
+        uid: decodedCustomToken.uid,
+        ...decodedCustomToken
+      };
+      
+      console.log('✅ [AUTH] req.user configurado:', req.user);
       next();
-    } catch (idTokenError) {
-      console.error('Error verificando ID token:', idTokenError);
-      return res.status(403).json({
-        success: false,
-        message: 'Token inválido o expirado'
-      });
+    } catch (customTokenError) {
+      console.log('❌ [AUTH] Error verificando customToken:', customTokenError.message);
+      
+      // SEGUNDO intentar como idToken
+      try {
+        console.log('🔄 [AUTH] Intentando verificar como idToken...');
+        const decodedIdToken = await auth.verifyIdToken(token);
+        console.log('✅ [AUTH] IdToken verificado exitosamente');
+        
+        req.user = decodedIdToken;
+        console.log('✅ [AUTH] req.user configurado:', req.user);
+        next();
+      } catch (idTokenError) {
+        console.log('❌ [AUTH] Error verificando idToken:', idTokenError.message);
+        return res.status(403).json({
+          success: false,
+          message: 'Token inválido o expirado'
+        });
+      }
     }
   } catch (error) {
-    console.error('Error al verificar token:', error);
+    console.error('❌ [AUTH] Error general en autenticación:', error);
     return res.status(403).json({
       success: false,
       message: 'Token inválido o expirado'
