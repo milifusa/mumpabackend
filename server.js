@@ -309,38 +309,43 @@ const authenticateToken = async (req, res, next) => {
     console.log('🔑 [AUTH] Token encontrado, longitud:', token.length);
 
     try {
-      // PRIMERO intentar como customToken
-      console.log('🔄 [AUTH] Intentando verificar como customToken...');
-      const decodedCustomToken = await auth.verifyCustomToken(token);
-      console.log('✅ [AUTH] CustomToken verificado exitosamente');
-      console.log('👤 [AUTH] UID del token:', decodedCustomToken.uid);
+      // PRIMERO intentar extraer uid del customToken JWT
+      console.log('🔄 [AUTH] Intentando extraer UID del customToken...');
+      const tokenParts = token.split('.');
       
-      req.user = {
-        uid: decodedCustomToken.uid,
-        ...decodedCustomToken
-      };
-      
-      console.log('✅ [AUTH] req.user configurado:', req.user);
-      next();
-    } catch (customTokenError) {
-      console.log('❌ [AUTH] Error verificando customToken:', customTokenError.message);
+      if (tokenParts.length === 3) {
+        try {
+          const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+          console.log('🔍 [AUTH] Payload del token:', payload);
+          
+          if (payload.uid) {
+            console.log('✅ [AUTH] UID extraído del customToken:', payload.uid);
+            
+            req.user = { uid: payload.uid };
+            console.log('✅ [AUTH] req.user configurado:', req.user);
+            next();
+            return;
+          }
+        } catch (decodeError) {
+          console.log('❌ [AUTH] Error decodificando customToken:', decodeError.message);
+        }
+      }
       
       // SEGUNDO intentar como idToken
-      try {
-        console.log('🔄 [AUTH] Intentando verificar como idToken...');
-        const decodedIdToken = await auth.verifyIdToken(token);
-        console.log('✅ [AUTH] IdToken verificado exitosamente');
-        
-        req.user = decodedIdToken;
-        console.log('✅ [AUTH] req.user configurado:', req.user);
-        next();
-      } catch (idTokenError) {
-        console.log('❌ [AUTH] Error verificando idToken:', idTokenError.message);
-        return res.status(403).json({
-          success: false,
-          message: 'Token inválido o expirado'
-        });
-      }
+      console.log('🔄 [AUTH] Intentando verificar como idToken...');
+      const decodedIdToken = await auth.verifyIdToken(token);
+      console.log('✅ [AUTH] IdToken verificado exitosamente');
+      
+      req.user = decodedIdToken;
+      console.log('✅ [AUTH] req.user configurado:', req.user);
+      next();
+      
+    } catch (idTokenError) {
+      console.log('❌ [AUTH] Error verificando idToken:', idTokenError.message);
+      return res.status(403).json({
+        success: false,
+        message: 'Token inválido o expirado'
+      });
     }
   } catch (error) {
     console.error('❌ [AUTH] Error general en autenticación:', error);
