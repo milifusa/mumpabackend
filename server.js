@@ -7,20 +7,28 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// Configuración de CORS mejorada
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://munpa.online', 'https://www.munpa.online'] 
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'],
-  credentials: true
+    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Middleware para manejar peticiones OPTIONS (preflight)
+app.options('*', cors());
+
 // Middleware de logging
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log('📋 Headers recibidos:', req.headers);
   next();
 });
 
