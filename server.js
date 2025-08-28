@@ -276,7 +276,10 @@ const authenticateToken = async (req, res, next) => {
 
     // Verificar como customToken
     const decodedToken = await auth.verifyCustomToken(token);
-    req.user = decodedToken;
+    console.log('🔍 Token decodificado:', decodedToken);
+    
+    // El customToken contiene el uid directamente
+    req.user = { uid: decodedToken };
     next();
   } catch (error) {
     console.error('Error al verificar token:', error);
