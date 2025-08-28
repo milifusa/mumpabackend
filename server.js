@@ -257,7 +257,11 @@ app.post('/api/auth/login', async (req, res) => {
 // Middleware de autenticación
 const authenticateToken = async (req, res, next) => {
   try {
+    console.log('🔐 Iniciando autenticación para:', req.method, req.path);
+    console.log('📋 Headers recibidos:', req.headers);
+    
     if (!auth) {
+      console.log('❌ Firebase no está configurado');
       return res.status(500).json({
         success: false,
         message: 'Firebase no está configurado'
@@ -265,9 +269,13 @@ const authenticateToken = async (req, res, next) => {
     }
 
     const authHeader = req.headers['authorization'];
+    console.log('🔑 Auth header:', authHeader);
+    
     const token = authHeader && authHeader.split(' ')[1];
+    console.log('🎫 Token extraído:', token ? 'Presente' : 'Ausente');
 
     if (!token) {
+      console.log('❌ No se encontró token');
       return res.status(401).json({
         success: false,
         message: 'Token de acceso requerido'
@@ -275,17 +283,20 @@ const authenticateToken = async (req, res, next) => {
     }
 
     // Verificar como customToken
+    console.log('🔍 Verificando customToken...');
     const decodedToken = await auth.verifyCustomToken(token);
-    console.log('🔍 Token decodificado:', decodedToken);
+    console.log('✅ Token decodificado:', decodedToken);
     
     // El customToken contiene el uid directamente
     req.user = { uid: decodedToken };
+    console.log('👤 Usuario asignado:', req.user);
     next();
   } catch (error) {
-    console.error('Error al verificar token:', error);
+    console.error('❌ Error al verificar token:', error);
     return res.status(403).json({
       success: false,
-      message: 'Token inválido o expirado'
+      message: 'Token inválido o expirado',
+      error: error.message
     });
   }
 };
@@ -293,8 +304,11 @@ const authenticateToken = async (req, res, next) => {
 // Endpoint protegido - Perfil del usuario
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
+    console.log('👤 Obteniendo perfil para usuario:', req.user);
     const { uid } = req.user;
+    console.log('🆔 UID extraído:', uid);
 
+    console.log('🔍 Buscando usuario en Firebase Auth...');
     const userRecord = await auth.getUser(uid);
     
     let userData = {
