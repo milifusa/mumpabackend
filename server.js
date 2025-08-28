@@ -1,3 +1,6 @@
+// Cargar variables de entorno desde archivo .env
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 
@@ -28,14 +31,45 @@ let firebaseStatus = 'No inicializado';
 
 const setupFirebase = () => {
   try {
-    console.log('🔥 Configurando Firebase con archivo JSON...');
+    console.log('🔥 Configurando Firebase con variables de entorno...');
     
     const admin = require('firebase-admin');
     
-    // Usar el archivo JSON directamente
-    const serviceAccount = require('./mumpabackend-firebase-adminsdk-fbsvc-0c400d3af7.json');
+    // Verificar que las variables de entorno estén disponibles
+    const requiredEnvVars = [
+      'FIREBASE_TYPE',
+      'FIREBASE_PROJECT_ID',
+      'FIREBASE_PRIVATE_KEY_ID',
+      'FIREBASE_PRIVATE_KEY',
+      'FIREBASE_CLIENT_EMAIL',
+      'FIREBASE_CLIENT_ID',
+      'FIREBASE_AUTH_URI',
+      'FIREBASE_TOKEN_URI',
+      'FIREBASE_AUTH_PROVIDER_X509_CERT_URL',
+      'FIREBASE_CLIENT_X509_CERT_URL'
+    ];
+
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
     
-    console.log('✅ Archivo JSON cargado correctamente');
+    if (missingVars.length > 0) {
+      throw new Error(`Variables de entorno faltantes: ${missingVars.join(', ')}`);
+    }
+
+    // Crear objeto de configuración desde variables de entorno
+    const serviceAccount = {
+      type: process.env.FIREBASE_TYPE,
+      project_id: process.env.FIREBASE_PROJECT_ID,
+      private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+      private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      client_email: process.env.FIREBASE_CLIENT_EMAIL,
+      client_id: process.env.FIREBASE_CLIENT_ID,
+      auth_uri: process.env.FIREBASE_AUTH_URI,
+      token_uri: process.env.FIREBASE_TOKEN_URI,
+      auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
+      client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL
+    };
+    
+    console.log('✅ Variables de entorno cargadas correctamente');
 
     // Inicializar Firebase
     if (!admin.apps.length) {

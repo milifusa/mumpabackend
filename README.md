@@ -38,8 +38,16 @@ Un backend robusto construido con Node.js y Firebase para manejar autenticación
    ```
 
 3. **Configurar variables de entorno**
+   
+   **Opción A: Convertir desde archivo JSON existente**
+   ```bash
+   npm run convert:env
+   ```
+   
+   **Opción B: Configurar manualmente**
    ```bash
    cp env.example .env
+   # Edita el archivo .env con tus credenciales
    ```
 
 4. **Configurar Firebase**
@@ -48,7 +56,8 @@ Un backend robusto construido con Node.js y Firebase para manejar autenticación
    - Ve a Configuración del proyecto > Cuentas de servicio
    - Genera una nueva clave privada
    - Descarga el archivo JSON con las credenciales
-   - Copia los valores al archivo `.env`
+   - Si usas la Opción A, el script convertirá automáticamente el JSON a variables de entorno
+   - Si usas la Opción B, copia manualmente los valores al archivo `.env`
 
 5. **Configurar Firestore**
    - En la consola de Firebase, ve a Firestore Database
@@ -59,8 +68,15 @@ Un backend robusto construido con Node.js y Firebase para manejar autenticación
 
 ### Variables de Entorno (.env)
 
+El servidor ahora utiliza variables de entorno en lugar del archivo JSON de Firebase. Esto es más seguro y flexible para diferentes entornos.
+
 ```env
-# Firebase Configuration
+# Configuración del servidor
+PORT=3000
+NODE_ENV=development
+
+# Configuración de Firebase (obtener desde el archivo JSON de Firebase Admin SDK)
+FIREBASE_TYPE=service_account
 FIREBASE_PROJECT_ID=tu-proyecto-id
 FIREBASE_PRIVATE_KEY_ID=tu-private-key-id
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nTu-clave-privada-aqui\n-----END PRIVATE KEY-----\n"
@@ -71,10 +87,11 @@ FIREBASE_TOKEN_URI=https://oauth2.googleapis.com/token
 FIREBASE_AUTH_PROVIDER_X509_CERT_URL=https://www.googleapis.com/oauth2/v1/certs
 FIREBASE_CLIENT_X509_CERT_URL=https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xxxxx%40tu-proyecto.iam.gserviceaccount.com
 
-# Server Configuration
-PORT=3000
-NODE_ENV=development
+# Configuración de CORS (opcional)
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:5173
 ```
+
+**Nota importante:** El archivo `.env` está incluido en `.gitignore` para mantener seguras tus credenciales. Nunca subas este archivo al repositorio.
 
 ## 🚀 Uso
 
@@ -283,8 +300,12 @@ mumpabackend/
 ### Scripts disponibles
 
 ```bash
-npm start      # Inicia el servidor en producción
-npm run dev    # Inicia el servidor en desarrollo con nodemon
+npm start          # Inicia el servidor en producción
+npm run dev        # Inicia el servidor en desarrollo con nodemon
+npm run convert:env # Convierte el archivo JSON de Firebase a variables de entorno
+npm run setup      # Configuración inicial de Firebase
+npm run deploy:vercel # Despliega en Vercel
+npm run setup:vercel  # Configura variables de entorno en Vercel
 ```
 
 ### Logs
