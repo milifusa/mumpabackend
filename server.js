@@ -117,32 +117,14 @@ app.get('/health', (req, res) => {
 });
 
 // Ruta raíz
-app.get('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'API de Autenticación con Firebase',
-    version: '1.0.0',
-    firebase: {
-      status: firebaseStatus,
-      ready: firebaseReady
-    },
-    endpoints: {
-      health: '/health',
-      signup: '/api/auth/signup',
-      login: '/api/auth/login',
-      profile: '/api/auth/profile (requiere auth)',
-      'update-profile': '/api/auth/profile (PUT, requiere auth)',
-      'change-password': '/api/auth/change-password (requiere auth)',
-      'delete-account': '/api/auth/account (DELETE, requiere auth)',
-      'verify-token': '/api/auth/verify-token (requiere auth)'
-    }
-  });
-});
+ano
 
 // Endpoint de registro
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { email, password, displayName } = req.body;
+    const { email, password, displayName, name } = req.body;
+    // Usar displayName si está presente, sino usar name, sino undefined
+    const userDisplayName = displayName || name;
 
     if (!auth) {
       return res.status(500).json({
@@ -171,7 +153,7 @@ app.post('/api/auth/signup', async (req, res) => {
     const userRecord = await auth.createUser({
       email,
       password,
-      displayName,
+      displayName: userDisplayName,
       emailVerified: false
     });
 
@@ -181,7 +163,7 @@ app.post('/api/auth/signup', async (req, res) => {
     if (db) {
       await db.collection('users').doc(userRecord.uid).set({
         email,
-        displayName,
+        displayName: userDisplayName,
         createdAt: new Date(),
         updatedAt: new Date(),
         isActive: true
@@ -200,6 +182,7 @@ app.post('/api/auth/signup', async (req, res) => {
         uid: userRecord.uid,
         email: userRecord.email,
         displayName: userRecord.displayName,
+        name: userRecord.displayName, // Para compatibilidad con el cliente
         customToken
       }
     });
@@ -259,6 +242,7 @@ app.post('/api/auth/login', async (req, res) => {
         uid: userRecord.uid,
         email: userRecord.email,
         displayName: userRecord.displayName,
+        name: userRecord.displayName, // Para compatibilidad con el cliente
         customToken
       }
     });
@@ -294,7 +278,8 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    const decodedToken = await auth.verifyIdToken(token);
+    // Verificar como customToken
+    const decodedToken = await auth.verifyCustomToken(token);
     req.user = decodedToken;
     next();
   } catch (error) {
