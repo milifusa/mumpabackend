@@ -345,3 +345,4 @@ Si tienes problemas o preguntas:
 - [Firebase Admin SDK](https://firebase.google.com/docs/admin/setup)
 - [Express.js](https://expressjs.com/)
 - [Node.js](https://nodejs.org/)
+# Test de conexión GitHub-Vercel - Thu Aug 28 13:19:05 CST 2025
