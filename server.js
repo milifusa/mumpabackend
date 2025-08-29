@@ -150,7 +150,7 @@ app.get('/', (req, res) => {
 // Endpoint de registro
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { email, password, displayName } = req.body;
+    const { email, password, displayName, gender, childrenCount } = req.body;
 
     if (!auth) {
       return res.status(500).json({
@@ -161,7 +161,7 @@ app.post('/api/auth/signup', async (req, res) => {
       });
     }
 
-    console.log('📝 Intentando registrar usuario:', email);
+    console.log('📝 Intentando registrar usuario:', email, 'Género:', gender, 'Hijos:', childrenCount);
 
     // Verificar si el usuario ya existe
     try {
@@ -190,8 +190,8 @@ app.post('/api/auth/signup', async (req, res) => {
       await db.collection('users').doc(userRecord.uid).set({
         email,
         displayName,
-        gender: null, // Campo para M o F
-        childrenCount: 0, // Contador de hijos
+        gender: gender || null, // Campo para M o F
+        childrenCount: childrenCount || 0, // Contador de hijos
         createdAt: new Date(),
         updatedAt: new Date(),
         isActive: true
