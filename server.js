@@ -368,7 +368,9 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
       displayName: userRecord.displayName,
       emailVerified: userRecord.emailVerified,
       createdAt: userRecord.metadata.creationTime,
-      lastSignIn: userRecord.metadata.lastSignInTime
+      lastSignIn: userRecord.metadata.lastSignInTime,
+      gender: null, // M o F
+      childrenCount: 0
     };
 
     // Obtener datos adicionales de Firestore
@@ -398,11 +400,13 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
 app.put('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { displayName, email } = req.body;
+    const { displayName, email, gender, childrenCount } = req.body;
 
     const updateData = {};
     if (displayName) updateData.displayName = displayName;
     if (email) updateData.email = email;
+    if (gender) updateData.gender = gender;
+    if (childrenCount !== undefined) updateData.childrenCount = childrenCount;
 
     // Actualizar en Firebase Auth
     await auth.updateUser(uid, updateData);
@@ -592,6 +596,219 @@ app.post('/api/auth/reset-password', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al restablecer la contraseña'
+    });
+  }
+});
+
+// Endpoint para obtener hijos del usuario
+app.get('/api/auth/children', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const children = [];
+    childrenSnapshot.forEach(doc => {
+      children.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+
+    res.json({
+      success: true,
+      data: children
+    });
+
+  } catch (error) {
+    console.error('Error al obtener hijos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener hijos',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para agregar un hijo
+app.post('/api/auth/children', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { name, age } = req.body;
+
+    if (!name || !age) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre y edad son requeridos'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childData = {
+      parentId: uid,
+      name: name.trim(),
+      age: parseInt(age),
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const childRef = await db.collection('children').add(childData);
+    
+    // Actualizar contador de hijos en el perfil
+    const userRef = db.collection('users').doc(uid);
+    await userRef.update({
+      childrenCount: admin.firestore.FieldValue.increment(1),
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Hijo agregado exitosamente',
+      data: {
+        id: childRef.id,
+        ...childData
+      }
+    });
+
+  } catch (error) {
+    console.error('Error al agregar hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al agregar hijo',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para actualizar un hijo
+app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { name, age } = req.body;
+
+    if (!name && !age) {
+      return res.status(400).json({
+        success: false,
+        message: 'Al menos un campo (nombre o edad) es requerido'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    if (childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar este hijo'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+    if (name) updateData.name = name.trim();
+    if (age) updateData.age = parseInt(age);
+
+    await db.collection('children').doc(childId).update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Hijo actualizado exitosamente',
+      data: {
+        id: childId,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('Error al actualizar hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar hijo',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para eliminar un hijo
+app.delete('/api/auth/children/:childId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    if (childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para eliminar este hijo'
+      });
+    }
+
+    await db.collection('children').doc(childId).delete();
+
+    // Actualizar contador de hijos en el perfil
+    const userRef = db.collection('users').doc(uid);
+    await userRef.update({
+      childrenCount: admin.firestore.FieldValue.increment(-1),
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Hijo eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error al eliminar hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al eliminar hijo',
+      error: error.message
     });
   }
 });
