@@ -150,7 +150,7 @@ app.get('/', (req, res) => {
 // Endpoint de registro
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { email, password, displayName, gender, childrenCount } = req.body;
+    const { email, password, displayName, gender, childrenCount, isPregnant, gestationWeeks } = req.body;
 
     if (!auth) {
       return res.status(500).json({
@@ -161,7 +161,7 @@ app.post('/api/auth/signup', async (req, res) => {
       });
     }
 
-    console.log('📝 Intentando registrar usuario:', email, 'Género:', gender, 'Hijos:', childrenCount);
+    console.log('📝 Intentando registrar usuario:', email, 'Género:', gender, 'Hijos:', childrenCount, 'Embarazada:', isPregnant, 'Semanas:', gestationWeeks);
 
     // Verificar si el usuario ya existe
     try {
@@ -173,6 +173,16 @@ app.post('/api/auth/signup', async (req, res) => {
     } catch (error) {
       // El usuario no existe, continuar con el registro
       console.log('✅ Usuario no existe, procediendo con registro');
+    }
+
+    // Validar gestación si es mujer
+    if (gender === 'F' && isPregnant) {
+      if (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para mujeres embarazadas, las semanas de gestación deben estar entre 1 y 42'
+        });
+      }
     }
 
     // Crear usuario en Firebase Auth
@@ -192,6 +202,8 @@ app.post('/api/auth/signup', async (req, res) => {
         displayName,
         gender: gender || null, // Campo para M o F
         childrenCount: childrenCount || 0, // Contador de hijos
+        isPregnant: gender === 'F' ? (isPregnant || false) : false, // Solo mujeres pueden estar embarazadas
+        gestationWeeks: gender === 'F' && isPregnant ? gestationWeeks : null, // Semanas de gestación
         createdAt: new Date(),
         updatedAt: new Date(),
         isActive: true
@@ -372,7 +384,9 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
       createdAt: userRecord.metadata.creationTime,
       lastSignIn: userRecord.metadata.lastSignInTime,
       gender: null, // M o F
-      childrenCount: 0
+      childrenCount: 0,
+      isPregnant: false,
+      gestationWeeks: null
     };
 
     // Obtener datos adicionales de Firestore
@@ -409,13 +423,29 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
 app.put('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { displayName, email, gender, childrenCount } = req.body;
+    const { displayName, email, gender, childrenCount, isPregnant, gestationWeeks } = req.body;
 
     const updateData = {};
     if (displayName) updateData.displayName = displayName;
     if (email) updateData.email = email;
     if (gender) updateData.gender = gender;
     if (childrenCount !== undefined) updateData.childrenCount = childrenCount;
+    if (isPregnant !== undefined) updateData.isPregnant = isPregnant;
+    if (gestationWeeks !== undefined) updateData.gestationWeeks = gestationWeeks;
+
+    // Validar gestación solo para mujeres
+    if (gender === 'F' && isPregnant && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para mujeres embarazadas, las semanas de gestación deben estar entre 1 y 42'
+      });
+    }
+
+    // Limpiar campos de gestación si no está embarazada o es hombre
+    if (gender === 'M' || !isPregnant) {
+      updateData.isPregnant = false;
+      updateData.gestationWeeks = null;
+    }
 
     // Actualizar en Firebase Auth
     await auth.updateUser(uid, updateData);
