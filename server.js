@@ -462,6 +462,20 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
     // Actualizar en Firebase Auth
     await auth.updateUser(uid, updateData);
 
+    // Calcular el número real de hijos de la base de datos
+    let actualChildrenCount = 0;
+    if (db) {
+      const childrenSnapshot = await db.collection('children')
+        .where('parentId', '==', uid)
+        .get();
+      
+      actualChildrenCount = childrenSnapshot.size;
+      console.log('📊 [PROFILE] Número real de hijos en BD:', actualChildrenCount);
+    }
+
+    // Actualizar childrenCount con el valor real
+    updateData.childrenCount = actualChildrenCount;
+
     // Actualizar en Firestore
     if (db) {
       await db.collection('users').doc(uid).update({
@@ -739,10 +753,18 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
 
     const childRef = await db.collection('children').add(childData);
     
-    // Actualizar contador de hijos en el perfil
+    // Calcular el número real de hijos después de agregar
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .get();
+    
+    const actualChildrenCount = childrenSnapshot.size;
+    console.log('📊 [CHILDREN] Número real de hijos después de agregar:', actualChildrenCount);
+    
+    // Actualizar contador de hijos en el perfil con el valor real
     const userRef = db.collection('users').doc(uid);
     await userRef.update({
-      childrenCount: FieldValue.increment(1),
+      childrenCount: actualChildrenCount,
       updatedAt: new Date()
     });
 
@@ -854,6 +876,50 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para sincronizar childrenCount
+app.post('/api/auth/children/sync-count', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Contar hijos reales en la base de datos
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .get();
+    
+    const actualChildrenCount = childrenSnapshot.size;
+    console.log('📊 [SYNC] Sincronizando childrenCount:', actualChildrenCount);
+
+    // Actualizar el perfil con el número real
+    await db.collection('users').doc(uid).update({
+      childrenCount: actualChildrenCount,
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'ChildrenCount sincronizado correctamente',
+      data: {
+        childrenCount: actualChildrenCount
+      }
+    });
+
+  } catch (error) {
+    console.error('Error sincronizando childrenCount:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error sincronizando childrenCount',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para calcular edad en meses desde fecha de nacimiento
 app.post('/api/auth/children/calculate-age', authenticateToken, async (req, res) => {
   try {
@@ -926,10 +992,18 @@ app.delete('/api/auth/children/:childId', authenticateToken, async (req, res) =>
 
     await db.collection('children').doc(childId).delete();
 
-    // Actualizar contador de hijos en el perfil
+    // Calcular el número real de hijos después de eliminar
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .get();
+    
+    const actualChildrenCount = childrenSnapshot.size;
+    console.log('📊 [CHILDREN] Número real de hijos después de eliminar:', actualChildrenCount);
+    
+    // Actualizar contador de hijos en el perfil con el valor real
     const userRef = db.collection('users').doc(uid);
     await userRef.update({
-      childrenCount: FieldValue.increment(-1),
+      childrenCount: actualChildrenCount,
       updatedAt: new Date()
     });
 
