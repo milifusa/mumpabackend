@@ -95,7 +95,6 @@ const setupFirebase = () => {
     
     auth = admin.auth();
     db = admin.firestore();
-    admin = admin; // Hacer admin disponible globalmente
     
     console.log('✅ Firebase Auth y Firestore configurados');
     firebaseStatus = 'Configurado correctamente';
@@ -732,7 +731,7 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     // Actualizar contador de hijos en el perfil
     const userRef = db.collection('users').doc(uid);
     await userRef.update({
-      childrenCount: admin.firestore.FieldValue.increment(1),
+      childrenCount: db.FieldValue.increment(1),
       updatedAt: new Date()
     });
 
@@ -919,7 +918,7 @@ app.delete('/api/auth/children/:childId', authenticateToken, async (req, res) =>
     // Actualizar contador de hijos en el perfil
     const userRef = db.collection('users').doc(uid);
     await userRef.update({
-      childrenCount: admin.firestore.FieldValue.increment(-1),
+      childrenCount: db.FieldValue.increment(-1),
       updatedAt: new Date()
     });
 
