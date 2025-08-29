@@ -653,12 +653,28 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
 app.post('/api/auth/children', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { name, age } = req.body;
+    const { name, ageInMonths, isUnborn, gestationWeeks } = req.body;
 
-    if (!name || !age) {
+    if (!name) {
       return res.status(400).json({
         success: false,
-        message: 'Nombre y edad son requeridos'
+        message: 'Nombre es requerido'
+      });
+    }
+
+    // Validar que si es un bebé no nacido, tenga semanas de gestación
+    if (isUnborn && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para bebés no nacidos, las semanas de gestación deben estar entre 1 y 42'
+      });
+    }
+
+    // Validar que si es un bebé nacido, tenga edad en meses
+    if (!isUnborn && (ageInMonths === undefined || ageInMonths < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para bebés nacidos, la edad en meses es requerida y debe ser mayor o igual a 0'
       });
     }
 
@@ -672,7 +688,9 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     const childData = {
       parentId: uid,
       name: name.trim(),
-      age: parseInt(age),
+      ageInMonths: isUnborn ? null : parseInt(ageInMonths),
+      isUnborn: isUnborn || false,
+      gestationWeeks: isUnborn ? parseInt(gestationWeeks) : null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -710,12 +728,28 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
     const { childId } = req.params;
-    const { name, age } = req.body;
+    const { name, ageInMonths, isUnborn, gestationWeeks } = req.body;
 
-    if (!name && !age) {
+    if (!name && ageInMonths === undefined && isUnborn === undefined && gestationWeeks === undefined) {
       return res.status(400).json({
         success: false,
-        message: 'Al menos un campo (nombre o edad) es requerido'
+        message: 'Al menos un campo debe ser proporcionado'
+      });
+    }
+
+    // Validar que si se cambia a bebé no nacido, tenga semanas de gestación
+    if (isUnborn && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para bebés no nacidos, las semanas de gestación deben estar entre 1 y 42'
+      });
+    }
+
+    // Validar que si se cambia a bebé nacido, tenga edad en meses
+    if (isUnborn === false && (ageInMonths === undefined || ageInMonths < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para bebés nacidos, la edad en meses es requerida y debe ser mayor o igual a 0'
       });
     }
 
@@ -746,7 +780,16 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
       updatedAt: new Date()
     };
     if (name) updateData.name = name.trim();
-    if (age) updateData.age = parseInt(age);
+    if (ageInMonths !== undefined) updateData.ageInMonths = parseInt(ageInMonths);
+    if (isUnborn !== undefined) updateData.isUnborn = isUnborn;
+    if (gestationWeeks !== undefined) updateData.gestationWeeks = parseInt(gestationWeeks);
+    
+    // Si se cambia el estado de gestación, limpiar campos no aplicables
+    if (isUnborn === true) {
+      updateData.ageInMonths = null;
+    } else if (isUnborn === false) {
+      updateData.gestationWeeks = null;
+    }
 
     await db.collection('children').doc(childId).update(updateData);
 
@@ -764,6 +807,47 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al actualizar hijo',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para calcular edad en meses desde fecha de nacimiento
+app.post('/api/auth/children/calculate-age', authenticateToken, async (req, res) => {
+  try {
+    const { birthDate } = req.body;
+
+    if (!birthDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fecha de nacimiento es requerida'
+      });
+    }
+
+    const birth = new Date(birthDate);
+    const today = new Date();
+    
+    // Calcular diferencia en meses
+    const monthsDiff = (today.getFullYear() - birth.getFullYear()) * 12 + 
+                      (today.getMonth() - birth.getMonth());
+    
+    // Ajustar por días
+    const daysDiff = today.getDate() - birth.getDate();
+    const adjustedMonths = daysDiff < 0 ? monthsDiff - 1 : monthsDiff;
+
+    res.json({
+      success: true,
+      data: {
+        ageInMonths: Math.max(0, adjustedMonths),
+        ageInDays: Math.max(0, Math.floor((today - birth) / (1000 * 60 * 60 * 24)))
+      }
+    });
+
+  } catch (error) {
+    console.error('Error calculando edad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error calculando edad',
       error: error.message
     });
   }
