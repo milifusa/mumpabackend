@@ -211,7 +211,14 @@ app.post('/api/auth/signup', async (req, res) => {
         updatedAt: new Date(),
         isActive: true
       });
-      console.log('✅ Documento creado en Firestore');
+      console.log('✅ Documento creado en Firestore con datos:', {
+      email,
+      displayName,
+      gender,
+      childrenCount,
+      isPregnant: gender === 'F' ? (isPregnant || false) : false,
+      gestationWeeks: gender === 'F' && isPregnant ? gestationWeeks : null
+    });
     }
 
     // Generar token personalizado
@@ -401,6 +408,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           ...userData, 
           gender: firestoreData.gender || null,
           childrenCount: firestoreData.childrenCount || 0,
+          isPregnant: firestoreData.isPregnant || false,
+          gestationWeeks: firestoreData.gestationWeeks || null,
           isActive: firestoreData.isActive || true,
           updatedAt: firestoreData.updatedAt
         };
