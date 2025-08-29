@@ -36,6 +36,7 @@ app.use((req, res, next) => {
 let auth = null;
 let db = null;
 let admin = null;
+let FieldValue = null;
 let firebaseStatus = 'No inicializado';
 
 const setupFirebase = () => {
@@ -95,6 +96,7 @@ const setupFirebase = () => {
     
     auth = admin.auth();
     db = admin.firestore();
+    FieldValue = admin.firestore.FieldValue;
     
     console.log('✅ Firebase Auth y Firestore configurados');
     firebaseStatus = 'Configurado correctamente';
@@ -731,7 +733,7 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     // Actualizar contador de hijos en el perfil
     const userRef = db.collection('users').doc(uid);
     await userRef.update({
-      childrenCount: db.FieldValue.increment(1),
+      childrenCount: FieldValue.increment(1),
       updatedAt: new Date()
     });
 
@@ -918,7 +920,7 @@ app.delete('/api/auth/children/:childId', authenticateToken, async (req, res) =>
     // Actualizar contador de hijos en el perfil
     const userRef = db.collection('users').doc(uid);
     await userRef.update({
-      childrenCount: db.FieldValue.increment(-1),
+      childrenCount: FieldValue.increment(-1),
       updatedAt: new Date()
     });
 
