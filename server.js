@@ -190,6 +190,8 @@ app.post('/api/auth/signup', async (req, res) => {
       await db.collection('users').doc(userRecord.uid).set({
         email,
         displayName,
+        gender: null, // Campo para M o F
+        childrenCount: 0, // Contador de hijos
         createdAt: new Date(),
         updatedAt: new Date(),
         isActive: true
@@ -377,7 +379,14 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
     if (db) {
       const userDoc = await db.collection('users').doc(uid).get();
       if (userDoc.exists) {
-        userData = { ...userData, ...userDoc.data() };
+        const firestoreData = userDoc.data();
+        userData = { 
+          ...userData, 
+          gender: firestoreData.gender || null,
+          childrenCount: firestoreData.childrenCount || 0,
+          isActive: firestoreData.isActive || true,
+          updatedAt: firestoreData.updatedAt
+        };
       }
     }
 
