@@ -35,6 +35,7 @@ app.use((req, res, next) => {
 // Configurar Firebase usando el archivo JSON
 let auth = null;
 let db = null;
+let admin = null;
 let firebaseStatus = 'No inicializado';
 
 const setupFirebase = () => {
@@ -94,6 +95,7 @@ const setupFirebase = () => {
     
     auth = admin.auth();
     db = admin.firestore();
+    admin = admin; // Hacer admin disponible globalmente
     
     console.log('✅ Firebase Auth y Firestore configurados');
     firebaseStatus = 'Configurado correctamente';
