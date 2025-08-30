@@ -722,7 +722,8 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
           console.log('📋 [DOULA] Nombre del usuario obtenido:', {
             displayName: userData.displayName,
             name: userData.name,
-            userNameFinal: userName
+            userNameFinal: userName,
+            userDataKeys: Object.keys(userData)
           });
           
           // Obtener información de los hijos
@@ -965,6 +966,58 @@ app.get('/api/doula/history', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error obteniendo historial',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para debug de datos del usuario
+app.get('/api/debug/user-data', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+    
+    // Obtener datos de Firestore
+    const userDoc = await db.collection('users').doc(uid).get();
+    let firestoreData = null;
+    if (userDoc.exists) {
+      firestoreData = userDoc.data();
+    }
+    
+    // Obtener datos de Firebase Auth
+    let authData = null;
+    try {
+      const authUser = await auth.getUser(uid);
+      authData = {
+        displayName: authUser.displayName,
+        email: authUser.email,
+        uid: authUser.uid
+      };
+    } catch (authError) {
+      console.log('⚠️ Error obteniendo datos de Auth:', authError.message);
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        uid,
+        firestore: firestoreData,
+        auth: authData,
+        timestamp: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error en debug user-data:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo datos de debug',
       error: error.message
     });
   }
