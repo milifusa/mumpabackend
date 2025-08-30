@@ -222,7 +222,7 @@ const generateDoulaResponse = (message, userContext) => {
   
   // Respuestas para síntomas del primer trimestre
   if (lowerMessage.includes('síntoma') || lowerMessage.includes('primer trimestre') || lowerMessage.includes('náusea')) {
-    return `¡Hola! Como doula, te puedo ayudar con los síntomas del primer trimestre. Es completamente normal experimentar:
+    return `¡Hola! Soy Douli, tu asistente de Munpa. Te puedo ayudar con los síntomas del primer trimestre. Es completamente normal experimentar:
 
 🤰 **Síntomas comunes del primer trimestre:**
 • Náuseas y vómitos (especialmente por la mañana)
@@ -249,7 +249,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   
   // Respuestas para ejercicios durante el embarazo
   if (lowerMessage.includes('ejercicio') || lowerMessage.includes('actividad física') || lowerMessage.includes('deporte')) {
-    return `¡Excelente pregunta! Como doula, te recomiendo mantenerte activa durante el embarazo, pero con precaución:
+    return `¡Excelente pregunta! Soy Douli, tu asistente de Munpa. Te recomiendo mantenerte activa durante el embarazo, pero con precaución:
 
 🏃‍♀️ **Ejercicios seguros durante el embarazo:**
 • Caminar (30 minutos diarios)
@@ -277,7 +277,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   
   // Respuestas para preparación al parto
   if (lowerMessage.includes('parto') || lowerMessage.includes('dar a luz') || lowerMessage.includes('preparar')) {
-    return `¡Qué emoción! Como doula, te ayudo a prepararte para este momento tan especial:
+    return `¡Qué emoción! Soy Douli, tu asistente de Munpa. Te ayudo a prepararte para este momento tan especial:
 
 🤱 **Preparación física:**
 • Practica ejercicios de respiración
@@ -310,7 +310,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   
   // Respuestas para lactancia
   if (lowerMessage.includes('lactancia') || lowerMessage.includes('amamantar') || lowerMessage.includes('leche materna')) {
-    return `¡La lactancia es un regalo maravilloso! Como doula, te comparto información valiosa:
+    return `¡La lactancia es un regalo maravilloso! Soy Douli, tu asistente de Munpa. Te comparto información valiosa:
 
 🤱 **Beneficios de la lactancia materna:**
 • Nutrición perfecta para tu bebé
@@ -342,7 +342,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   
   // Respuestas para alimentación durante el embarazo
   if (lowerMessage.includes('comida') || lowerMessage.includes('alimentación') || lowerMessage.includes('dieta') || lowerMessage.includes('nutrición')) {
-    return `¡La nutrición es fundamental! Como doula, te guío en la alimentación durante el embarazo:
+    return `¡La nutrición es fundamental! Soy Douli, tu asistente de Munpa. Te guío en la alimentación durante el embarazo:
 
 🥗 **Alimentos recomendados:**
 • Frutas y verduras frescas
@@ -376,7 +376,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   
   // Respuestas para el postparto
   if (lowerMessage.includes('postparto') || lowerMessage.includes('después del parto') || lowerMessage.includes('recuperación')) {
-    return `¡El postparto es un período muy importante! Como doula, te preparo para esta etapa:
+    return `¡El postparto es un período muy importante! Soy Douli, tu asistente de Munpa. Te preparo para esta etapa:
 
 🤱 **Primeras semanas postparto:**
 • Descansa cuando el bebé duerma
@@ -409,7 +409,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   }
   
   // Respuesta general para cualquier otra pregunta
-  return `¡Hola! Como tu doula virtual, estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.
+  return `¡Hola! Soy Douli, tu asistente de Munpa. Estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.
 
 💝 **Recuerda que:**
 • Cada embarazo es único y especial
@@ -418,7 +418,7 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
 • Tienes derecho a hacer preguntas
 • Mereces todo el apoyo y cuidado
 
-🤱 **Como doula, puedo ayudarte con:**
+🤱 **Como tu asistente de Munpa, puedo ayudarte con:**
 • Información sobre el embarazo
 • Preparación para el parto
 • Consejos de lactancia
@@ -527,13 +527,14 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
     }
 
     // Crear el prompt para la doula virtual
-    const systemPrompt = `Eres una doula virtual experta y compasiva llamada "Doula Luna". Tu misión es acompañar a padres y madres durante el embarazo, parto y crianza temprana con amor, sabiduría y profesionalismo.
+    const systemPrompt = `Eres una doula virtual experta y compasiva llamada "Douli, asistente de Munpa". Tu misión es acompañar a padres y madres durante el embarazo, parto y crianza temprana con amor, sabiduría y profesionalismo.
 
 🎯 **TU IDENTIDAD COMO DOULA:**
 - Eres cálida, empática y siempre comprensiva
 - Hablas con el corazón de una madre experimentada
 - Proporcionas información basada en evidencia médica
 - Eres profesional pero cercana, como una amiga sabia
+- Eres parte de la familia Munpa, dedicada a apoyar a las familias
 
 💝 **TU ESTILO DE COMUNICACIÓN:**
 - Usa emojis para hacer las respuestas más cálidas
@@ -541,6 +542,7 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
 - Siempre ofrece apoyo emocional
 - Usa un tono maternal y protector
 - Sé alentadora y positiva
+- Preséntate como "Douli, tu asistente de Munpa"
 
 📚 **TUS ÁREAS DE EXPERTISE:**
 - Síntomas del embarazo y cómo manejarlos
@@ -564,10 +566,11 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
 - Ofrece soluciones prácticas y realistas
 - Celebra cada etapa del embarazo
 - Fortalece la confianza de la madre en su cuerpo
+- Eres parte del ecosistema Munpa para familias
 
 ${userContext}
 
-Responde como Doula Luna, con amor, sabiduría y el corazón de una madre que ha acompañado a muchas mujeres en este hermoso viaje.`;
+Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón de una madre que ha acompañado a muchas mujeres en este hermoso viaje.`;
 
     console.log('🤖 [DOULA] Enviando mensaje a OpenAI:', message.substring(0, 100) + '...');
 
