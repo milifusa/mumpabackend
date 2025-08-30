@@ -225,6 +225,9 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
   let hasUnbornChildren = false;
   let hasYoungChildren = false;
   let hasMultipleChildren = false;
+  let childrenNames = [];
+  let unbornChildrenNames = [];
+  let youngChildrenNames = [];
   
   if (childrenInfo) {
     const childrenMatch = childrenInfo.match(/Hijos nacidos: (\d+)/);
@@ -236,6 +239,21 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
       
       hasUnbornChildren = unbornCount > 0;
       hasMultipleChildren = (bornCount + unbornCount) > 1;
+      
+      // Extraer nombres de los hijos
+      const nameMatches = childrenInfo.matchAll(/- ([^:]+):/g);
+      for (const match of nameMatches) {
+        const name = match[1].trim();
+        childrenNames.push(name);
+        
+        // Determinar si es hijo por nacer o nacido
+        const lineAfterName = childrenInfo.substring(match.index).split('\n')[0];
+        if (lineAfterName.includes('Por nacer')) {
+          unbornChildrenNames.push(name);
+        } else if (lineAfterName.includes('mes') || lineAfterName.includes('año')) {
+          youngChildrenNames.push(name);
+        }
+      }
       
       // Determinar si tiene hijos pequeños (menos de 3 años)
       if (childrenInfo.includes('mes') || childrenInfo.includes('año')) {
@@ -249,11 +267,14 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
     let personalizedIntro = '¡Hola! Soy Douli, tu asistente de Munpa. Te puedo ayudar con los síntomas del primer trimestre.';
     
     if (hasUnbornChildren) {
-      personalizedIntro += ` Veo que tienes un bebé en camino, ¡qué emoción!`;
+      const unbornNames = unbornChildrenNames.join(' y ');
+      personalizedIntro += ` Veo que tienes a ${unbornNames} en camino, ¡qué emoción!`;
     } else if (hasYoungChildren) {
-      personalizedIntro += ` Como ya has pasado por esto antes, sabes que cada embarazo es diferente.`;
+      const youngNames = youngChildrenNames.join(' y ');
+      personalizedIntro += ` Como ya has pasado por esto antes con ${youngNames}, sabes que cada embarazo es diferente.`;
     } else if (hasMultipleChildren) {
-      personalizedIntro += ` Con tu experiencia como madre de varios hijos, sabes que cada embarazo tiene sus particularidades.`;
+      const allNames = childrenNames.join(' y ');
+      personalizedIntro += ` Con tu experiencia como madre de ${allNames}, sabes que cada embarazo tiene sus particularidades.`;
     }
     
     return `${personalizedIntro} Es completamente normal experimentar:
@@ -442,15 +463,75 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
 ¿Cómo te sientes con la llegada del postparto?`;
   }
   
+  // Verificar si pregunta por un hijo específico
+  const askedChildName = childrenNames.find(name => 
+    lowerMessage.includes(name.toLowerCase())
+  );
+  
+  if (askedChildName) {
+    const isUnborn = unbornChildrenNames.includes(askedChildName);
+    const isYoung = youngChildrenNames.includes(askedChildName);
+    
+    if (isUnborn) {
+      return `¡Hola! Soy Douli, tu asistente de Munpa. Veo que preguntas por ${askedChildName}. 
+
+🤱 **Sobre ${askedChildName}:**
+¡Qué emoción! ${askedChildName} está por nacer y será una hermosa adición a tu familia. 
+
+💡 **Preparación para ${askedChildName}:**
+• Asegúrate de tener todo listo para su llegada
+• Prepara a tus otros hijos para la llegada de su hermanito/a
+• Ten tu maleta lista para el hospital
+• Practica técnicas de respiración para el parto
+
+🎯 **Consejos específicos:**
+Como ya tienes experiencia con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}, sabes que cada bebé es único. ${askedChildName} traerá su propia personalidad y necesidades.
+
+¿Hay algo específico sobre ${askedChildName} que te gustaría saber?`;
+    } else if (isYoung) {
+      return `¡Hola! Soy Douli, tu asistente de Munpa. Veo que preguntas por ${askedChildName}. 
+
+👶 **Sobre ${askedChildName}:**
+${askedChildName} está en una etapa maravillosa del desarrollo. Como madre experimentada, sabes que cada hijo es único.
+
+💡 **Consejos para ${askedChildName}:**
+• Asegúrate de que tenga una rutina estable
+• Dedica tiempo de calidad individual
+• Celebra sus logros y avances
+• Mantén la paciencia durante esta etapa
+
+🎯 **Considerando tu familia:**
+Con ${childrenNames.filter(n => n !== askedChildName).join(' y ')} también en casa, es importante encontrar el equilibrio para darle atención individual a cada uno.
+
+¿Hay algo específico sobre ${askedChildName} que te preocupe o quieras mejorar?`;
+    } else {
+      return `¡Hola! Soy Douli, tu asistente de Munpa. Veo que preguntas por ${askedChildName}. 
+
+👶 **Sobre ${askedChildName}:**
+${askedChildName} es parte de tu hermosa familia junto con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}.
+
+💡 **Consejos para ${askedChildName}:**
+• Cada hijo tiene necesidades únicas
+• Es importante el tiempo individual con cada uno
+• Celebra sus logros y personalidad
+• Mantén la comunicación abierta
+
+¿Hay algo específico sobre ${askedChildName} que te gustaría consultar?`;
+    }
+  }
+  
   // Respuesta general para cualquier otra pregunta
   let personalizedIntro = '¡Hola! Soy Douli, tu asistente de Munpa.';
   
   if (hasUnbornChildren) {
-    personalizedIntro += ` Veo que tienes un bebé en camino. ¡Qué momento tan especial!`;
+    const unbornNames = unbornChildrenNames.join(' y ');
+    personalizedIntro += ` Veo que tienes a ${unbornNames} en camino. ¡Qué momento tan especial!`;
   } else if (hasYoungChildren) {
-    personalizedIntro += ` Como madre experimentada, sabes que cada día trae nuevos aprendizajes.`;
+    const youngNames = youngChildrenNames.join(' y ');
+    personalizedIntro += ` Como madre experimentada con ${youngNames}, sabes que cada día trae nuevos aprendizajes.`;
   } else if (hasMultipleChildren) {
-    personalizedIntro += ` Con tu experiencia criando varios hijos, eres una madre sabia.`;
+    const allNames = childrenNames.join(' y ');
+    personalizedIntro += ` Con tu experiencia criando a ${allNames}, eres una madre sabia.`;
   } else {
     personalizedIntro += ` Estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.`;
   }
@@ -685,6 +766,9 @@ IMPORTANTE: Usa esta información para personalizar tus respuestas. Por ejemplo:
 - Si está embarazada, enfócate en esa etapa específica
 - Si tiene múltiples hijos, considera la dinámica familiar
 - Si tiene hijos por nacer, incluye preparación para la llegada
+- SIEMPRE usa los nombres específicos de sus hijos cuando sea apropiado
+- Si pregunta por un hijo específico, responde usando su nombre y edad
+- Menciona a los hijos por nombre cuando des consejos personalizados
 
 Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón de una madre que ha acompañado a muchas mujeres en este hermoso viaje.`;
 
