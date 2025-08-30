@@ -34,19 +34,9 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Configuración de multer para subida de archivos
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/');
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
+// Configuración de multer para subida de archivos en memoria (compatible con Vercel)
 const upload = multer({ 
-  storage: storage,
+  storage: multer.memoryStorage(), // Usar memoria en lugar de disco
   limits: {
     fileSize: 5 * 1024 * 1024 // 5MB máximo
   },
@@ -961,30 +951,23 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
       });
     }
 
-    // Subir archivo a Firebase Storage
+    // Subir archivo a Firebase Storage usando buffer de memoria
     const bucket = admin.storage().bucket();
     const fileName = `children/${childId}/photo-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
     
     console.log('📤 [STORAGE] Subiendo archivo a Firebase Storage:', fileName);
 
-    // Crear stream de lectura del archivo
-    const fileStream = require('fs').createReadStream(req.file.path);
-    
-    // Subir a Firebase Storage
+    // Usar el buffer de memoria directamente
     const file = bucket.file(fileName);
-    await new Promise((resolve, reject) => {
-      fileStream.pipe(file.createWriteStream({
+    await file.save(req.file.buffer, {
+      metadata: {
+        contentType: req.file.mimetype,
         metadata: {
-          contentType: req.file.mimetype,
-          metadata: {
-            uploadedBy: uid,
-            childId: childId,
-            originalName: req.file.originalname
-          }
+          uploadedBy: uid,
+          childId: childId,
+          originalName: req.file.originalname
         }
-      }))
-      .on('error', reject)
-      .on('finish', resolve);
+      }
     });
 
     // Hacer el archivo público
@@ -1001,9 +984,6 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
       updatedAt: new Date()
     });
 
-    // Eliminar archivo temporal
-    require('fs').unlinkSync(req.file.path);
-
     res.json({
       success: true,
       message: 'Foto subida exitosamente',
@@ -1016,15 +996,6 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
   } catch (error) {
     console.error('Error subiendo foto a Firebase Storage:', error);
     
-    // Eliminar archivo temporal si existe
-    if (req.file && req.file.path) {
-      try {
-        require('fs').unlinkSync(req.file.path);
-      } catch (unlinkError) {
-        console.error('Error eliminando archivo temporal:', unlinkError);
-      }
-    }
-    
     res.status(500).json({
       success: false,
       message: 'Error subiendo foto',
@@ -1033,8 +1004,7 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
   }
 });
 
-// Endpoint para servir archivos estáticos (fotos)
-app.use('/uploads', express.static('uploads'));
+
 
 // Endpoint para sincronizar childrenCount
 app.post('/api/auth/children/sync-count', authenticateToken, async (req, res) => {

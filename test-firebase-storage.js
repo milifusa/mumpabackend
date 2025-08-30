@@ -18,14 +18,8 @@ const api = axios.create({
   }
 });
 
-// Función para crear una imagen de prueba
-const createTestImage = () => {
-  const testImagePath = path.join(__dirname, 'test-image.jpg');
-  
-  // Crear una imagen simple de 100x100 píxeles (JPEG)
-  const width = 100;
-  const height = 100;
-  
+// Función para crear una imagen de prueba en memoria
+const createTestImageBuffer = () => {
   // Crear un buffer con datos JPEG mínimos
   const jpegHeader = Buffer.from([
     0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
@@ -44,18 +38,17 @@ const createTestImage = () => {
     0xD9
   ]);
   
-  fs.writeFileSync(testImagePath, jpegHeader);
-  return testImagePath;
+  return jpegHeader;
 };
 
 // Función para subir foto a Firebase Storage
-const uploadPhotoToFirebase = async (childId, imagePath) => {
+const uploadPhotoToFirebase = async (childId, imageBuffer) => {
   try {
     console.log(`📤 [FIREBASE] Subiendo foto para hijo: ${childId}`);
     
     // Crear FormData
     const formData = new FormData();
-    formData.append('photo', fs.createReadStream(imagePath), {
+    formData.append('photo', imageBuffer, {
       filename: 'test-photo.jpg',
       contentType: 'image/jpeg'
     });
@@ -136,14 +129,14 @@ const runFirebaseStorageTests = async () => {
     
     // 2. Crear imagen de prueba
     console.log('\n🖼️ [FIREBASE] Creando imagen de prueba...');
-    const testImagePath = createTestImage();
-    console.log('✅ [FIREBASE] Imagen de prueba creada:', testImagePath);
+    const testImageBuffer = createTestImageBuffer();
+    console.log('✅ [FIREBASE] Imagen de prueba creada en memoria');
     
     // 3. Subir foto del primer hijo
     const firstChild = children[0];
     console.log(`\n📸 [FIREBASE] Probando subida de foto para: ${firstChild.name}`);
     
-    const photoUrl = await uploadPhotoToFirebase(firstChild.id, testImagePath);
+    const photoUrl = await uploadPhotoToFirebase(firstChild.id, testImageBuffer);
     
     // 4. Verificar que se subió
     console.log('\n🔍 [FIREBASE] Verificando subida...');
@@ -171,13 +164,7 @@ const runFirebaseStorageTests = async () => {
       console.log('❌ [FIREBASE] Verificación fallida: Foto no se eliminó');
     }
     
-    // 7. Limpiar archivo de prueba
-    try {
-      fs.unlinkSync(testImagePath);
-      console.log('🧹 [FIREBASE] Archivo de prueba eliminado');
-    } catch (cleanupError) {
-      console.error('⚠️ [FIREBASE] Error eliminando archivo de prueba:', cleanupError.message);
-    }
+
     
     console.log('\n🎉 [FIREBASE] Todas las pruebas completadas exitosamente!');
     
@@ -192,19 +179,12 @@ const testSpecificChildFirebase = async (childId) => {
     console.log(`🚀 [FIREBASE] Probando hijo específico: ${childId}\n`);
     
     // Crear imagen de prueba
-    const testImagePath = createTestImage();
-    console.log('✅ [FIREBASE] Imagen de prueba creada');
+    const testImageBuffer = createTestImageBuffer();
+    console.log('✅ [FIREBASE] Imagen de prueba creada en memoria');
     
     // Subir foto
-    const photoUrl = await uploadPhotoToFirebase(childId, testImagePath);
+    const photoUrl = await uploadPhotoToFirebase(childId, testImageBuffer);
     console.log(`✅ [FIREBASE] Foto subida: ${photoUrl}`);
-    
-    // Limpiar archivo de prueba
-    try {
-      fs.unlinkSync(testImagePath);
-    } catch (cleanupError) {
-      console.error('⚠️ [FIREBASE] Error eliminando archivo de prueba:', cleanupError.message);
-    }
     
     console.log('\n✅ [FIREBASE] Prueba completada exitosamente!');
     
@@ -240,7 +220,7 @@ module.exports = {
   uploadPhotoToFirebase,
   removePhotoFromFirebase,
   getChildren,
-  createTestImage,
+  createTestImageBuffer,
   runFirebaseStorageTests,
   testSpecificChildFirebase
 };
