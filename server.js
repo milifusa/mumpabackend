@@ -72,6 +72,80 @@ let firebaseStatus = 'No inicializado';
 let openai = null;
 let openaiStatus = 'No inicializado';
 
+// Middleware de autenticación (declarado antes de su uso)
+const authenticateToken = async (req, res, next) => {
+  try {
+    console.log('🔍 [AUTH] Iniciando verificación de token para:', req.path);
+    
+    if (!auth) {
+      console.log('❌ [AUTH] Firebase no está configurado');
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase no está configurado'
+      });
+    }
+    
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      console.log('❌ [AUTH] No se encontró token en headers');
+      return res.status(401).json({
+        success: false,
+        message: 'Token de acceso requerido'
+      });
+    }
+
+    console.log('🔑 [AUTH] Token encontrado, longitud:', token.length);
+
+    try {
+      // PRIMERO intentar extraer uid del customToken JWT
+      console.log('🔄 [AUTH] Intentando extraer UID del customToken...');
+      const tokenParts = token.split('.');
+      
+      if (tokenParts.length === 3) {
+        try {
+          const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
+          console.log('🔍 [AUTH] Payload del token:', payload);
+          
+          if (payload.uid) {
+            console.log('✅ [AUTH] UID extraído del customToken:', payload.uid);
+            
+            req.user = { uid: payload.uid };
+            console.log('✅ [AUTH] req.user configurado:', req.user);
+            next();
+            return;
+          }
+        } catch (decodeError) {
+          console.log('❌ [AUTH] Error decodificando customToken:', decodeError.message);
+        }
+      }
+      
+      // SEGUNDO intentar como idToken
+      console.log('🔄 [AUTH] Intentando verificar como idToken...');
+      const decodedIdToken = await auth.verifyIdToken(token);
+      console.log('✅ [AUTH] IdToken verificado exitosamente');
+      
+      req.user = decodedIdToken;
+      console.log('✅ [AUTH] req.user configurado:', req.user);
+      next();
+      
+    } catch (idTokenError) {
+      console.log('❌ [AUTH] Error verificando idToken:', idTokenError.message);
+      return res.status(403).json({
+        success: false,
+        message: 'Token inválido o expirado'
+      });
+    }
+  } catch (error) {
+    console.error('❌ [AUTH] Error general en autenticación:', error);
+    return res.status(403).json({
+      success: false,
+      message: 'Token inválido o expirado'
+    });
+  }
+};
+
 const setupFirebase = () => {
   try {
     console.log('🔥 Configurando Firebase con variables de entorno...');
@@ -148,7 +222,9 @@ const setupOpenAI = () => {
     console.log('🤖 Configurando OpenAI...');
     
     if (!process.env.OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY no está configurada');
+      console.log('⚠️ OPENAI_API_KEY no está configurada - OpenAI será opcional');
+      openaiStatus = 'No configurado (opcional)';
+      return false;
     }
 
     openai = new OpenAI({
@@ -568,79 +644,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Middleware de autenticación
-const authenticateToken = async (req, res, next) => {
-  try {
-    console.log('🔍 [AUTH] Iniciando verificación de token para:', req.path);
-    
-    if (!auth) {
-      console.log('❌ [AUTH] Firebase no está configurado');
-      return res.status(500).json({
-        success: false,
-        message: 'Firebase no está configurado'
-      });
-    }
-    
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) {
-      console.log('❌ [AUTH] No se encontró token en headers');
-      return res.status(401).json({
-        success: false,
-        message: 'Token de acceso requerido'
-      });
-    }
-
-    console.log('🔑 [AUTH] Token encontrado, longitud:', token.length);
-
-    try {
-      // PRIMERO intentar extraer uid del customToken JWT
-      console.log('🔄 [AUTH] Intentando extraer UID del customToken...');
-      const tokenParts = token.split('.');
-      
-      if (tokenParts.length === 3) {
-        try {
-          const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
-          console.log('🔍 [AUTH] Payload del token:', payload);
-          
-          if (payload.uid) {
-            console.log('✅ [AUTH] UID extraído del customToken:', payload.uid);
-            
-            req.user = { uid: payload.uid };
-            console.log('✅ [AUTH] req.user configurado:', req.user);
-            next();
-            return;
-          }
-        } catch (decodeError) {
-          console.log('❌ [AUTH] Error decodificando customToken:', decodeError.message);
-        }
-      }
-      
-      // SEGUNDO intentar como idToken
-      console.log('🔄 [AUTH] Intentando verificar como idToken...');
-      const decodedIdToken = await auth.verifyIdToken(token);
-      console.log('✅ [AUTH] IdToken verificado exitosamente');
-      
-      req.user = decodedIdToken;
-      console.log('✅ [AUTH] req.user configurado:', req.user);
-      next();
-      
-    } catch (idTokenError) {
-      console.log('❌ [AUTH] Error verificando idToken:', idTokenError.message);
-      return res.status(403).json({
-        success: false,
-        message: 'Token inválido o expirado'
-      });
-    }
-  } catch (error) {
-    console.error('❌ [AUTH] Error general en autenticación:', error);
-    return res.status(403).json({
-      success: false,
-      message: 'Token inválido o expirado'
-    });
-  }
-};
 
 // Endpoint protegido - Perfil del usuario
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
