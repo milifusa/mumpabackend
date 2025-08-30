@@ -463,11 +463,59 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
 ¿Cómo te sientes con la llegada del postparto?`;
   }
   
-  // Verificar si pregunta por un hijo específico
+  // Verificar si pregunta por un hijo específico o sobre edades
   const askedChildName = childrenNames.find(name => 
     lowerMessage.includes(name.toLowerCase())
   );
   
+  // Verificar si pregunta sobre edad específica
+  if (askedChildName && (lowerMessage.includes('año') || lowerMessage.includes('edad') || lowerMessage.includes('cuánto') || lowerMessage.includes('cuantos'))) {
+    // Buscar la información específica del hijo en childrenInfo
+    const childLine = childrenInfo.split('\n').find(line => line.includes(askedChildName));
+    
+    if (childLine) {
+      if (childLine.includes('Por nacer')) {
+        const gestationMatch = childLine.match(/\((\d+) semanas de gestación\)/);
+        const weeks = gestationMatch ? gestationMatch[1] : 'desconocidas';
+        return `¡Hola! Soy Douli, tu asistente de Munpa. 
+
+🤱 **Sobre ${askedChildName}:**
+${askedChildName} está por nacer y tiene ${weeks} semanas de gestación. ¡Qué momento tan especial!
+
+💡 **Información de ${askedChildName}:**
+• Estado: Por nacer
+• Semanas de gestación: ${weeks}
+• Próximos hitos: Nacimiento
+
+🎯 **Preparación:**
+Como ya tienes experiencia con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}, sabes que cada bebé es único. ${askedChildName} llegará pronto y será una hermosa adición a tu familia.
+
+¿Te gustaría que te ayude a prepararte para la llegada de ${askedChildName}?`;
+      } else {
+        // Extraer edad del texto
+        const ageMatch = childLine.match(/: (.+?) de edad/);
+        if (ageMatch) {
+          const age = ageMatch[1];
+          return `¡Hola! Soy Douli, tu asistente de Munpa. 
+
+👶 **Sobre ${askedChildName}:**
+${askedChildName} tiene ${age}. ¡Qué etapa tan maravillosa!
+
+💡 **Información de ${askedChildName}:**
+• Edad: ${age}
+• Estado: Nacido
+• Etapa: ${age.includes('mes') ? 'Bebé' : 'Niño/a'}
+
+🎯 **Consejos para esta edad:**
+Como madre experimentada con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}, sabes que cada hijo es único. ${askedChildName} está en una etapa especial del desarrollo.
+
+¿Te gustaría que te ayude con consejos específicos para ${askedChildName} en esta edad?`;
+        }
+      }
+    }
+  }
+  
+  // Verificar si pregunta por un hijo específico (sin edad)
   if (askedChildName) {
     const isUnborn = unbornChildrenNames.includes(askedChildName);
     const isYoung = youngChildrenNames.includes(askedChildName);
@@ -534,6 +582,53 @@ ${askedChildName} es parte de tu hermosa familia junto con ${childrenNames.filte
     personalizedIntro += ` Con tu experiencia criando a ${allNames}, eres una madre sabia.`;
   } else {
     personalizedIntro += ` Estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.`;
+  }
+  
+  // Respuestas para preguntas generales sobre hijos
+  if (lowerMessage.includes('hijo') || lowerMessage.includes('hijos') || lowerMessage.includes('cuántos') || lowerMessage.includes('nombres')) {
+    if (childrenNames.length > 0) {
+      const bornChildren = childrenNames.filter(name => !unbornChildrenNames.includes(name));
+      const unbornChildren = unbornChildrenNames;
+      
+      let response = `¡Hola! Soy Douli, tu asistente de Munpa. 
+
+👶 **Tu hermosa familia:**
+Tienes ${childrenNames.length} hijo${childrenNames.length > 1 ? 's' : ''} en total.`;
+
+      if (bornChildren.length > 0) {
+        response += `\n\n👶 **Hijos nacidos (${bornChildren.length}):**
+${bornChildren.map(name => `• ${name}`).join('\n')}`;
+      }
+      
+      if (unbornChildren.length > 0) {
+        response += `\n\n🤱 **Hijos por nacer (${unbornChildren.length}):**
+${unbornChildren.map(name => `• ${name}`).join('\n')}`;
+      }
+      
+      response += `\n\n💝 **Como tu asistente de Munpa, puedo ayudarte con:**
+• Consejos específicos para cada uno de tus hijos
+• Preparación para los que están por nacer
+• Manejo de la dinámica familiar
+• Cuidado personalizado según sus edades
+
+¿Te gustaría que te ayude con algo específico sobre alguno de tus hijos?`;
+      
+      return response;
+    } else {
+      return `¡Hola! Soy Douli, tu asistente de Munpa. 
+
+👶 **Sobre tu familia:**
+Actualmente no tienes hijos registrados en el sistema, pero estoy aquí para acompañarte en tu viaje hacia la maternidad.
+
+💝 **Puedo ayudarte con:**
+• Preparación para el embarazo
+• Información sobre el parto
+• Cuidado postparto
+• Lactancia materna
+• Apoyo emocional
+
+¿Te gustaría que te ayude con algún tema específico?`;
+    }
   }
   
   return `${personalizedIntro}
