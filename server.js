@@ -216,6 +216,221 @@ const setupFirebase = () => {
   }
 };
 
+// Función para generar respuestas de doula predefinidas
+const generateDoulaResponse = (message, userContext) => {
+  const lowerMessage = message.toLowerCase();
+  
+  // Respuestas para síntomas del primer trimestre
+  if (lowerMessage.includes('síntoma') || lowerMessage.includes('primer trimestre') || lowerMessage.includes('náusea')) {
+    return `¡Hola! Como doula, te puedo ayudar con los síntomas del primer trimestre. Es completamente normal experimentar:
+
+🤰 **Síntomas comunes del primer trimestre:**
+• Náuseas y vómitos (especialmente por la mañana)
+• Fatiga extrema
+• Sensibilidad en los senos
+• Cambios de humor
+• Ganas frecuentes de orinar
+• Aversión a ciertos olores y sabores
+
+💡 **Consejos para aliviar las náuseas:**
+• Come pequeñas porciones varias veces al día
+• Mantén galletas saladas junto a tu cama
+• Bebe mucha agua
+• Evita comidas grasosas o picantes
+• Descansa cuando tu cuerpo lo pida
+
+⚠️ **Cuándo consultar al médico:**
+• Si las náuseas son muy intensas y no puedes retener líquidos
+• Si tienes fiebre alta
+• Si experimentas sangrado vaginal
+
+Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún síntoma específico?`;
+  }
+  
+  // Respuestas para ejercicios durante el embarazo
+  if (lowerMessage.includes('ejercicio') || lowerMessage.includes('actividad física') || lowerMessage.includes('deporte')) {
+    return `¡Excelente pregunta! Como doula, te recomiendo mantenerte activa durante el embarazo, pero con precaución:
+
+🏃‍♀️ **Ejercicios seguros durante el embarazo:**
+• Caminar (30 minutos diarios)
+• Yoga prenatal
+• Natación
+• Pilates adaptado
+• Ejercicios de Kegel
+• Estiramientos suaves
+
+⚠️ **Ejercicios a evitar:**
+• Deportes de contacto
+• Ejercicios que requieran acostarse boca arriba después del primer trimestre
+• Actividades con riesgo de caída
+• Levantar pesos pesados
+
+💡 **Consejos importantes:**
+• Escucha a tu cuerpo
+• Mantén una respiración constante
+• Bebe mucha agua
+• Detente si sientes dolor o mareos
+• Consulta con tu médico antes de comenzar
+
+¿Qué tipo de actividad física te gustaría practicar?`;
+  }
+  
+  // Respuestas para preparación al parto
+  if (lowerMessage.includes('parto') || lowerMessage.includes('dar a luz') || lowerMessage.includes('preparar')) {
+    return `¡Qué emoción! Como doula, te ayudo a prepararte para este momento tan especial:
+
+🤱 **Preparación física:**
+• Practica ejercicios de respiración
+• Aprende técnicas de relajación
+• Fortalece los músculos del suelo pélvico
+• Mantén una buena postura
+• Descansa lo suficiente
+
+🧘‍♀️ **Preparación mental:**
+• Lee sobre el proceso del parto
+• Visualiza tu parto ideal
+• Practica meditación
+• Habla con otras madres
+• Confía en tu cuerpo
+
+📋 **Preparación práctica:**
+• Prepara tu maleta para el hospital
+• Ten un plan de parto
+• Organiza el apoyo postparto
+• Instala la silla del bebé
+• Ten todo listo en casa
+
+💡 **Técnicas de respiración:**
+• Respiración lenta y profunda
+• Respiración de jadeo para el pujo
+• Respiración de relajación
+
+¿En qué aspecto te gustaría que te ayude más?`;
+  }
+  
+  // Respuestas para lactancia
+  if (lowerMessage.includes('lactancia') || lowerMessage.includes('amamantar') || lowerMessage.includes('leche materna')) {
+    return `¡La lactancia es un regalo maravilloso! Como doula, te comparto información valiosa:
+
+🤱 **Beneficios de la lactancia materna:**
+• Nutrición perfecta para tu bebé
+• Fortalece el sistema inmunológico
+• Crea un vínculo especial
+• Ayuda a la recuperación postparto
+• Es económica y conveniente
+
+💡 **Consejos para una lactancia exitosa:**
+• Inicia el contacto piel con piel inmediatamente
+• Amamanta a demanda (cada 2-3 horas)
+• Asegúrate de un buen agarre
+• Mantén una posición cómoda
+• Bebe mucha agua y come bien
+
+⚠️ **Señales de alerta:**
+• Dolor intenso al amamantar
+• Grietas en los pezones
+• Fiebre o enrojecimiento
+• Bebé que no gana peso
+
+🆘 **Cuándo buscar ayuda:**
+• Consulta con una asesora de lactancia
+• Habla con tu pediatra
+• Únete a grupos de apoyo
+
+¿Tienes alguna preocupación específica sobre la lactancia?`;
+  }
+  
+  // Respuestas para alimentación durante el embarazo
+  if (lowerMessage.includes('comida') || lowerMessage.includes('alimentación') || lowerMessage.includes('dieta') || lowerMessage.includes('nutrición')) {
+    return `¡La nutrición es fundamental! Como doula, te guío en la alimentación durante el embarazo:
+
+🥗 **Alimentos recomendados:**
+• Frutas y verduras frescas
+• Proteínas magras (pollo, pescado, legumbres)
+• Granos enteros
+• Lácteos bajos en grasa
+• Frutos secos y semillas
+
+⚠️ **Alimentos a evitar:**
+• Pescado alto en mercurio
+• Carne cruda o poco cocida
+• Quesos sin pasteurizar
+• Huevos crudos
+• Alcohol y cafeína en exceso
+
+💡 **Consejos nutricionales:**
+• Come 5-6 comidas pequeñas al día
+• Bebe 8-10 vasos de agua diarios
+• Toma ácido fólico y vitaminas prenatales
+• Escucha a tu cuerpo y sus antojos
+• Mantén un peso saludable
+
+🍽️ **Para las náuseas:**
+• Galletas saladas
+• Jengibre
+• Té de manzanilla
+• Comidas frías
+
+¿Hay algún alimento específico que te preocupe?`;
+  }
+  
+  // Respuestas para el postparto
+  if (lowerMessage.includes('postparto') || lowerMessage.includes('después del parto') || lowerMessage.includes('recuperación')) {
+    return `¡El postparto es un período muy importante! Como doula, te preparo para esta etapa:
+
+🤱 **Primeras semanas postparto:**
+• Descansa cuando el bebé duerma
+• Pide ayuda a familiares y amigos
+• Come alimentos nutritivos
+• Bebe mucha agua
+• No te presiones por "volver a la normalidad"
+
+💙 **Cuidado emocional:**
+• Es normal sentir emociones intensas
+• Habla sobre tus sentimientos
+• Busca apoyo si te sientes abrumada
+• No te compares con otras madres
+• Celebra cada pequeño logro
+
+🏥 **Señales de alerta:**
+• Fiebre alta
+• Sangrado excesivo
+• Dolor intenso
+• Sentimientos de tristeza profunda
+• Pensamientos de hacer daño
+
+💡 **Consejos prácticos:**
+• Ten comidas preparadas
+• Organiza visitas con horarios
+• Acepta ayuda cuando te la ofrezcan
+• No te olvides de ti misma
+
+¿Cómo te sientes con la llegada del postparto?`;
+  }
+  
+  // Respuesta general para cualquier otra pregunta
+  return `¡Hola! Como tu doula virtual, estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.
+
+💝 **Recuerda que:**
+• Cada embarazo es único y especial
+• Es normal tener dudas y preocupaciones
+• Tu cuerpo sabe exactamente qué hacer
+• Tienes derecho a hacer preguntas
+• Mereces todo el apoyo y cuidado
+
+🤱 **Como doula, puedo ayudarte con:**
+• Información sobre el embarazo
+• Preparación para el parto
+• Consejos de lactancia
+• Cuidado postparto
+• Apoyo emocional
+
+💡 **Mi consejo de hoy:**
+Confía en tu instinto maternal. Eres más fuerte de lo que crees y tienes todo lo necesario para ser una excelente madre.
+
+¿En qué puedo ayudarte hoy? ¿Hay algo específico que te gustaría saber sobre tu embarazo o la llegada de tu bebé?`;
+};
+
 // Función para configurar OpenAI
 const setupOpenAI = () => {
   try {
@@ -350,20 +565,9 @@ Responde de manera clara, compasiva y útil.`;
     } catch (openaiError) {
       console.error('❌ [DOULA] Error de OpenAI:', openaiError.message);
       
-      // Fallback cuando se agota la cuota
+      // Fallback cuando se agota la cuota - Respuestas de doula predefinidas
       if (openaiError.message.includes('quota') || openaiError.message.includes('429')) {
-        response = `Lo siento, actualmente no puedo procesar tu consulta debido a limitaciones técnicas. 
-
-Para obtener ayuda inmediata, te recomiendo:
-
-📚 **Recursos útiles:**
-- Consultar con tu médico o ginecólogo
-- Visitar sitios web médicos confiables
-- Contactar a una doula real en tu área
-
-💡 **Consejo:** Siempre consulta con profesionales de la salud para decisiones médicas importantes.
-
-¿Hay algo más en lo que pueda ayudarte con la información disponible?`;
+        response = generateDoulaResponse(message, userContext);
       } else {
         throw openaiError;
       }
