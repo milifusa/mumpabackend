@@ -544,6 +544,19 @@ ${askedChildName} es parte de tu familia.
     personalizedIntro += ` Estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.`;
   }
   
+  // Respuestas para preguntas sobre el nombre del usuario
+  if (lowerMessage.includes('nombre') || lowerMessage.includes('llamas') || lowerMessage.includes('sabes mi nombre')) {
+    return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa.
+
+💝 **Sobre tu nombre:**
+Tu nombre es ${userName} y es hermoso. Me encanta poder llamarte por tu nombre para hacer nuestra conversación más personal y cercana.
+
+🤱 **Como tu asistente:**
+Estoy aquí para acompañarte en tu viaje de maternidad, ${userName}. Puedo ayudarte con consejos sobre embarazo, parto, lactancia y crianza.
+
+¿En qué puedo ayudarte hoy ${userName}?`;
+  }
+  
   // Respuestas para preguntas generales sobre hijos
   if (lowerMessage.includes('hijo') || lowerMessage.includes('hijos') || lowerMessage.includes('cuántos') || lowerMessage.includes('nombres')) {
     if (childrenNames.length > 0) {
@@ -685,12 +698,32 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
     let userName = '';
     if (db) {
       try {
-        // Obtener datos del usuario
+        // Obtener datos del usuario desde Firestore
         const userDoc = await db.collection('users').doc(uid).get();
         if (userDoc.exists) {
           const userData = userDoc.data();
           // Obtener nombre del usuario
           userName = userData.displayName || userData.name || 'Mamá';
+          
+          // Si no hay nombre en Firestore, intentar obtenerlo de Firebase Auth
+          if (!userName || userName === 'Mamá') {
+            try {
+              const authUser = await auth.getUser(uid);
+              userName = authUser.displayName || authUser.email?.split('@')[0] || 'Mamá';
+              console.log('📋 [DOULA] Nombre obtenido de Firebase Auth:', {
+                authDisplayName: authUser.displayName,
+                authEmail: authUser.email,
+                userNameFinal: userName
+              });
+            } catch (authError) {
+              console.log('⚠️ [DOULA] No se pudo obtener nombre de Firebase Auth:', authError.message);
+            }
+          }
+          console.log('📋 [DOULA] Nombre del usuario obtenido:', {
+            displayName: userData.displayName,
+            name: userData.name,
+            userNameFinal: userName
+          });
           
           // Obtener información de los hijos
           const childrenSnapshot = await db.collection('children')
