@@ -334,17 +334,40 @@ Responde de manera clara, compasiva y útil.`;
     console.log('🤖 [DOULA] Enviando mensaje a OpenAI:', message.substring(0, 100) + '...');
 
     // Enviar mensaje a OpenAI
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ],
-      max_tokens: 500,
-      temperature: 0.7
-    });
+    let response;
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message }
+        ],
+        max_tokens: 500,
+        temperature: 0.7
+      });
 
-    const response = completion.choices[0].message.content;
+      response = completion.choices[0].message.content;
+    } catch (openaiError) {
+      console.error('❌ [DOULA] Error de OpenAI:', openaiError.message);
+      
+      // Fallback cuando se agota la cuota
+      if (openaiError.message.includes('quota') || openaiError.message.includes('429')) {
+        response = `Lo siento, actualmente no puedo procesar tu consulta debido a limitaciones técnicas. 
+
+Para obtener ayuda inmediata, te recomiendo:
+
+📚 **Recursos útiles:**
+- Consultar con tu médico o ginecólogo
+- Visitar sitios web médicos confiables
+- Contactar a una doula real en tu área
+
+💡 **Consejo:** Siempre consulta con profesionales de la salud para decisiones médicas importantes.
+
+¿Hay algo más en lo que pueda ayudarte con la información disponible?`;
+      } else {
+        throw openaiError;
+      }
+    }
 
     // Guardar la conversación en Firestore (opcional)
     if (db) {
