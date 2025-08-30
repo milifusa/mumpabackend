@@ -833,16 +833,29 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       });
     }
 
+    // Verificar que Firebase Auth esté disponible
+    if (!auth) {
+      console.error('❌ [FORGOT-PASSWORD] Firebase Auth no está disponible');
+      return res.status(500).json({
+        success: false,
+        message: 'Servicio de autenticación no disponible'
+      });
+    }
+
     console.log('🔑 [FORGOT-PASSWORD] Solicitando restablecimiento para:', email);
 
     // Verificar si el usuario existe
-    const userRecord = await auth.getUserByEmail(email);
-    
-    if (!userRecord) {
-      return res.status(404).json({
-        success: false,
-        message: 'No se encontró una cuenta con este email'
-      });
+    try {
+      const userRecord = await auth.getUserByEmail(email);
+      console.log('✅ [FORGOT-PASSWORD] Usuario encontrado:', userRecord.uid);
+    } catch (userError) {
+      if (userError.code === 'auth/user-not-found') {
+        return res.status(404).json({
+          success: false,
+          message: 'No se encontró una cuenta con este email'
+        });
+      }
+      throw userError;
     }
 
     // Generar link de restablecimiento
@@ -871,9 +884,17 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       });
     }
 
+    if (error.code === 'auth/unauthorized-continue-uri') {
+      return res.status(400).json({
+        success: false,
+        message: 'URL de redirección no autorizada. Contacta al administrador.'
+      });
+    }
+
     res.status(500).json({
       success: false,
-      message: 'Error al procesar la solicitud de restablecimiento'
+      message: 'Error al procesar la solicitud de restablecimiento',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -887,6 +908,15 @@ app.post('/api/auth/reset-password', async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Código de restablecimiento y nueva contraseña son requeridos'
+      });
+    }
+
+    // Verificar que Firebase Auth esté disponible
+    if (!auth) {
+      console.error('❌ [RESET-PASSWORD] Firebase Auth no está disponible');
+      return res.status(500).json({
+        success: false,
+        message: 'Servicio de autenticación no disponible'
       });
     }
 
@@ -922,7 +952,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: 'Error al restablecer la contraseña'
+      message: 'Error al restablecer la contraseña',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
