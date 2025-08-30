@@ -71,7 +71,7 @@ const setupFirebase = () => {
   try {
     console.log('🔥 Configurando Firebase con variables de entorno...');
     
-    const admin = require('firebase-admin');
+    admin = require('firebase-admin');
     
     // Verificar que las variables de entorno estén disponibles
     const requiredEnvVars = [
@@ -150,9 +150,51 @@ app.get('/health', (req, res) => {
       status: firebaseStatus,
       ready: firebaseReady,
       hasAuth: !!auth,
-      hasDb: !!db
+      hasDb: !!db,
+      hasAdmin: !!admin,
+      hasStorage: !!(admin && admin.storage)
     }
   });
+});
+
+// Endpoint para verificar Firebase Storage
+app.get('/api/firebase/status', (req, res) => {
+  try {
+    if (!admin) {
+      return res.json({
+        success: false,
+        message: 'Firebase Admin no está inicializado',
+        admin: false,
+        storage: false
+      });
+    }
+
+    if (!admin.storage) {
+      return res.json({
+        success: false,
+        message: 'Firebase Storage no está disponible',
+        admin: true,
+        storage: false
+      });
+    }
+
+    const bucket = admin.storage().bucket();
+    res.json({
+      success: true,
+      message: 'Firebase Storage está funcionando correctamente',
+      admin: true,
+      storage: true,
+      bucketName: bucket.name
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      message: 'Error verificando Firebase Storage',
+      error: error.message,
+      admin: admin ? true : false,
+      storage: false
+    });
+  }
 });
 
 // Ruta raíz
@@ -934,6 +976,27 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
       });
     }
 
+    // Verificar que Firebase Admin esté inicializado
+    if (!admin) {
+      console.error('❌ [STORAGE] Firebase Admin no está inicializado');
+      return res.status(500).json({
+        success: false,
+        message: 'Error interno del servidor: Firebase no configurado'
+      });
+    }
+
+    // Verificar que Firebase Storage esté disponible
+    try {
+      const bucket = admin.storage().bucket();
+      console.log('✅ [STORAGE] Firebase Storage disponible');
+    } catch (storageError) {
+      console.error('❌ [STORAGE] Error accediendo a Firebase Storage:', storageError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error interno del servidor: Storage no disponible'
+      });
+    }
+
     // Verificar que el hijo pertenece al usuario
     const childDoc = await db.collection('children').doc(childId).get();
     if (!childDoc.exists) {
@@ -952,6 +1015,9 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
     }
 
     // Subir archivo a Firebase Storage usando buffer de memoria
+    console.log('🔍 [STORAGE] Verificando admin:', admin ? '✅ Inicializado' : '❌ Null');
+    console.log('🔍 [STORAGE] Verificando admin.storage:', admin.storage ? '✅ Disponible' : '❌ No disponible');
+    
     const bucket = admin.storage().bucket();
     const fileName = `children/${childId}/photo-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
     
