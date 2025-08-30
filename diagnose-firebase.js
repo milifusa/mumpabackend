@@ -4,7 +4,7 @@
 const axios = require('axios');
 
 // Configuración
-const API_BASE_URL = 'https://mumpabackend-11ls2zo4s-mishu-lojans-projects.vercel.app';
+const API_BASE_URL = 'https://mumpabackend-kgeylyolz-mishu-lojans-projects.vercel.app';
 
 // Crear instancia de axios
 const api = axios.create({
@@ -126,8 +126,8 @@ INSTRUCCIONES DE USO:
    node diagnose-firebase.js
 
 2. Verificar manualmente:
-   curl https://mumpabackend-11ls2zo4s-mishu-lojans-projects.vercel.app/health
-   curl https://mumpabackend-11ls2zo4s-mishu-lojans-projects.vercel.app/api/firebase/status
+   curl https://mumpabackend-kgeylyolz-mishu-lojans-projects.vercel.app/health
+   curl https://mumpabackend-kgeylyolz-mishu-lojans-projects.vercel.app/api/firebase/status
 
 3. Si Firebase Admin no está inicializado:
    - Verificar variables de entorno en Vercel

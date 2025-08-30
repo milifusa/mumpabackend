@@ -116,9 +116,9 @@ const setupFirebase = () => {
     if (!admin.apps.length) {
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
-        storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
+        storageBucket: 'mumpabackend.firebasestorage.app'
       });
-      console.log('✅ Firebase Admin inicializado con Storage Bucket');
+      console.log('✅ Firebase Admin inicializado con Storage Bucket: mumpabackend.firebasestorage.app');
     } else {
       console.log('✅ Firebase Admin ya estaba inicializado');
     }
@@ -187,7 +187,7 @@ app.get('/api/firebase/status', (req, res) => {
       storage: true,
       bucketName: bucket.name,
       projectId: process.env.FIREBASE_PROJECT_ID,
-      storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
+      storageBucket: 'mumpabackend.firebasestorage.app'
     });
   } catch (error) {
     res.json({
