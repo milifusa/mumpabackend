@@ -1,6 +1,16 @@
 // Cargar variables de entorno desde archivo .env
 require('dotenv').config();
 
+// Función para validar URL
+const isValidUrl = (string) => {
+  try {
+    new URL(string);
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
 const express = require('express');
 const cors = require('cors');
 
@@ -747,6 +757,7 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       ageInMonths: isUnborn ? null : parseInt(ageInMonths),
       isUnborn: isUnborn || false,
       gestationWeeks: isUnborn ? parseInt(gestationWeeks) : null,
+      photoUrl: null, // Campo para foto (se puede actualizar después)
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -792,9 +803,9 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
     const { childId } = req.params;
-    const { name, ageInMonths, isUnborn, gestationWeeks } = req.body;
+    const { name, ageInMonths, isUnborn, gestationWeeks, photoUrl } = req.body;
 
-    if (!name && ageInMonths === undefined && isUnborn === undefined && gestationWeeks === undefined) {
+    if (!name && ageInMonths === undefined && isUnborn === undefined && gestationWeeks === undefined && !photoUrl) {
       return res.status(400).json({
         success: false,
         message: 'Al menos un campo debe ser proporcionado'
@@ -847,8 +858,17 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
     if (ageInMonths !== undefined) updateData.ageInMonths = parseInt(ageInMonths);
     if (isUnborn !== undefined) updateData.isUnborn = isUnborn;
     if (gestationWeeks !== undefined) updateData.gestationWeeks = parseInt(gestationWeeks);
+    if (photoUrl !== undefined) updateData.photoUrl = photoUrl;
     
     // Si se cambia el estado de gestación, limpiar campos no aplicables
+    // Validar URL de foto si se proporciona
+    if (photoUrl && !isValidUrl(photoUrl)) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL de foto inválida'
+      });
+    }
+
     if (isUnborn === true) {
       updateData.ageInMonths = null;
     } else if (isUnborn === false) {
