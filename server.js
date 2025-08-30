@@ -115,9 +115,10 @@ const setupFirebase = () => {
     // Inicializar Firebase
     if (!admin.apps.length) {
       admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
+        credential: admin.credential.cert(serviceAccount),
+        storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
       });
-      console.log('✅ Firebase Admin inicializado');
+      console.log('✅ Firebase Admin inicializado con Storage Bucket');
     } else {
       console.log('✅ Firebase Admin ya estaba inicializado');
     }
@@ -184,7 +185,9 @@ app.get('/api/firebase/status', (req, res) => {
       message: 'Firebase Storage está funcionando correctamente',
       admin: true,
       storage: true,
-      bucketName: bucket.name
+      bucketName: bucket.name,
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      storageBucket: `${process.env.FIREBASE_PROJECT_ID}.appspot.com`
     });
   } catch (error) {
     res.json({
@@ -989,11 +992,13 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
     try {
       const bucket = admin.storage().bucket();
       console.log('✅ [STORAGE] Firebase Storage disponible');
+      console.log('📦 [STORAGE] Bucket:', bucket.name);
     } catch (storageError) {
       console.error('❌ [STORAGE] Error accediendo a Firebase Storage:', storageError);
       return res.status(500).json({
         success: false,
-        message: 'Error interno del servidor: Storage no disponible'
+        message: 'Error interno del servidor: Storage no disponible',
+        error: storageError.message
       });
     }
 
@@ -1017,8 +1022,11 @@ app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('ph
     // Subir archivo a Firebase Storage usando buffer de memoria
     console.log('🔍 [STORAGE] Verificando admin:', admin ? '✅ Inicializado' : '❌ Null');
     console.log('🔍 [STORAGE] Verificando admin.storage:', admin.storage ? '✅ Disponible' : '❌ No disponible');
+    console.log('🔍 [STORAGE] Project ID:', process.env.FIREBASE_PROJECT_ID);
     
     const bucket = admin.storage().bucket();
+    console.log('📦 [STORAGE] Bucket obtenido:', bucket.name);
+    
     const fileName = `children/${childId}/photo-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
     
     console.log('📤 [STORAGE] Subiendo archivo a Firebase Storage:', fileName);
