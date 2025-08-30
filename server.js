@@ -277,29 +277,26 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
       personalizedIntro += ` Con tu experiencia como madre de ${allNames}, sabes que cada embarazo tiene sus particularidades.`;
     }
     
-    return `${personalizedIntro} Es completamente normal experimentar:
+    return `${personalizedIntro}
 
-🤰 **Síntomas comunes del primer trimestre:**
-• Náuseas y vómitos (especialmente por la mañana)
-• Fatiga extrema
-• Sensibilidad en los senos
+🤰 **Síntomas normales:**
+• Náuseas matutinas
+• Fatiga
+• Sensibilidad en senos
 • Cambios de humor
-• Ganas frecuentes de orinar
-• Aversión a ciertos olores y sabores
 
-💡 **Consejos para aliviar las náuseas:**
-• Come pequeñas porciones varias veces al día
-• Mantén galletas saladas junto a tu cama
+💡 **Para las náuseas:**
+• Come poco y frecuente
+• Galletas saladas en la cama
 • Bebe mucha agua
-• Evita comidas grasosas o picantes
-• Descansa cuando tu cuerpo lo pida
+• Evita comidas grasosas
 
-⚠️ **Cuándo consultar al médico:**
-• Si las náuseas son muy intensas y no puedes retener líquidos
-• Si tienes fiebre alta
-• Si experimentas sangrado vaginal
+⚠️ **Consulta al médico si:**
+• Náuseas muy intensas
+• Fiebre alta
+• Sangrado
 
-Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún síntoma específico?`;
+¿Qué síntoma te preocupa más?`;
   }
   
   // Respuestas para ejercicios durante el embarazo
@@ -332,101 +329,77 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   
   // Respuestas para preparación al parto
   if (lowerMessage.includes('parto') || lowerMessage.includes('dar a luz') || lowerMessage.includes('preparar')) {
-    return `¡Qué emoción! Soy Douli, tu asistente de Munpa. Te ayudo a prepararte para este momento tan especial:
+    return `¡Qué emoción! Soy Douli, tu asistente de Munpa.
 
 🤱 **Preparación física:**
-• Practica ejercicios de respiración
-• Aprende técnicas de relajación
-• Fortalece los músculos del suelo pélvico
-• Mantén una buena postura
-• Descansa lo suficiente
+• Ejercicios de respiración
+• Técnicas de relajación
+• Fortalece suelo pélvico
+• Buena postura
 
 🧘‍♀️ **Preparación mental:**
-• Lee sobre el proceso del parto
+• Lee sobre el parto
 • Visualiza tu parto ideal
 • Practica meditación
-• Habla con otras madres
 • Confía en tu cuerpo
 
 📋 **Preparación práctica:**
-• Prepara tu maleta para el hospital
-• Ten un plan de parto
-• Organiza el apoyo postparto
-• Instala la silla del bebé
-• Ten todo listo en casa
+• Maleta para hospital
+• Plan de parto
+• Apoyo postparto
+• Todo listo en casa
 
-💡 **Técnicas de respiración:**
-• Respiración lenta y profunda
-• Respiración de jadeo para el pujo
-• Respiración de relajación
-
-¿En qué aspecto te gustaría que te ayude más?`;
+¿En qué aspecto necesitas ayuda?`;
   }
   
   // Respuestas para lactancia
   if (lowerMessage.includes('lactancia') || lowerMessage.includes('amamantar') || lowerMessage.includes('leche materna')) {
-    return `¡La lactancia es un regalo maravilloso! Soy Douli, tu asistente de Munpa. Te comparto información valiosa:
+    return `¡La lactancia es maravillosa! Soy Douli, tu asistente de Munpa.
 
-🤱 **Beneficios de la lactancia materna:**
-• Nutrición perfecta para tu bebé
-• Fortalece el sistema inmunológico
-• Crea un vínculo especial
-• Ayuda a la recuperación postparto
-• Es económica y conveniente
+🤱 **Beneficios:**
+• Nutrición perfecta
+• Fortalece sistema inmune
+• Crea vínculo especial
+• Ayuda recuperación
 
-💡 **Consejos para una lactancia exitosa:**
-• Inicia el contacto piel con piel inmediatamente
-• Amamanta a demanda (cada 2-3 horas)
-• Asegúrate de un buen agarre
-• Mantén una posición cómoda
-• Bebe mucha agua y come bien
+💡 **Consejos:**
+• Contacto piel con piel
+• Amamanta a demanda
+• Buen agarre
+• Posición cómoda
 
-⚠️ **Señales de alerta:**
-• Dolor intenso al amamantar
-• Grietas en los pezones
-• Fiebre o enrojecimiento
-• Bebé que no gana peso
+⚠️ **Alerta si:**
+• Dolor intenso
+• Grietas en pezones
+• Fiebre
+• Bebé no gana peso
 
-🆘 **Cuándo buscar ayuda:**
-• Consulta con una asesora de lactancia
-• Habla con tu pediatra
-• Únete a grupos de apoyo
-
-¿Tienes alguna preocupación específica sobre la lactancia?`;
+¿Qué te preocupa específicamente?`;
   }
   
   // Respuestas para alimentación durante el embarazo
   if (lowerMessage.includes('comida') || lowerMessage.includes('alimentación') || lowerMessage.includes('dieta') || lowerMessage.includes('nutrición')) {
-    return `¡La nutrición es fundamental! Soy Douli, tu asistente de Munpa. Te guío en la alimentación durante el embarazo:
+    return `¡La nutrición es fundamental! Soy Douli, tu asistente de Munpa.
 
-🥗 **Alimentos recomendados:**
-• Frutas y verduras frescas
-• Proteínas magras (pollo, pescado, legumbres)
+🥗 **Come:**
+• Frutas y verduras
+• Proteínas magras
 • Granos enteros
 • Lácteos bajos en grasa
-• Frutos secos y semillas
 
-⚠️ **Alimentos a evitar:**
+⚠️ **Evita:**
 • Pescado alto en mercurio
-• Carne cruda o poco cocida
+• Carne cruda
 • Quesos sin pasteurizar
-• Huevos crudos
-• Alcohol y cafeína en exceso
+• Alcohol y cafeína
 
-💡 **Consejos nutricionales:**
-• Come 5-6 comidas pequeñas al día
-• Bebe 8-10 vasos de agua diarios
-• Toma ácido fólico y vitaminas prenatales
-• Escucha a tu cuerpo y sus antojos
-• Mantén un peso saludable
+💡 **Consejos:**
+• 5-6 comidas pequeñas
+• 8-10 vasos de agua
+• Vitaminas prenatales
+• Escucha tu cuerpo
 
-🍽️ **Para las náuseas:**
-• Galletas saladas
-• Jengibre
-• Té de manzanilla
-• Comidas frías
-
-¿Hay algún alimento específico que te preocupe?`;
+¿Qué alimento te preocupa?`;
   }
   
   // Respuestas para el postparto
@@ -447,20 +420,19 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
 • No te compares con otras madres
 • Celebra cada pequeño logro
 
-🏥 **Señales de alerta:**
+🏥 **Alerta si:**
 • Fiebre alta
 • Sangrado excesivo
 • Dolor intenso
-• Sentimientos de tristeza profunda
-• Pensamientos de hacer daño
+• Tristeza profunda
 
-💡 **Consejos prácticos:**
-• Ten comidas preparadas
-• Organiza visitas con horarios
-• Acepta ayuda cuando te la ofrezcan
-• No te olvides de ti misma
+💡 **Consejos:**
+• Comidas preparadas
+• Organiza visitas
+• Acepta ayuda
+• No te olvides de ti
 
-¿Cómo te sientes con la llegada del postparto?`;
+¿Cómo te sientes?`;
   }
   
   // Verificar si pregunta por un hijo específico o sobre edades
@@ -479,18 +451,15 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
         const weeks = gestationMatch ? gestationMatch[1] : 'desconocidas';
         return `¡Hola! Soy Douli, tu asistente de Munpa. 
 
-🤱 **Sobre ${askedChildName}:**
-${askedChildName} está por nacer y tiene ${weeks} semanas de gestación. ¡Qué momento tan especial!
+🤱 **${askedChildName}:**
+${askedChildName} está por nacer (${weeks} semanas de gestación).
 
-💡 **Información de ${askedChildName}:**
-• Estado: Por nacer
-• Semanas de gestación: ${weeks}
-• Próximos hitos: Nacimiento
+💡 **Próximos pasos:**
+• Prepara la maleta para el hospital
+• Ten todo listo en casa
+• Practica técnicas de respiración
 
-🎯 **Preparación:**
-Como ya tienes experiencia con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}, sabes que cada bebé es único. ${askedChildName} llegará pronto y será una hermosa adición a tu familia.
-
-¿Te gustaría que te ayude a prepararte para la llegada de ${askedChildName}?`;
+¿Necesitas ayuda con la preparación?`;
       } else {
         // Extraer edad del texto
         const ageMatch = childLine.match(/: (.+?) de edad/);
@@ -498,18 +467,15 @@ Como ya tienes experiencia con ${childrenNames.filter(n => n !== askedChildName)
           const age = ageMatch[1];
           return `¡Hola! Soy Douli, tu asistente de Munpa. 
 
-👶 **Sobre ${askedChildName}:**
-${askedChildName} tiene ${age}. ¡Qué etapa tan maravillosa!
+👶 **${askedChildName}:**
+${askedChildName} tiene ${age}.
 
-💡 **Información de ${askedChildName}:**
-• Edad: ${age}
-• Estado: Nacido
-• Etapa: ${age.includes('mes') ? 'Bebé' : 'Niño/a'}
+💡 **Consejos para esta edad:**
+• Mantén rutinas estables
+• Celebra sus logros
+• Dedica tiempo individual
 
-🎯 **Consejos para esta edad:**
-Como madre experimentada con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}, sabes que cada hijo es único. ${askedChildName} está en una etapa especial del desarrollo.
-
-¿Te gustaría que te ayude con consejos específicos para ${askedChildName} en esta edad?`;
+¿Qué aspecto específico te preocupa?`;
         }
       }
     }
@@ -521,50 +487,44 @@ Como madre experimentada con ${childrenNames.filter(n => n !== askedChildName).j
     const isYoung = youngChildrenNames.includes(askedChildName);
     
     if (isUnborn) {
-      return `¡Hola! Soy Douli, tu asistente de Munpa. Veo que preguntas por ${askedChildName}. 
+      return `¡Hola! Soy Douli, tu asistente de Munpa.
 
-🤱 **Sobre ${askedChildName}:**
-¡Qué emoción! ${askedChildName} está por nacer y será una hermosa adición a tu familia. 
+🤱 **${askedChildName}:**
+${askedChildName} está por nacer.
 
-💡 **Preparación para ${askedChildName}:**
-• Asegúrate de tener todo listo para su llegada
-• Prepara a tus otros hijos para la llegada de su hermanito/a
-• Ten tu maleta lista para el hospital
-• Practica técnicas de respiración para el parto
+💡 **Preparación:**
+• Todo listo para su llegada
+• Prepara a tus otros hijos
+• Maleta para hospital
+• Técnicas de respiración
 
-🎯 **Consejos específicos:**
-Como ya tienes experiencia con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}, sabes que cada bebé es único. ${askedChildName} traerá su propia personalidad y necesidades.
-
-¿Hay algo específico sobre ${askedChildName} que te gustaría saber?`;
+¿Qué necesitas saber específicamente?`;
     } else if (isYoung) {
-      return `¡Hola! Soy Douli, tu asistente de Munpa. Veo que preguntas por ${askedChildName}. 
+      return `¡Hola! Soy Douli, tu asistente de Munpa.
 
-👶 **Sobre ${askedChildName}:**
-${askedChildName} está en una etapa maravillosa del desarrollo. Como madre experimentada, sabes que cada hijo es único.
+👶 **${askedChildName}:**
+${askedChildName} está en etapa de desarrollo.
 
-💡 **Consejos para ${askedChildName}:**
-• Asegúrate de que tenga una rutina estable
-• Dedica tiempo de calidad individual
-• Celebra sus logros y avances
-• Mantén la paciencia durante esta etapa
+💡 **Consejos:**
+• Rutina estable
+• Tiempo individual
+• Celebra logros
+• Paciencia
 
-🎯 **Considerando tu familia:**
-Con ${childrenNames.filter(n => n !== askedChildName).join(' y ')} también en casa, es importante encontrar el equilibrio para darle atención individual a cada uno.
-
-¿Hay algo específico sobre ${askedChildName} que te preocupe o quieras mejorar?`;
+¿Qué te preocupa específicamente?`;
     } else {
-      return `¡Hola! Soy Douli, tu asistente de Munpa. Veo que preguntas por ${askedChildName}. 
+      return `¡Hola! Soy Douli, tu asistente de Munpa.
 
-👶 **Sobre ${askedChildName}:**
-${askedChildName} es parte de tu hermosa familia junto con ${childrenNames.filter(n => n !== askedChildName).join(' y ')}.
+👶 **${askedChildName}:**
+${askedChildName} es parte de tu familia.
 
-💡 **Consejos para ${askedChildName}:**
-• Cada hijo tiene necesidades únicas
-• Es importante el tiempo individual con cada uno
-• Celebra sus logros y personalidad
-• Mantén la comunicación abierta
+💡 **Consejos:**
+• Necesidades únicas
+• Tiempo individual
+• Celebra logros
+• Comunicación abierta
 
-¿Hay algo específico sobre ${askedChildName} que te gustaría consultar?`;
+¿Qué necesitas saber?`;
     }
   }
   
@@ -592,26 +552,25 @@ ${askedChildName} es parte de tu hermosa familia junto con ${childrenNames.filte
       
       let response = `¡Hola! Soy Douli, tu asistente de Munpa. 
 
-👶 **Tu hermosa familia:**
-Tienes ${childrenNames.length} hijo${childrenNames.length > 1 ? 's' : ''} en total.`;
+👶 **Tu familia:**
+Tienes ${childrenNames.length} hijo${childrenNames.length > 1 ? 's' : ''}.`;
 
       if (bornChildren.length > 0) {
-        response += `\n\n👶 **Hijos nacidos (${bornChildren.length}):**
+        response += `\n\n👶 **Nacidos:**
 ${bornChildren.map(name => `• ${name}`).join('\n')}`;
       }
       
       if (unbornChildren.length > 0) {
-        response += `\n\n🤱 **Hijos por nacer (${unbornChildren.length}):**
+        response += `\n\n🤱 **Por nacer:**
 ${unbornChildren.map(name => `• ${name}`).join('\n')}`;
       }
       
-      response += `\n\n💝 **Como tu asistente de Munpa, puedo ayudarte con:**
-• Consejos específicos para cada uno de tus hijos
-• Preparación para los que están por nacer
-• Manejo de la dinámica familiar
-• Cuidado personalizado según sus edades
+      response += `\n\n💡 **Puedo ayudarte con:**
+• Consejos específicos por edad
+• Preparación para nuevos bebés
+• Manejo de múltiples hijos
 
-¿Te gustaría que te ayude con algo específico sobre alguno de tus hijos?`;
+¿Sobre cuál necesitas ayuda?`;
       
       return response;
     } else {
@@ -633,27 +592,16 @@ Actualmente no tienes hijos registrados en el sistema, pero estoy aquí para aco
   
   return `${personalizedIntro}
 
-💝 **Recuerda que:**
-• Cada embarazo es único y especial
-• Es normal tener dudas y preocupaciones
-• Tu cuerpo sabe exactamente qué hacer
-• Tienes derecho a hacer preguntas
-• Mereces todo el apoyo y cuidado
-
-🤱 **Como tu asistente de Munpa, puedo ayudarte con:**
-• Información sobre el embarazo
-• Preparación para el parto
-• Consejos de lactancia
+💡 **Puedo ayudarte con:**
+• Embarazo y parto
+• Lactancia
 • Cuidado postparto
 • Apoyo emocional
-${hasMultipleChildren ? '• Gestión de múltiples hijos' : ''}
-${hasYoungChildren ? '• Crianza de niños pequeños' : ''}
-${hasUnbornChildren ? '• Preparación para la llegada del bebé' : ''}
+${hasMultipleChildren ? '• Múltiples hijos' : ''}
+${hasYoungChildren ? '• Niños pequeños' : ''}
+${hasUnbornChildren ? '• Preparación bebé' : ''}
 
-💡 **Mi consejo de hoy:**
-Confía en tu instinto maternal. Eres más fuerte de lo que crees y tienes todo lo necesario para ser una excelente madre.
-
-¿En qué puedo ayudarte hoy? ¿Hay algo específico que te gustaría saber sobre tu embarazo o la crianza de tus hijos?`;
+¿En qué necesitas ayuda específicamente?`;
 };
 
 // Función para configurar OpenAI
