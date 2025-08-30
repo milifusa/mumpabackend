@@ -217,12 +217,46 @@ const setupFirebase = () => {
 };
 
 // Función para generar respuestas de doula predefinidas
-const generateDoulaResponse = (message, userContext) => {
+const generateDoulaResponse = (message, userContext, childrenInfo) => {
   const lowerMessage = message.toLowerCase();
+  
+  // Extraer información de los hijos del contexto
+  let childrenContext = '';
+  let hasUnbornChildren = false;
+  let hasYoungChildren = false;
+  let hasMultipleChildren = false;
+  
+  if (childrenInfo) {
+    const childrenMatch = childrenInfo.match(/Hijos nacidos: (\d+)/);
+    const unbornMatch = childrenInfo.match(/Hijos por nacer: (\d+)/);
+    
+    if (childrenMatch && unbornMatch) {
+      const bornCount = parseInt(childrenMatch[1]);
+      const unbornCount = parseInt(unbornMatch[1]);
+      
+      hasUnbornChildren = unbornCount > 0;
+      hasMultipleChildren = (bornCount + unbornCount) > 1;
+      
+      // Determinar si tiene hijos pequeños (menos de 3 años)
+      if (childrenInfo.includes('mes') || childrenInfo.includes('año')) {
+        hasYoungChildren = true;
+      }
+    }
+  }
   
   // Respuestas para síntomas del primer trimestre
   if (lowerMessage.includes('síntoma') || lowerMessage.includes('primer trimestre') || lowerMessage.includes('náusea')) {
-    return `¡Hola! Soy Douli, tu asistente de Munpa. Te puedo ayudar con los síntomas del primer trimestre. Es completamente normal experimentar:
+    let personalizedIntro = '¡Hola! Soy Douli, tu asistente de Munpa. Te puedo ayudar con los síntomas del primer trimestre.';
+    
+    if (hasUnbornChildren) {
+      personalizedIntro += ` Veo que tienes un bebé en camino, ¡qué emoción!`;
+    } else if (hasYoungChildren) {
+      personalizedIntro += ` Como ya has pasado por esto antes, sabes que cada embarazo es diferente.`;
+    } else if (hasMultipleChildren) {
+      personalizedIntro += ` Con tu experiencia como madre de varios hijos, sabes que cada embarazo tiene sus particularidades.`;
+    }
+    
+    return `${personalizedIntro} Es completamente normal experimentar:
 
 🤰 **Síntomas comunes del primer trimestre:**
 • Náuseas y vómitos (especialmente por la mañana)
@@ -409,7 +443,19 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
   }
   
   // Respuesta general para cualquier otra pregunta
-  return `¡Hola! Soy Douli, tu asistente de Munpa. Estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.
+  let personalizedIntro = '¡Hola! Soy Douli, tu asistente de Munpa.';
+  
+  if (hasUnbornChildren) {
+    personalizedIntro += ` Veo que tienes un bebé en camino. ¡Qué momento tan especial!`;
+  } else if (hasYoungChildren) {
+    personalizedIntro += ` Como madre experimentada, sabes que cada día trae nuevos aprendizajes.`;
+  } else if (hasMultipleChildren) {
+    personalizedIntro += ` Con tu experiencia criando varios hijos, eres una madre sabia.`;
+  } else {
+    personalizedIntro += ` Estoy aquí para acompañarte en este hermoso viaje del embarazo y la maternidad.`;
+  }
+  
+  return `${personalizedIntro}
 
 💝 **Recuerda que:**
 • Cada embarazo es único y especial
@@ -424,11 +470,14 @@ Recuerda que cada embarazo es único. ¿Te gustaría que te ayude con algún sí
 • Consejos de lactancia
 • Cuidado postparto
 • Apoyo emocional
+${hasMultipleChildren ? '• Gestión de múltiples hijos' : ''}
+${hasYoungChildren ? '• Crianza de niños pequeños' : ''}
+${hasUnbornChildren ? '• Preparación para la llegada del bebé' : ''}
 
 💡 **Mi consejo de hoy:**
 Confía en tu instinto maternal. Eres más fuerte de lo que crees y tienes todo lo necesario para ser una excelente madre.
 
-¿En qué puedo ayudarte hoy? ¿Hay algo específico que te gustaría saber sobre tu embarazo o la llegada de tu bebé?`;
+¿En qué puedo ayudarte hoy? ¿Hay algo específico que te gustaría saber sobre tu embarazo o la crianza de tus hijos?`;
 };
 
 // Función para configurar OpenAI
@@ -506,13 +555,36 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
       });
     }
 
-    // Obtener información del usuario para contexto personalizado
+    // Obtener información del usuario y sus hijos para contexto personalizado
     let userContext = '';
+    let childrenInfo = '';
     if (db) {
       try {
+        // Obtener datos del usuario
         const userDoc = await db.collection('users').doc(uid).get();
         if (userDoc.exists) {
           const userData = userDoc.data();
+          
+          // Obtener información de los hijos
+          const childrenSnapshot = await db.collection('children')
+            .where('parentId', '==', uid)
+            .orderBy('createdAt', 'desc')
+            .get();
+          
+          const children = [];
+          childrenSnapshot.forEach(doc => {
+            const childData = doc.data();
+            children.push({
+              id: doc.id,
+              name: childData.name,
+              ageInMonths: childData.ageInMonths,
+              isUnborn: childData.isUnborn,
+              gestationWeeks: childData.gestationWeeks,
+              createdAt: childData.createdAt
+            });
+          });
+          
+          // Crear contexto personalizado del usuario
           userContext = `
             Información del usuario:
             - Género: ${userData.gender === 'F' ? 'Mujer' : 'Hombre'}
@@ -520,6 +592,43 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
             - Embarazada: ${userData.isPregnant ? 'Sí' : 'No'}
             ${userData.gestationWeeks ? `- Semanas de gestación: ${userData.gestationWeeks}` : ''}
           `;
+          
+          // Crear contexto detallado de los hijos
+          if (children.length > 0) {
+            childrenInfo = `
+            Información de los hijos:
+            ${children.map((child, index) => {
+              if (child.isUnborn) {
+                return `- ${child.name}: Por nacer (${child.gestationWeeks} semanas de gestación)`;
+              } else {
+                const years = Math.floor(child.ageInMonths / 12);
+                const months = child.ageInMonths % 12;
+                const ageText = years > 0 
+                  ? `${years} año${years > 1 ? 's' : ''}${months > 0 ? ` y ${months} mes${months > 1 ? 'es' : ''}` : ''}`
+                  : `${months} mes${months > 1 ? 'es' : ''}`;
+                return `- ${child.name}: ${ageText} de edad`;
+              }
+            }).join('\n            ')}
+            
+            Hijos nacidos: ${children.filter(c => !c.isUnborn).length}
+            Hijos por nacer: ${children.filter(c => c.isUnborn).length}
+            `;
+          }
+          
+          console.log('📋 [DOULA] Contexto del usuario obtenido:', {
+            userData: {
+              gender: userData.gender,
+              childrenCount: userData.childrenCount,
+              isPregnant: userData.isPregnant,
+              gestationWeeks: userData.gestationWeeks
+            },
+            children: children.map(c => ({
+              name: c.name,
+              ageInMonths: c.ageInMonths,
+              isUnborn: c.isUnborn,
+              gestationWeeks: c.gestationWeeks
+            }))
+          });
         }
       } catch (error) {
         console.log('⚠️ No se pudo obtener contexto del usuario:', error.message);
@@ -569,6 +678,13 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
 - Eres parte del ecosistema Munpa para familias
 
 ${userContext}
+${childrenInfo}
+
+IMPORTANTE: Usa esta información para personalizar tus respuestas. Por ejemplo:
+- Si tiene hijos pequeños, da consejos específicos para esa edad
+- Si está embarazada, enfócate en esa etapa específica
+- Si tiene múltiples hijos, considera la dinámica familiar
+- Si tiene hijos por nacer, incluye preparación para la llegada
 
 Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón de una madre que ha acompañado a muchas mujeres en este hermoso viaje.`;
 
@@ -596,7 +712,7 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
       
       // Fallback cuando se agota la cuota - Respuestas de doula predefinidas
       if (openaiError.message.includes('quota') || openaiError.message.includes('429')) {
-        response = generateDoulaResponse(message, userContext);
+        response = generateDoulaResponse(message, userContext, childrenInfo);
       } else {
         throw openaiError;
       }
