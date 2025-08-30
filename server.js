@@ -776,7 +776,11 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
 
     // Enviar mensaje a OpenAI
     let response;
+    let usedFallback = false;
+    
     try {
+      console.log('🤖 [DOULA] Enviando a OpenAI...');
+      
       const completion = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
         messages: [
@@ -791,14 +795,20 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
       });
 
       response = completion.choices[0].message.content;
+      console.log('✅ [DOULA] Respuesta de OpenAI recibida');
+      
     } catch (openaiError) {
       console.error('❌ [DOULA] Error de OpenAI:', openaiError.message);
       
       // Fallback cuando se agota la cuota - Respuestas de doula predefinidas
       if (openaiError.message.includes('quota') || openaiError.message.includes('429')) {
+        console.log('⚠️ [DOULA] Usando fallback por cuota agotada');
         response = generateDoulaResponse(message, userContext, childrenInfo);
+        usedFallback = true;
       } else {
-        throw openaiError;
+        console.log('❌ [DOULA] Error no relacionado con cuota, usando fallback');
+        response = generateDoulaResponse(message, userContext, childrenInfo);
+        usedFallback = true;
       }
     }
 
@@ -823,7 +833,9 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
       message: 'Respuesta de la doula virtual',
       data: {
         response: response,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        usedFallback: usedFallback,
+        source: usedFallback ? 'fallback' : 'openai'
       }
     });
 
