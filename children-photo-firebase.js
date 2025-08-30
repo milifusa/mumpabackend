@@ -1,67 +1,67 @@
-// Ejemplo simple para React Native - Fotos de Hijos
+// Ejemplo para React Native - Fotos de Hijos con Firebase Storage
 // Sin TypeScript, solo JavaScript
 
-// Servicios para gestión de fotos de hijos
+// Servicios para gestión de fotos de hijos usando Firebase Storage
 export const childrenPhotoService = {
-  // Actualizar foto de un hijo
+  // Subir foto usando Firebase Storage
+  uploadPhoto: async (uri, childId) => {
+    console.log('📤 [FIREBASE] Subiendo foto para hijo:', childId);
+    
+    try {
+      // Crear FormData para enviar la imagen
+      const formData = new FormData();
+      formData.append('photo', {
+        uri: uri,
+        type: 'image/jpeg',
+        name: 'photo.jpg'
+      });
+      formData.append('childId', childId);
+
+      // Configurar headers para multipart/form-data
+      const config = {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${await AsyncStorage.getItem('authToken')}`
+        }
+      };
+
+      // Subir foto al servidor (que la subirá a Firebase Storage)
+      const response = await api.post('/api/auth/children/upload-photo', formData, config);
+      
+      console.log('✅ [FIREBASE] Foto subida exitosamente:', response.data);
+      return response.data.data.photoUrl;
+    } catch (error) {
+      console.error('❌ [FIREBASE] Error subiendo foto:', error);
+      throw error;
+    }
+  },
+
+  // Eliminar foto de Firebase Storage
+  removeChildPhoto: async (childId) => {
+    console.log('🗑️ [FIREBASE] Eliminando foto de hijo:', childId);
+    
+    try {
+      const response = await api.delete(`/api/auth/children/${childId}/photo`);
+      console.log('✅ [FIREBASE] Foto eliminada:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [FIREBASE] Error eliminando foto:', error);
+      throw error;
+    }
+  },
+
+  // Actualizar foto de un hijo (usar URL externa)
   updateChildPhoto: async (childId, photoUrl) => {
-    console.log('📸 [PHOTO] Actualizando foto para hijo:', childId);
+    console.log('📸 [FIREBASE] Actualizando foto para hijo:', childId);
     
     try {
       const response = await api.put(`/api/auth/children/${childId}`, {
         photoUrl: photoUrl
       });
-      console.log('✅ [PHOTO] Foto actualizada:', response.data);
+      console.log('✅ [FIREBASE] Foto actualizada:', response.data);
       return response.data;
     } catch (error) {
-      console.error('❌ [PHOTO] Error actualizando foto:', error);
-      throw error;
-    }
-  },
-
-  // Subir foto usando servicios gratuitos
-  uploadPhoto: async (uri, childId) => {
-    console.log('📤 [UPLOAD] Subiendo foto para hijo:', childId);
-    
-    try {
-      // OPCIÓN 1: Usar Picsum Photos (para desarrollo)
-      const randomPhotoUrl = `https://picsum.photos/400/400?random=${Date.now()}`;
-      console.log('✅ [UPLOAD] Foto temporal generada:', randomPhotoUrl);
-      return randomPhotoUrl;
-
-      // OPCIÓN 2: Usar ImgBB (para producción)
-      // const formData = new FormData();
-      // formData.append('image', {
-      //   uri: uri,
-      //   type: 'image/jpeg',
-      //   name: 'photo.jpg'
-      // });
-      // 
-      // const response = await fetch('https://api.imgbb.com/1/upload?key=TU_API_KEY', {
-      //   method: 'POST',
-      //   body: formData
-      // });
-      // 
-      // const result = await response.json();
-      // return result.data.url;
-    } catch (error) {
-      console.error('❌ [UPLOAD] Error subiendo foto:', error);
-      throw error;
-    }
-  },
-
-  // Eliminar foto de un hijo
-  removeChildPhoto: async (childId) => {
-    console.log('🗑️ [PHOTO] Eliminando foto de hijo:', childId);
-    
-    try {
-      const response = await api.put(`/api/auth/children/${childId}`, {
-        photoUrl: null
-      });
-      console.log('✅ [PHOTO] Foto eliminada:', response.data);
-      return response.data;
-    } catch (error) {
-      console.error('❌ [PHOTO] Error eliminando foto:', error);
+      console.error('❌ [FIREBASE] Error actualizando foto:', error);
       throw error;
     }
   }
@@ -130,18 +130,15 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
     try {
       setLoading(true);
       
-      // 1. Subir foto al servidor
+      // Subir foto a Firebase Storage
       const uploadedPhotoUrl = await childrenPhotoService.uploadPhoto(uri, childId);
       
-      // 2. Actualizar en la base de datos
-      await childrenPhotoService.updateChildPhoto(childId, uploadedPhotoUrl);
-      
-      // 3. Actualizar estado local
+      // Actualizar estado local
       setPhotoUrl(uploadedPhotoUrl);
       
-      Alert.alert('Éxito', 'Foto actualizada correctamente');
+      Alert.alert('Éxito', 'Foto subida correctamente a Firebase Storage');
     } catch (error) {
-      Alert.alert('Error', 'No se pudo actualizar la foto');
+      Alert.alert('Error', 'No se pudo subir la foto');
     } finally {
       setLoading(false);
     }
@@ -154,7 +151,7 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
       await childrenPhotoService.removeChildPhoto(childId);
       setPhotoUrl(null);
       
-      Alert.alert('Éxito', 'Foto eliminada correctamente');
+      Alert.alert('Éxito', 'Foto eliminada correctamente de Firebase Storage');
     } catch (error) {
       Alert.alert('Error', 'No se pudo eliminar la foto');
     } finally {
@@ -165,7 +162,7 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
   return (
     <View style={{ padding: 20 }}>
       <Text style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 20 }}>
-        Foto del Hijo
+        Foto del Hijo (Firebase Storage)
       </Text>
 
       {photoUrl ? (
@@ -175,6 +172,9 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
             style={{ width: 200, height: 200, borderRadius: 100 }}
             defaultSource={require('./assets/default-avatar.png')}
           />
+          <Text style={{ marginTop: 10, fontSize: 12, color: '#666' }}>
+            Almacenada en Firebase Storage
+          </Text>
           <TouchableOpacity
             onPress={removePhoto}
             disabled={loading}
@@ -186,7 +186,7 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
             }}
           >
             <Text style={{ color: 'white' }}>
-              {loading ? 'Eliminando...' : 'Eliminar Foto'}
+              {loading ? 'Eliminando...' : '🗑️ Eliminar Foto'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -202,6 +202,9 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
           }}>
             <Text style={{ color: '#8E8E93' }}>Sin foto</Text>
           </View>
+          <Text style={{ marginTop: 10, fontSize: 12, color: '#666' }}>
+            Las fotos se almacenan en Firebase Storage
+          </Text>
         </View>
       )}
 
@@ -247,63 +250,106 @@ const ChildPhotoScreen = ({ childId, currentPhotoUrl }) => {
 export default ChildPhotoScreen;
 */
 
-// Ejemplo de uso con Picsum Photos:
+// Estructura de datos que se envía al servidor:
 
 /*
-// Para probar con fotos temporales:
-const testPhotoUpdate = async (childId) => {
-  try {
-    // Generar URL de foto temporal
-    const photoUrl = `https://picsum.photos/400/400?random=${Date.now()}`;
-    
-    // Actualizar en la base de datos
-    await childrenPhotoService.updateChildPhoto(childId, photoUrl);
-    
-    console.log('✅ Foto temporal actualizada:', photoUrl);
-  } catch (error) {
-    console.error('❌ Error actualizando foto:', error);
+// Subir foto a Firebase Storage:
+POST /api/auth/children/upload-photo
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+FormData:
+- photo: [archivo de imagen]
+- childId: "UMPtyalAnyA2zUUyOuW1"
+
+// Respuesta:
+{
+  "success": true,
+  "message": "Foto subida exitosamente",
+  "data": {
+    "photoUrl": "https://storage.googleapis.com/mumpabackend.appspot.com/children/UMPtyalAnyA2zUUyOuW1/photo-1234567890.jpg",
+    "fileName": "children/UMPtyalAnyA2zUUyOuW1/photo-1234567890.jpg"
   }
-};
+}
 
-// Llamar la función:
-// testPhotoUpdate('UMPtyalAnyA2zUUyOuW1');
+// Eliminar foto de Firebase Storage:
+DELETE /api/auth/children/:childId/photo
+Authorization: Bearer <token>
+
+// Respuesta:
+{
+  "success": true,
+  "message": "Foto eliminada exitosamente"
+}
 */
 
-// Servicios recomendados para producción:
+// Configuración necesaria en Firebase Console:
 
 /*
-1. IMGBB (Gratuito):
-   - Registro: https://imgbb.com/
-   - API Key: Gratuito
-   - Límite: 32MB por imagen
-   - URLs: Permanentes
+1. HABILITAR FIREBASE STORAGE:
+   - Ve a Firebase Console > Storage
+   - Haz clic en "Get started"
+   - Selecciona "Start in test mode" (para desarrollo)
+   - Elige una ubicación (ej: us-central1)
 
-2. IMGUR (Gratuito):
-   - Registro: https://imgur.com/
-   - Client ID: Gratuito
-   - Límite: 10,000 requests/día
-   - URLs: Permanentes
+2. REGLAS DE SEGURIDAD (test mode):
+   rules_version = '2';
+   service firebase.storage {
+     match /b/{bucket}/o {
+       match /{allPaths=**} {
+         allow read, write: if true;
+       }
+     }
+   }
 
-3. CLOUDINARY (Gratuito):
-   - Registro: https://cloudinary.com/
-   - Plan gratuito: 25GB almacenamiento
-   - Transformaciones: Incluidas
-   - CDN: Incluido
+3. REGLAS DE SEGURIDAD (producción):
+   rules_version = '2';
+   service firebase.storage {
+     match /b/{bucket}/o {
+       match /children/{childId}/{fileName} {
+         allow read: if true;
+         allow write: if request.auth != null && 
+                      request.auth.uid == resource.metadata.uploadedBy;
+       }
+     }
+   }
 
-4. FIREBASE STORAGE:
-   - Configuración: En Firebase Console
-   - Integración: Con tu proyecto actual
-   - Costo: Por uso (muy económico)
-   - Seguridad: Muy alta
+4. CONFIGURAR CORS (opcional):
+   - Para permitir subidas desde el frontend directamente
+   - Configurar en Firebase Storage > Settings > CORS
 */
 
-// Notas importantes:
+// Ventajas de Firebase Storage:
 
 /*
-1. Para desarrollo: Usa Picsum Photos (URLs temporales)
-2. Para producción: Usa ImgBB, Imgur o Cloudinary
-3. Las fotos solo se pueden actualizar, no crear
-4. Siempre valida las URLs antes de guardar
-5. Incluye imagen por defecto en React Native
-6. Maneja errores de carga de imagen
+✅ INTEGRACIÓN PERFECTA:
+   - Mismo proyecto que Firestore
+   - Misma autenticación
+   - Mismo dashboard
+
+✅ ESCALABILIDAD:
+   - Automáticamente escalable
+   - CDN global incluido
+   - Sin límites de almacenamiento
+
+✅ SEGURIDAD:
+   - Reglas de seguridad granulares
+   - Autenticación integrada
+   - Control de acceso por usuario
+
+✅ COSTO:
+   - Muy económico
+   - 5GB gratis por mes
+   - $0.026 por GB adicional
+
+✅ FUNCIONALIDADES:
+   - Transformaciones de imagen
+   - Metadatos personalizados
+   - URLs públicas automáticas
+   - Eliminación automática
+
+✅ ORGANIZACIÓN:
+   - Estructura de carpetas clara
+   - children/{childId}/{filename}
+   - Fácil de gestionar
 */

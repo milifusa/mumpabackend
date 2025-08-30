@@ -13,6 +13,8 @@ const isValidUrl = (string) => {
 
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +33,32 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Configuración de multer para subida de archivos
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB máximo
+  },
+  fileFilter: function (req, file, cb) {
+    // Solo permitir imágenes
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Solo se permiten archivos de imagen'), false);
+    }
+  }
+});
 
 // Middleware para manejar peticiones OPTIONS (preflight)
 app.options('*', cors());
@@ -896,6 +924,118 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para subir foto de hijo usando Firebase Storage
+app.post('/api/auth/children/upload-photo', authenticateToken, upload.single('photo'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.body;
+
+    if (!childId) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID del hijo es requerido'
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ningún archivo'
+      });
+    }
+
+    // Verificar que el hijo pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+    if (childData.parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar este hijo'
+      });
+    }
+
+    // Subir archivo a Firebase Storage
+    const bucket = admin.storage().bucket();
+    const fileName = `children/${childId}/photo-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(req.file.originalname)}`;
+    
+    console.log('📤 [STORAGE] Subiendo archivo a Firebase Storage:', fileName);
+
+    // Crear stream de lectura del archivo
+    const fileStream = require('fs').createReadStream(req.file.path);
+    
+    // Subir a Firebase Storage
+    const file = bucket.file(fileName);
+    await new Promise((resolve, reject) => {
+      fileStream.pipe(file.createWriteStream({
+        metadata: {
+          contentType: req.file.mimetype,
+          metadata: {
+            uploadedBy: uid,
+            childId: childId,
+            originalName: req.file.originalname
+          }
+        }
+      }))
+      .on('error', reject)
+      .on('finish', resolve);
+    });
+
+    // Hacer el archivo público
+    await file.makePublic();
+
+    // Obtener URL pública
+    const photoUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    
+    console.log('✅ [STORAGE] Archivo subido exitosamente:', photoUrl);
+
+    // Actualizar el hijo con la nueva foto
+    await db.collection('children').doc(childId).update({
+      photoUrl: photoUrl,
+      updatedAt: new Date()
+    });
+
+    // Eliminar archivo temporal
+    require('fs').unlinkSync(req.file.path);
+
+    res.json({
+      success: true,
+      message: 'Foto subida exitosamente',
+      data: {
+        photoUrl: photoUrl,
+        fileName: fileName
+      }
+    });
+
+  } catch (error) {
+    console.error('Error subiendo foto a Firebase Storage:', error);
+    
+    // Eliminar archivo temporal si existe
+    if (req.file && req.file.path) {
+      try {
+        require('fs').unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.error('Error eliminando archivo temporal:', unlinkError);
+      }
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo foto',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para servir archivos estáticos (fotos)
+app.use('/uploads', express.static('uploads'));
+
 // Endpoint para sincronizar childrenCount
 app.post('/api/auth/children/sync-count', authenticateToken, async (req, res) => {
   try {
@@ -976,6 +1116,76 @@ app.post('/api/auth/children/calculate-age', authenticateToken, async (req, res)
     res.status(500).json({
       success: false,
       message: 'Error calculando edad',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para eliminar foto de hijo de Firebase Storage
+app.delete('/api/auth/children/:childId/photo', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+    if (childData.parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para modificar este hijo'
+      });
+    }
+
+    // Si hay una foto existente, eliminarla de Firebase Storage
+    if (childData.photoUrl) {
+      try {
+        const bucket = admin.storage().bucket();
+        
+        // Extraer el nombre del archivo de la URL
+        const urlParts = childData.photoUrl.split('/');
+        const fileName = urlParts.slice(-2).join('/'); // children/childId/filename
+        
+        console.log('🗑️ [STORAGE] Eliminando archivo de Firebase Storage:', fileName);
+        
+        await bucket.file(fileName).delete();
+        console.log('✅ [STORAGE] Archivo eliminado exitosamente');
+      } catch (storageError) {
+        console.error('⚠️ [STORAGE] Error eliminando archivo de Storage (continuando):', storageError);
+        // Continuar aunque falle la eliminación del archivo
+      }
+    }
+
+    // Actualizar el hijo eliminando la foto
+    await db.collection('children').doc(childId).update({
+      photoUrl: null,
+      updatedAt: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Foto eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('Error eliminando foto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando foto',
       error: error.message
     });
   }
