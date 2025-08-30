@@ -15,6 +15,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -66,6 +67,10 @@ let db = null;
 let admin = null;
 let FieldValue = null;
 let firebaseStatus = 'No inicializado';
+
+// Configurar OpenAI
+let openai = null;
+let openaiStatus = 'No inicializado';
 
 const setupFirebase = () => {
   try {
@@ -137,8 +142,34 @@ const setupFirebase = () => {
   }
 };
 
+// Función para configurar OpenAI
+const setupOpenAI = () => {
+  try {
+    console.log('🤖 Configurando OpenAI...');
+    
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY no está configurada');
+    }
+
+    openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+    
+    console.log('✅ OpenAI configurado correctamente');
+    openaiStatus = 'Configurado correctamente';
+    return true;
+  } catch (error) {
+    console.error('❌ Error configurando OpenAI:', error.message);
+    openaiStatus = `Error: ${error.message}`;
+    return false;
+  }
+};
+
 // Inicializar Firebase
 const firebaseReady = setupFirebase();
+
+// Inicializar OpenAI
+const openaiReady = setupOpenAI();
 
 // Ruta de salud
 app.get('/health', (req, res) => {
@@ -154,8 +185,166 @@ app.get('/health', (req, res) => {
       hasDb: !!db,
       hasAdmin: !!admin,
       hasStorage: !!(admin && admin.storage)
+    },
+    openai: {
+      status: openaiStatus,
+      ready: openaiReady,
+      hasClient: !!openai
     }
   });
+});
+
+// Endpoint de la Doula Virtual
+app.post('/api/doula/chat', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { message, context } = req.body;
+
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        message: 'El mensaje es requerido'
+      });
+    }
+
+    // Verificar que OpenAI esté configurado
+    if (!openai) {
+      return res.status(500).json({
+        success: false,
+        message: 'Servicio de IA no disponible'
+      });
+    }
+
+    // Obtener información del usuario para contexto personalizado
+    let userContext = '';
+    if (db) {
+      try {
+        const userDoc = await db.collection('users').doc(uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          userContext = `
+            Información del usuario:
+            - Género: ${userData.gender === 'F' ? 'Mujer' : 'Hombre'}
+            - Número de hijos: ${userData.childrenCount || 0}
+            - Embarazada: ${userData.isPregnant ? 'Sí' : 'No'}
+            ${userData.gestationWeeks ? `- Semanas de gestación: ${userData.gestationWeeks}` : ''}
+          `;
+        }
+      } catch (error) {
+        console.log('⚠️ No se pudo obtener contexto del usuario:', error.message);
+      }
+    }
+
+    // Crear el prompt para la doula virtual
+    const systemPrompt = `Eres una doula virtual experta y compasiva que ayuda a padres y madres durante el embarazo, parto y crianza temprana. 
+
+Tu rol es:
+- Proporcionar información médica básica y consejos de bienestar
+- Ofrecer apoyo emocional y empático
+- Dar consejos prácticos sobre embarazo, parto y crianza
+- Recomendar cuando consultar con profesionales de la salud
+- Ser cálida, comprensiva y profesional
+
+IMPORTANTE: 
+- Siempre aclara que no eres un médico y que no reemplazas la atención médica profesional
+- Recomienda consultar con profesionales de la salud para decisiones médicas importantes
+- Mantén un tono cálido y empático
+- Proporciona información basada en evidencia cuando sea posible
+
+${userContext}
+
+Responde de manera clara, compasiva y útil.`;
+
+    console.log('🤖 [DOULA] Enviando mensaje a OpenAI:', message.substring(0, 100) + '...');
+
+    // Enviar mensaje a OpenAI
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
+      ],
+      max_tokens: 500,
+      temperature: 0.7
+    });
+
+    const response = completion.choices[0].message.content;
+
+    // Guardar la conversación en Firestore (opcional)
+    if (db) {
+      try {
+        await db.collection('doula_conversations').add({
+          userId: uid,
+          userMessage: message,
+          doulaResponse: response,
+          timestamp: new Date(),
+          context: context || null
+        });
+        console.log('💾 [DOULA] Conversación guardada en Firestore');
+      } catch (error) {
+        console.log('⚠️ [DOULA] No se pudo guardar la conversación:', error.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Respuesta de la doula virtual',
+      data: {
+        response: response,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [DOULA] Error en chat con doula:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al procesar la consulta',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener historial de conversaciones
+app.get('/api/doula/history', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const conversationsSnapshot = await db.collection('doula_conversations')
+      .where('userId', '==', uid)
+      .orderBy('timestamp', 'desc')
+      .limit(10)
+      .get();
+
+    const conversations = [];
+    conversationsSnapshot.forEach(doc => {
+      conversations.push({
+        id: doc.id,
+        ...doc.data(),
+        timestamp: doc.data().timestamp.toDate().toISOString()
+      });
+    });
+
+    res.json({
+      success: true,
+      data: conversations
+    });
+
+  } catch (error) {
+    console.error('❌ [DOULA] Error obteniendo historial:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo historial',
+      error: error.message
+    });
+  }
 });
 
 // Endpoint para verificar Firebase Storage
