@@ -217,7 +217,7 @@ const setupFirebase = () => {
 };
 
 // Función para generar respuestas de doula predefinidas
-const generateDoulaResponse = (message, userContext, childrenInfo) => {
+const generateDoulaResponse = (message, userContext, childrenInfo, userName = 'Mamá') => {
   const lowerMessage = message.toLowerCase();
   
   // Extraer información de los hijos del contexto
@@ -264,7 +264,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
   
   // Respuestas para síntomas del primer trimestre
   if (lowerMessage.includes('síntoma') || lowerMessage.includes('primer trimestre') || lowerMessage.includes('náusea')) {
-    let personalizedIntro = '¡Hola! Soy Douli, tu asistente de Munpa. Te puedo ayudar con los síntomas del primer trimestre.';
+    let personalizedIntro = `¡Hola ${userName}! Soy Douli, tu asistente de Munpa. Te puedo ayudar con los síntomas del primer trimestre.`;
     
     if (hasUnbornChildren) {
       const unbornNames = unbornChildrenNames.join(' y ');
@@ -301,7 +301,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
   
   // Respuestas para ejercicios durante el embarazo
   if (lowerMessage.includes('ejercicio') || lowerMessage.includes('actividad física') || lowerMessage.includes('deporte')) {
-    return `¡Excelente pregunta! Soy Douli, tu asistente de Munpa. Te recomiendo mantenerte activa durante el embarazo, pero con precaución:
+    return `¡Excelente pregunta ${userName}! Soy Douli, tu asistente de Munpa. Te recomiendo mantenerte activa durante el embarazo, pero con precaución:
 
 🏃‍♀️ **Ejercicios seguros durante el embarazo:**
 • Caminar (30 minutos diarios)
@@ -329,7 +329,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
   
   // Respuestas para preparación al parto
   if (lowerMessage.includes('parto') || lowerMessage.includes('dar a luz') || lowerMessage.includes('preparar')) {
-    return `¡Qué emoción! Soy Douli, tu asistente de Munpa.
+    return `¡Qué emoción ${userName}! Soy Douli, tu asistente de Munpa.
 
 🤱 **Preparación física:**
 • Ejercicios de respiración
@@ -354,7 +354,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
   
   // Respuestas para lactancia
   if (lowerMessage.includes('lactancia') || lowerMessage.includes('amamantar') || lowerMessage.includes('leche materna')) {
-    return `¡La lactancia es maravillosa! Soy Douli, tu asistente de Munpa.
+    return `¡La lactancia es maravillosa ${userName}! Soy Douli, tu asistente de Munpa.
 
 🤱 **Beneficios:**
 • Nutrición perfecta
@@ -379,7 +379,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
   
   // Respuestas para alimentación durante el embarazo
   if (lowerMessage.includes('comida') || lowerMessage.includes('alimentación') || lowerMessage.includes('dieta') || lowerMessage.includes('nutrición')) {
-    return `¡La nutrición es fundamental! Soy Douli, tu asistente de Munpa.
+    return `¡La nutrición es fundamental ${userName}! Soy Douli, tu asistente de Munpa.
 
 🥗 **Come:**
 • Frutas y verduras
@@ -432,7 +432,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
 • Acepta ayuda
 • No te olvides de ti
 
-¿Cómo te sientes?`;
+¿Cómo te sientes ${userName}?`;
   }
   
   // Verificar si pregunta por un hijo específico o sobre edades
@@ -449,7 +449,7 @@ const generateDoulaResponse = (message, userContext, childrenInfo) => {
       if (childLine.includes('Por nacer')) {
         const gestationMatch = childLine.match(/\((\d+) semanas de gestación\)/);
         const weeks = gestationMatch ? gestationMatch[1] : 'desconocidas';
-        return `¡Hola! Soy Douli, tu asistente de Munpa. 
+        return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa. 
 
 🤱 **${askedChildName}:**
 ${askedChildName} está por nacer (${weeks} semanas de gestación).
@@ -459,13 +459,13 @@ ${askedChildName} está por nacer (${weeks} semanas de gestación).
 • Ten todo listo en casa
 • Practica técnicas de respiración
 
-¿Necesitas ayuda con la preparación?`;
+¿Necesitas ayuda con la preparación ${userName}?`;
       } else {
         // Extraer edad del texto
         const ageMatch = childLine.match(/: (.+?) de edad/);
         if (ageMatch) {
           const age = ageMatch[1];
-          return `¡Hola! Soy Douli, tu asistente de Munpa. 
+          return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa. 
 
 👶 **${askedChildName}:**
 ${askedChildName} tiene ${age}.
@@ -475,7 +475,7 @@ ${askedChildName} tiene ${age}.
 • Celebra sus logros
 • Dedica tiempo individual
 
-¿Qué aspecto específico te preocupa?`;
+¿Qué aspecto específico te preocupa ${userName}?`;
         }
       }
     }
@@ -487,7 +487,7 @@ ${askedChildName} tiene ${age}.
     const isYoung = youngChildrenNames.includes(askedChildName);
     
     if (isUnborn) {
-      return `¡Hola! Soy Douli, tu asistente de Munpa.
+      return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa.
 
 🤱 **${askedChildName}:**
 ${askedChildName} está por nacer.
@@ -498,9 +498,9 @@ ${askedChildName} está por nacer.
 • Maleta para hospital
 • Técnicas de respiración
 
-¿Qué necesitas saber específicamente?`;
+¿Qué necesitas saber específicamente ${userName}?`;
     } else if (isYoung) {
-      return `¡Hola! Soy Douli, tu asistente de Munpa.
+      return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa.
 
 👶 **${askedChildName}:**
 ${askedChildName} está en etapa de desarrollo.
@@ -511,9 +511,9 @@ ${askedChildName} está en etapa de desarrollo.
 • Celebra logros
 • Paciencia
 
-¿Qué te preocupa específicamente?`;
+¿Qué te preocupa específicamente ${userName}?`;
     } else {
-      return `¡Hola! Soy Douli, tu asistente de Munpa.
+      return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa.
 
 👶 **${askedChildName}:**
 ${askedChildName} es parte de tu familia.
@@ -524,12 +524,12 @@ ${askedChildName} es parte de tu familia.
 • Celebra logros
 • Comunicación abierta
 
-¿Qué necesitas saber?`;
+¿Qué necesitas saber ${userName}?`;
     }
   }
   
   // Respuesta general para cualquier otra pregunta
-  let personalizedIntro = '¡Hola! Soy Douli, tu asistente de Munpa.';
+  let personalizedIntro = `¡Hola ${userName}! Soy Douli, tu asistente de Munpa.`;
   
   if (hasUnbornChildren) {
     const unbornNames = unbornChildrenNames.join(' y ');
@@ -550,7 +550,7 @@ ${askedChildName} es parte de tu familia.
       const bornChildren = childrenNames.filter(name => !unbornChildrenNames.includes(name));
       const unbornChildren = unbornChildrenNames;
       
-      let response = `¡Hola! Soy Douli, tu asistente de Munpa. 
+      let response = `¡Hola ${userName}! Soy Douli, tu asistente de Munpa. 
 
 👶 **Tu familia:**
 Tienes ${childrenNames.length} hijo${childrenNames.length > 1 ? 's' : ''}.`;
@@ -570,11 +570,11 @@ ${unbornChildren.map(name => `• ${name}`).join('\n')}`;
 • Preparación para nuevos bebés
 • Manejo de múltiples hijos
 
-¿Sobre cuál necesitas ayuda?`;
+¿Sobre cuál necesitas ayuda ${userName}?`;
       
       return response;
     } else {
-      return `¡Hola! Soy Douli, tu asistente de Munpa. 
+      return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa. 
 
 👶 **Sobre tu familia:**
 Actualmente no tienes hijos registrados en el sistema, pero estoy aquí para acompañarte en tu viaje hacia la maternidad.
@@ -586,7 +586,7 @@ Actualmente no tienes hijos registrados en el sistema, pero estoy aquí para aco
 • Lactancia materna
 • Apoyo emocional
 
-¿Te gustaría que te ayude con algún tema específico?`;
+¿Te gustaría que te ayude con algún tema específico ${userName}?`;
     }
   }
   
@@ -601,7 +601,7 @@ ${hasMultipleChildren ? '• Múltiples hijos' : ''}
 ${hasYoungChildren ? '• Niños pequeños' : ''}
 ${hasUnbornChildren ? '• Preparación bebé' : ''}
 
-¿En qué necesitas ayuda específicamente?`;
+¿En qué necesitas ayuda específicamente ${userName}?`;
 };
 
 // Función para configurar OpenAI
@@ -682,12 +682,15 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
     // Obtener información del usuario y sus hijos para contexto personalizado
     let userContext = '';
     let childrenInfo = '';
+    let userName = '';
     if (db) {
       try {
         // Obtener datos del usuario
         const userDoc = await db.collection('users').doc(uid).get();
         if (userDoc.exists) {
           const userData = userDoc.data();
+          // Obtener nombre del usuario
+          userName = userData.displayName || userData.name || 'Mamá';
           
           // Obtener información de los hijos
           const childrenSnapshot = await db.collection('children')
@@ -846,11 +849,11 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
       // Fallback cuando se agota la cuota - Respuestas de doula predefinidas
       if (openaiError.message.includes('quota') || openaiError.message.includes('429')) {
         console.log('⚠️ [DOULA] Usando fallback por cuota agotada');
-        response = generateDoulaResponse(message, userContext, childrenInfo);
+        response = generateDoulaResponse(message, userContext, childrenInfo, userName);
         usedFallback = true;
       } else {
         console.log('❌ [DOULA] Error no relacionado con cuota, usando fallback');
-        response = generateDoulaResponse(message, userContext, childrenInfo);
+        response = generateDoulaResponse(message, userContext, childrenInfo, userName);
         usedFallback = true;
       }
     }
