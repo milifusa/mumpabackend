@@ -1398,12 +1398,41 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
       const userDoc = await db.collection('users').doc(uid).get();
       if (userDoc.exists) {
         const firestoreData = userDoc.data();
+        
+        // Calcular semanas de gestación actuales si está embarazada
+        let currentGestationWeeks = firestoreData.gestationWeeks || null;
+        let daysSinceRegistration = null;
+        
+        if (firestoreData.isPregnant && firestoreData.gestationWeeks && firestoreData.createdAt) {
+          const now = new Date();
+          const createdDate = new Date(firestoreData.createdAt);
+          const diffTime = now - createdDate;
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          const diffWeeks = Math.floor(diffDays / 7);
+          const calculatedWeeks = firestoreData.gestationWeeks + diffWeeks;
+          
+          // Aplicar límites
+          if (calculatedWeeks > 42) {
+            currentGestationWeeks = 40; // Término completo
+          } else if (calculatedWeeks < 4) {
+            currentGestationWeeks = 4; // Mínimo
+          } else {
+            currentGestationWeeks = calculatedWeeks;
+          }
+          
+          daysSinceRegistration = diffDays;
+          
+          console.log(`📊 [PROFILE GESTATION] Usuario: ${firestoreData.gestationWeeks} semanas + ${diffWeeks} semanas = ${currentGestationWeeks} semanas (${diffDays} días desde registro)`);
+        }
+        
         userData = { 
           ...userData, 
           gender: firestoreData.gender || null,
           childrenCount: firestoreData.childrenCount || 0,
           isPregnant: firestoreData.isPregnant || false,
-          gestationWeeks: firestoreData.gestationWeeks || null,
+          gestationWeeks: firestoreData.gestationWeeks || null, // Semanas registradas originales
+          currentGestationWeeks: currentGestationWeeks, // Semanas calculadas automáticamente
+          daysSinceRegistration: daysSinceRegistration, // Días desde el registro
           isActive: firestoreData.isActive || true,
           updatedAt: firestoreData.updatedAt
         };
