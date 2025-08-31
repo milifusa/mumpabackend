@@ -814,14 +814,14 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
             Información de los hijos (edades actualizadas automáticamente):
             ${children.map((child, index) => {
               if (child.isUnborn) {
-                return `- ${child.name}: Por nacer (${child.currentGestationWeeks} semanas de gestación, registrado con ${child.gestationWeeks} semanas hace ${child.daysSinceRegistration} días)`;
+                return `- ${child.name}: Por nacer (${child.currentGestationWeeks} semanas de gestación, registrado con ${child.gestationWeeks} semanas hace ${child.daysSinceCreation} días)`;
               } else {
                 const years = Math.floor(child.currentAgeInMonths / 12);
                 const months = child.currentAgeInMonths % 12;
                 const ageText = years > 0 
                   ? `${years} año${years > 1 ? 's' : ''}${months > 0 ? ` y ${months} mes${months > 1 ? 'es' : ''}` : ''}`
                   : `${months} mes${months > 1 ? 'es' : ''}`;
-                return `- ${child.name}: ${ageText} de edad (registrado con ${child.ageInMonths} meses hace ${child.daysSinceRegistration} días)`;
+                return `- ${child.name}: ${ageText} de edad (registrado con ${child.ageInMonths} meses hace ${child.daysSinceCreation} días)`;
               }
             }).join('\n            ')}
             
@@ -842,7 +842,7 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
               registeredAge: c.isUnborn ? c.gestationWeeks + ' semanas' : c.ageInMonths + ' meses',
               currentAge: c.isUnborn ? c.currentGestationWeeks + ' semanas' : c.currentAgeInMonths + ' meses',
               isUnborn: c.isUnborn,
-              daysSinceRegistration: c.daysSinceRegistration
+              daysSinceCreation: c.daysSinceCreation
             }))
           });
         }
@@ -2716,7 +2716,7 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
         isNewInfo: previousResponses.length === 0,
         calculatedAge: true,
         registeredAge: child ? (child.isUnborn ? childInfo.registeredGestationWeeks : childInfo.registeredAgeInMonths) : null,
-        daysSinceRegistration: child ? childInfo.daysSinceRegistration : null
+        daysSinceCreation: child ? childInfo.daysSinceCreation : null
       }
     });
 
@@ -2730,11 +2730,11 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
   }
 });
 
-// Función para calcular edad actual basada en fecha de registro
-const calculateCurrentAge = (registeredAge, registeredAt) => {
+// Función para calcular edad actual basada en fecha de creación
+const calculateCurrentAge = (registeredAge, createdAt) => {
   const now = new Date();
-  const registeredDate = new Date(registeredAt);
-  const diffTime = now - registeredDate;
+  const createdDate = new Date(createdAt);
+  const diffTime = now - createdDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
   // Calcular meses completos
@@ -2745,16 +2745,16 @@ const calculateCurrentAge = (registeredAge, registeredAt) => {
   
   const currentAge = Math.max(0, registeredAge + diffMonths + additionalMonth);
   
-  console.log(`📊 [AGE CALCULATION] ${registeredAge} meses + ${diffMonths} meses + ${additionalMonth} mes adicional = ${currentAge} meses (${diffDays} días transcurridos)`);
+  console.log(`📊 [AGE CALCULATION] ${registeredAge} meses + ${diffMonths} meses + ${additionalMonth} mes adicional = ${currentAge} meses (${diffDays} días desde creación)`);
   
   return currentAge;
 };
 
-// Función para calcular semanas de gestación actual basada en fecha de registro
-const calculateCurrentGestationWeeks = (registeredWeeks, registeredAt) => {
+// Función para calcular semanas de gestación actual basada en fecha de creación
+const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
   const now = new Date();
-  const registeredDate = new Date(registeredAt);
-  const diffTime = now - registeredDate;
+  const createdDate = new Date(createdAt);
+  const diffTime = now - createdDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   const diffWeeks = Math.floor(diffDays / 7);
   
@@ -2776,30 +2776,30 @@ const calculateCurrentGestationWeeks = (registeredWeeks, registeredAt) => {
 // Función para obtener información actualizada de un hijo
 const getChildCurrentInfo = (child) => {
   const now = new Date();
-  const registeredDate = new Date(child.registeredAt);
+  const createdDate = new Date(child.createdAt);
   
   if (child.isUnborn) {
-    const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.registeredAt);
-    const daysSinceRegistration = Math.floor((now - registeredDate) / (1000 * 60 * 60 * 24));
+    const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.createdAt);
+    const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
     
     return {
       ...child,
       currentGestationWeeks: currentGestationWeeks,
       currentAgeInMonths: null,
       registeredGestationWeeks: child.gestationWeeks,
-      daysSinceRegistration: daysSinceRegistration,
+      daysSinceCreation: daysSinceCreation,
       isOverdue: currentGestationWeeks >= 40
     };
   } else {
-    const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.registeredAt);
-    const daysSinceRegistration = Math.floor((now - registeredDate) / (1000 * 60 * 60 * 24));
+    const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.createdAt);
+    const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
     
     return {
       ...child,
       currentAgeInMonths: currentAgeInMonths,
       currentGestationWeeks: null,
       registeredAgeInMonths: child.ageInMonths,
-      daysSinceRegistration: daysSinceRegistration
+      daysSinceCreation: daysSinceCreation
     };
   }
 };
@@ -3272,14 +3272,14 @@ app.get('/api/auth/children/current-info', authenticateToken, async (req, res) =
       const childData = doc.data();
       const currentInfo = getChildCurrentInfo(childData);
       
-      children.push({
-        id: doc.id,
-        ...currentInfo,
-        // Información adicional calculada
-        registeredDate: childData.registeredAt,
-        daysSinceRegistration: currentInfo.daysSinceRegistration,
-        isOverdue: currentInfo.isOverdue || false
-      });
+              children.push({
+          id: doc.id,
+          ...currentInfo,
+          // Información adicional calculada
+          createdDate: childData.createdAt,
+          daysSinceCreation: currentInfo.daysSinceCreation,
+          isOverdue: currentInfo.isOverdue || false
+        });
     });
 
     res.json({
