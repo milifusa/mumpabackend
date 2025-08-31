@@ -61,13 +61,14 @@ export const learningService = {
   },
 
   // ===== FEEDBACK DEL USUARIO =====
-  sendFeedback: async (conversationId, feedback) => {
+  sendFeedback: async (conversationId, feedback, details = {}) => {
     try {
       console.log('📝 [FEEDBACK] Enviando feedback:', feedback);
       
       const response = await api.post('/api/doula/feedback', {
         conversationId,
-        feedback // 'positive' | 'negative'
+        feedback, // 'positive' | 'negative'
+        details
       });
       
       console.log('✅ [FEEDBACK] Feedback enviado:', response.data);
@@ -110,6 +111,55 @@ export const learningService = {
       return response.data;
     } catch (error) {
       console.error('❌ [KNOWLEDGE] Error agregando conocimiento:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  // ===== APRENDIZAJE VALIDADO (POST /learn) =====
+  learnValidatedKnowledge: async (text, metadata, validation) => {
+    try {
+      console.log('🔍 [LEARN] Aprendizaje validado:', metadata.topic);
+      
+      const response = await api.post('/api/doula/learn', {
+        text,
+        metadata,
+        validation
+      });
+      
+      console.log('✅ [LEARN] Conocimiento validado y aprendido:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [LEARN] Error en aprendizaje validado:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  // ===== TEST DE CALIDAD =====
+  runQualityTest: async () => {
+    try {
+      console.log('🧪 [QUALITY] Ejecutando test de calidad...');
+      
+      const response = await api.post('/api/doula/quality-test');
+      
+      console.log('✅ [QUALITY] Test completado:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [QUALITY] Error en test de calidad:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  // ===== BORRAR MEMORIA DEL USUARIO =====
+  clearUserMemory: async () => {
+    try {
+      console.log('🗑️ [MEMORY] Borrando memoria del usuario...');
+      
+      const response = await api.delete('/api/doula/memory');
+      
+      console.log('✅ [MEMORY] Memoria borrada:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [MEMORY] Error borrando memoria:', error.response?.data || error.message);
       throw error;
     }
   },
