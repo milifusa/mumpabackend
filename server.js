@@ -2149,6 +2149,59 @@ app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para actualizar el nombre del usuario
+app.put('/api/auth/update-name', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { displayName } = req.body;
+
+    if (!displayName || displayName.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido'
+      });
+    }
+
+    if (!auth || !db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Servicios no disponibles'
+      });
+    }
+
+    console.log('📝 Actualizando nombre del usuario:', uid, 'Nuevo nombre:', displayName);
+
+    // Actualizar en Firebase Auth
+    await auth.updateUser(uid, {
+      displayName: displayName.trim()
+    });
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(uid).update({
+      displayName: displayName.trim(),
+      updatedAt: new Date()
+    });
+
+    console.log('✅ Nombre actualizado correctamente');
+
+    res.json({
+      success: true,
+      message: 'Nombre actualizado correctamente',
+      data: {
+        displayName: displayName.trim()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error actualizando nombre:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar el nombre',
+      error: error.message
+    });
+  }
+});
+
 // Middleware de manejo de errores
 app.use((err, req, res, next) => {
   console.error('Error no manejado:', err);
