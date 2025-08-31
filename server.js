@@ -2705,25 +2705,67 @@ const saveDevelopmentResponse = async (userId, childKey, responseData) => {
   }
 };
 
+// Función para validar que las respuestas no se repitan
+const validateResponseUniqueness = (newBullets, previousResponses, maxAttempts = 3) => {
+  if (previousResponses.length === 0) {
+    return { isValid: true, bullets: newBullets };
+  }
+
+  // Extraer todos los bullets previos
+  const allPreviousBullets = previousResponses.flatMap(resp => resp.developmentInfo);
+  
+  // Función para calcular similitud entre dos bullets
+  const calculateSimilarity = (bullet1, bullet2) => {
+    const words1 = bullet1.toLowerCase().split(/\s+/);
+    const words2 = bullet2.toLowerCase().split(/\s+/);
+    const commonWords = words1.filter(word => words2.includes(word));
+    return commonWords.length / Math.max(words1.length, words2.length);
+  };
+
+  // Verificar si hay repeticiones significativas
+  let hasRepetition = false;
+  for (const newBullet of newBullets) {
+    for (const prevBullet of allPreviousBullets) {
+      const similarity = calculateSimilarity(newBullet, prevBullet);
+      if (similarity > 0.6) { // Si más del 60% de las palabras son iguales
+        hasRepetition = true;
+        console.log(`⚠️ Detected repetition: "${newBullet.substring(0, 50)}..." similar to "${prevBullet.substring(0, 50)}..." (${(similarity * 100).toFixed(1)}%)`);
+        break;
+      }
+    }
+    if (hasRepetition) break;
+  }
+
+  return { isValid: !hasRepetition, bullets: newBullets };
+};
+
 // Función para obtener información de desarrollo de bebés por nacer desde OpenAI
 const getUnbornDevelopmentInfoFromAI = async (gestationWeeks, previousResponses, childName) => {
   try {
-    // Crear contexto de respuestas previas
-    const previousContext = previousResponses.length > 0 
-      ? `\n\nInformación ya proporcionada anteriormente:\n${previousResponses.slice(0, 3).map((resp, index) => 
-          `${index + 1}. ${resp.developmentInfo.join('\n   ')}`
-        ).join('\n')}`
-      : '';
+    let attempts = 0;
+    const maxAttempts = 3;
 
-    const systemPrompt = `Eres una doula experta especializada en desarrollo fetal. Tu tarea es proporcionar información relevante y variada sobre el desarrollo del bebé durante el embarazo.
+    while (attempts < maxAttempts) {
+      attempts++;
+      console.log(`🤖 [OPENAI] Intento ${attempts}/${maxAttempts} para ${childName} (${gestationWeeks} semanas)`);
+
+      // Crear contexto de respuestas previas
+      const previousContext = previousResponses.length > 0 
+        ? `\n\nInformación ya proporcionada anteriormente:\n${previousResponses.slice(0, 3).map((resp, index) => 
+            `${index + 1}. ${resp.developmentInfo.join('\n   ')}`
+          ).join('\n')}`
+        : '';
+
+      const systemPrompt = `Eres una doula experta especializada en desarrollo fetal. Tu tarea es proporcionar información relevante y variada sobre el desarrollo del bebé durante el embarazo.
 
 IMPORTANTE:
 - Proporciona EXACTAMENTE 3 bullets de información
-- Cada bullet debe ser diferente y complementario
-- Evita repetir información ya proporcionada anteriormente
+- Cada bullet debe ser COMPLETAMENTE DIFERENTE a la información previa
+- Evita repetir conceptos, temas o información ya proporcionada
 - Usa emojis relevantes al inicio de cada bullet
 - Mantén un tono cálido y profesional
 - Incluye el nombre del bebé cuando sea apropiado
+- Si es la consulta #${previousResponses.length + 1}, enfócate en aspectos NO mencionados anteriormente
 
 FORMATO REQUERIDO:
 1. 🫀 **Título del primer aspecto**: Descripción detallada...
@@ -2735,37 +2777,53 @@ CONTEXTO ACTUAL:
 - Semanas de gestación: ${gestationWeeks}
 - Consulta #${previousResponses.length + 1}${previousContext}
 
-Si es la primera consulta, proporciona información fundamental. Si no, enfócate en aspectos diferentes o más específicos.`;
+${previousResponses.length > 0 ? 'IMPORTANTE: NO repitas ningún concepto, tema o información de las consultas anteriores. Busca aspectos completamente nuevos.' : 'Si es la primera consulta, proporciona información fundamental.'}`;
 
-    const userPrompt = `Proporciona 3 bullets de información sobre el desarrollo fetal de ${childName} a las ${gestationWeeks} semanas de gestación.`;
+      const userPrompt = `Proporciona 3 bullets de información ÚNICA sobre el desarrollo fetal de ${childName} a las ${gestationWeeks} semanas de gestación.`;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      max_tokens: 500,
-      temperature: 0.7,
-      presence_penalty: 0.6,
-      frequency_penalty: 0.8
-    });
+      const response = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        max_tokens: 500,
+        temperature: 0.8 + (attempts * 0.1), // Aumentar temperatura en cada intento
+        presence_penalty: 0.8 + (attempts * 0.1), // Aumentar penalty en cada intento
+        frequency_penalty: 0.9 + (attempts * 0.05)
+      });
 
-    const content = response.choices[0].message.content;
-    
-    // Extraer los 3 bullets del contenido
-    const bullets = content.split('\n')
-      .filter(line => line.trim().match(/^\d+\.\s*[🫀🧬⚠️👶👂📏🎵🫁👁️💪🧠💤🍎🎯📦⏰🤱🏥👶]/))
-      .map(line => line.replace(/^\d+\.\s*/, '').trim())
-      .slice(0, 3);
+      const content = response.choices[0].message.content;
+      
+      // Extraer los 3 bullets del contenido
+      const bullets = content.split('\n')
+        .filter(line => line.trim().match(/^\d+\.\s*[🫀🧬⚠️👶👂📏🎵🫁👁️💪🧠💤🍎🎯📦⏰🤱🏥👶]/))
+        .map(line => line.replace(/^\d+\.\s*/, '').trim())
+        .slice(0, 3);
 
-    // Si no se pudieron extraer bullets, usar fallback
-    if (bullets.length < 3) {
-      console.log('⚠️ No se pudieron extraer bullets de OpenAI, usando fallback');
-      return getUnbornDevelopmentInfoFallback(gestationWeeks);
+      // Si no se pudieron extraer bullets, usar fallback
+      if (bullets.length < 3) {
+        console.log('⚠️ No se pudieron extraer bullets de OpenAI, usando fallback');
+        return getUnbornDevelopmentInfoFallback(gestationWeeks);
+      }
+
+      // Validar que no haya repeticiones
+      const validation = validateResponseUniqueness(bullets, previousResponses);
+      
+      if (validation.isValid) {
+        console.log(`✅ [OPENAI] Respuesta válida obtenida en intento ${attempts}`);
+        return validation.bullets;
+      } else {
+        console.log(`⚠️ [OPENAI] Respuesta con repeticiones detectada, reintentando...`);
+        if (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Esperar antes del siguiente intento
+        }
+      }
     }
 
-    return bullets;
+    // Si se agotaron los intentos, usar fallback
+    console.log(`⚠️ [OPENAI] Se agotaron los intentos, usando fallback`);
+    return getUnbornDevelopmentInfoFallback(gestationWeeks);
 
   } catch (error) {
     console.error('❌ Error obteniendo información de OpenAI:', error);
@@ -2777,22 +2835,30 @@ Si es la primera consulta, proporciona información fundamental. Si no, enfócat
 // Función para obtener información de desarrollo de niños nacidos desde OpenAI
 const getChildDevelopmentInfoFromAI = async (ageInMonths, previousResponses, childName) => {
   try {
-    // Crear contexto de respuestas previas
-    const previousContext = previousResponses.length > 0 
-      ? `\n\nInformación ya proporcionada anteriormente:\n${previousResponses.slice(0, 3).map((resp, index) => 
-          `${index + 1}. ${resp.developmentInfo.join('\n   ')}`
-        ).join('\n')}`
-      : '';
+    let attempts = 0;
+    const maxAttempts = 3;
 
-    const systemPrompt = `Eres una doula experta especializada en desarrollo infantil. Tu tarea es proporcionar información relevante y variada sobre el desarrollo del niño.
+    while (attempts < maxAttempts) {
+      attempts++;
+      console.log(`🤖 [OPENAI] Intento ${attempts}/${maxAttempts} para ${childName} (${ageInMonths} meses)`);
+
+      // Crear contexto de respuestas previas
+      const previousContext = previousResponses.length > 0 
+        ? `\n\nInformación ya proporcionada anteriormente:\n${previousResponses.slice(0, 3).map((resp, index) => 
+            `${index + 1}. ${resp.developmentInfo.join('\n   ')}`
+          ).join('\n')}`
+        : '';
+
+      const systemPrompt = `Eres una doula experta especializada en desarrollo infantil. Tu tarea es proporcionar información relevante y variada sobre el desarrollo del niño.
 
 IMPORTANTE:
 - Proporciona EXACTAMENTE 3 bullets de información
-- Cada bullet debe ser diferente y complementario
-- Evita repetir información ya proporcionada anteriormente
+- Cada bullet debe ser COMPLETAMENTE DIFERENTE a la información previa
+- Evita repetir conceptos, temas o información ya proporcionada
 - Usa emojis relevantes al inicio de cada bullet
 - Mantén un tono cálido y profesional
 - Incluye el nombre del niño cuando sea apropiado
+- Si es la consulta #${previousResponses.length + 1}, enfócate en aspectos NO mencionados anteriormente
 
 FORMATO REQUERIDO:
 1. 👀 **Título del primer aspecto**: Descripción detallada...
@@ -2804,37 +2870,53 @@ CONTEXTO ACTUAL:
 - Edad: ${ageInMonths} meses
 - Consulta #${previousResponses.length + 1}${previousContext}
 
-Si es la primera consulta, proporciona información fundamental. Si no, enfócate en aspectos diferentes o más específicos.`;
+${previousResponses.length > 0 ? 'IMPORTANTE: NO repitas ningún concepto, tema o información de las consultas anteriores. Busca aspectos completamente nuevos.' : 'Si es la primera consulta, proporciona información fundamental.'}`;
 
-    const userPrompt = `Proporciona 3 bullets de información sobre el desarrollo de ${childName} a los ${ageInMonths} meses de edad.`;
+      const userPrompt = `Proporciona 3 bullets de información ÚNICA sobre el desarrollo de ${childName} a los ${ageInMonths} meses de edad.`;
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      max_tokens: 500,
-      temperature: 0.7,
-      presence_penalty: 0.6,
-      frequency_penalty: 0.8
-    });
+      const response = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        max_tokens: 500,
+        temperature: 0.8 + (attempts * 0.1), // Aumentar temperatura en cada intento
+        presence_penalty: 0.8 + (attempts * 0.1), // Aumentar penalty en cada intento
+        frequency_penalty: 0.9 + (attempts * 0.05)
+      });
 
-    const content = response.choices[0].message.content;
-    
-    // Extraer los 3 bullets del contenido
-    const bullets = content.split('\n')
-      .filter(line => line.trim().match(/^\d+\.\s*[👀😊💪🤱🦷🔄🎤👐🪑🤏🗣️🚶👋🍽️🏃🎯🎵🧩🎭📚🎨🤝🧮🏃‍♂️📖🔢🎯🎓🏃‍♂️🧠📚🎨👥]/))
-      .map(line => line.replace(/^\d+\.\s*/, '').trim())
-      .slice(0, 3);
+      const content = response.choices[0].message.content;
+      
+      // Extraer los 3 bullets del contenido
+      const bullets = content.split('\n')
+        .filter(line => line.trim().match(/^\d+\.\s*[👀😊💪🤱🦷🔄🎤👐🪑🤏🗣️🚶👋🍽️🏃🎯🎵🧩🎭📚🎨🤝🧮🏃‍♂️📖🔢🎯🎓🏃‍♂️🧠📚🎨👥]/))
+        .map(line => line.replace(/^\d+\.\s*/, '').trim())
+        .slice(0, 3);
 
-    // Si no se pudieron extraer bullets, usar fallback
-    if (bullets.length < 3) {
-      console.log('⚠️ No se pudieron extraer bullets de OpenAI, usando fallback');
-      return getChildDevelopmentInfoFallback(ageInMonths);
+      // Si no se pudieron extraer bullets, usar fallback
+      if (bullets.length < 3) {
+        console.log('⚠️ No se pudieron extraer bullets de OpenAI, usando fallback');
+        return getChildDevelopmentInfoFallback(ageInMonths);
+      }
+
+      // Validar que no haya repeticiones
+      const validation = validateResponseUniqueness(bullets, previousResponses);
+      
+      if (validation.isValid) {
+        console.log(`✅ [OPENAI] Respuesta válida obtenida en intento ${attempts}`);
+        return validation.bullets;
+      } else {
+        console.log(`⚠️ [OPENAI] Respuesta con repeticiones detectada, reintentando...`);
+        if (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Esperar antes del siguiente intento
+        }
+      }
     }
 
-    return bullets;
+    // Si se agotaron los intentos, usar fallback
+    console.log(`⚠️ [OPENAI] Se agotaron los intentos, usando fallback`);
+    return getChildDevelopmentInfoFallback(ageInMonths);
 
   } catch (error) {
     console.error('❌ Error obteniendo información de OpenAI:', error);
