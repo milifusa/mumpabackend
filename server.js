@@ -696,6 +696,9 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
     let userContext = '';
     let childrenInfo = '';
     let userName = '';
+    let userMemory = null;
+    let relevantKnowledge = [];
+    
     if (db) {
       try {
         // Obtener datos del usuario desde Firestore
@@ -725,6 +728,20 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
             userNameFinal: userName,
             userDataKeys: Object.keys(userData)
           });
+          
+          // Obtener memoria del usuario
+          userMemory = await getUserMemory(uid);
+          
+          // Determinar filtros para el conocimiento basado en el contexto del usuario
+          let knowledgeFilters = { language: 'es' };
+          if (userData.isPregnant) {
+            knowledgeFilters.stage = 'embarazo';
+          } else if (userData.childrenCount > 0) {
+            knowledgeFilters.stage = 'posparto';
+          }
+          
+          // Recuperar conocimiento relevante
+          relevantKnowledge = await retrieveKnowledge(message, knowledgeFilters);
           
           // Obtener información de los hijos
           const childrenSnapshot = await db.collection('children')
@@ -796,6 +813,25 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
       }
     }
 
+    // Crear contexto de conocimiento relevante
+    let knowledgeContext = '';
+    if (relevantKnowledge.length > 0) {
+      knowledgeContext = `
+📚 **CONOCIMIENTO RELEVANTE PARA ESTA CONSULTA:**
+${relevantKnowledge.map((k, index) => `${index + 1}. ${k.text}`).join('\n')}
+`;
+    }
+    
+    // Crear contexto de memoria del usuario
+    let memoryContext = '';
+    if (userMemory) {
+      memoryContext = `
+🧠 **MEMORIA DE CONVERSACIONES ANTERIORES:**
+${userMemory.notes.length > 0 ? `Notas importantes: ${userMemory.notes.join(', ')}` : ''}
+${userMemory.preferences ? `Preferencias: ${JSON.stringify(userMemory.preferences)}` : ''}
+`;
+    }
+    
     // Crear el prompt para la doula virtual
     const systemPrompt = `Eres una doula virtual experta y compasiva llamada "Douli, asistente de Munpa". Tu misión es acompañar a padres y madres durante el embarazo, parto y crianza temprana con amor, sabiduría y profesionalismo.
 
@@ -840,15 +876,16 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
 
 ${userContext}
 ${childrenInfo}
+${knowledgeContext}
+${memoryContext}
 
-IMPORTANTE: Usa esta información para personalizar tus respuestas. Por ejemplo:
+IMPORTANTE: 
+- Usa esta información para personalizar tus respuestas
+- Si hay conocimiento relevante, úsalo para mejorar tu respuesta
+- Si hay memoria del usuario, considera sus preferencias y notas anteriores
 - Si tiene hijos pequeños, da consejos específicos para esa edad
 - Si está embarazada, enfócate en esa etapa específica
-- Si tiene múltiples hijos, considera la dinámica familiar
-- Si tiene hijos por nacer, incluye preparación para la llegada
 - SIEMPRE usa los nombres específicos de sus hijos cuando sea apropiado
-- Si pregunta por un hijo específico, responde usando su nombre y edad
-- Menciona a los hijos por nombre cuando des consejos personalizados
 
 Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón de una madre que ha acompañado a muchas mujeres en este hermoso viaje.`;
 
@@ -2149,6 +2186,114 @@ app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para agregar conocimiento a la base de datos
+app.post('/api/doula/knowledge', authenticateToken, async (req, res) => {
+  try {
+    const { text, metadata } = req.body;
+
+    if (!text || text.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'El texto es requerido'
+      });
+    }
+
+    const success = await saveKnowledge(text, metadata);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Conocimiento agregado correctamente'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error al agregar conocimiento'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error agregando conocimiento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al agregar conocimiento',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para guardar feedback del usuario
+app.post('/api/doula/feedback', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { conversationId, feedback } = req.body;
+
+    if (!feedback || !['positive', 'negative'].includes(feedback)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Feedback debe ser "positive" o "negative"'
+      });
+    }
+
+    const success = await saveFeedback(uid, conversationId, feedback);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Feedback guardado correctamente'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error al guardar feedback'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error guardando feedback:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al guardar feedback',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para actualizar memoria del usuario
+app.put('/api/doula/memory', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { notes, preferences } = req.body;
+
+    const memoryData = {
+      notes: notes || [],
+      preferences: preferences || {}
+    };
+
+    const success = await saveUserMemory(uid, memoryData);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Memoria actualizada correctamente'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error al actualizar memoria'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error actualizando memoria:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar memoria',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para actualizar el nombre del usuario
 app.put('/api/auth/update-name', authenticateToken, async (req, res) => {
   try {
@@ -2241,3 +2386,159 @@ process.on('SIGINT', () => {
 });
 
 module.exports = app;
+
+// ===== SISTEMA DE APRENDIZAJE CONTINUO (RAG) =====
+
+// Función para guardar conocimiento en el vector store (simulado en Firestore)
+const saveKnowledge = async (text, metadata = {}) => {
+  try {
+    if (!db) return false;
+    
+    const knowledgeDoc = {
+      text: text,
+      metadata: {
+        source: metadata.source || 'manual',
+        topic: metadata.topic || 'general',
+        stage: metadata.stage || 'general', // embarazo|posparto|lactancia|general
+        version: metadata.version || '1.0',
+        language: metadata.language || 'es',
+        createdBy: metadata.createdBy || 'system',
+        createdAt: new Date(),
+        qualityScore: metadata.qualityScore || 1.0
+      },
+      // Simulación de embedding (en producción usarías un servicio real)
+      embedding: [0.1, 0.2, 0.3], // Placeholder
+      isActive: true
+    };
+    
+    await db.collection('knowledge_base').add(knowledgeDoc);
+    console.log('💾 [RAG] Conocimiento guardado:', metadata.topic);
+    return true;
+  } catch (error) {
+    console.error('❌ [RAG] Error guardando conocimiento:', error);
+    return false;
+  }
+};
+
+// Función para recuperar conocimiento relevante
+const retrieveKnowledge = async (query, filters = {}) => {
+  try {
+    if (!db) return [];
+    
+    let queryRef = db.collection('knowledge_base').where('isActive', '==', true);
+    
+    // Aplicar filtros
+    if (filters.stage) {
+      queryRef = queryRef.where('metadata.stage', '==', filters.stage);
+    }
+    if (filters.topic) {
+      queryRef = queryRef.where('metadata.topic', '==', filters.topic);
+    }
+    if (filters.language) {
+      queryRef = queryRef.where('metadata.language', '==', filters.language);
+    }
+    
+    const snapshot = await queryRef.orderBy('metadata.qualityScore', 'desc').limit(5).get();
+    
+    const knowledge = [];
+    snapshot.forEach(doc => {
+      knowledge.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    console.log('🔍 [RAG] Conocimiento recuperado:', knowledge.length, 'fragmentos');
+    return knowledge;
+  } catch (error) {
+    console.error('❌ [RAG] Error recuperando conocimiento:', error);
+    return [];
+  }
+};
+
+// Función para guardar memoria del usuario
+const saveUserMemory = async (userId, memoryData) => {
+  try {
+    if (!db) return false;
+    
+    const memoryDoc = {
+      userId: userId,
+      profile: memoryData.profile || {},
+      notes: memoryData.notes || [],
+      preferences: memoryData.preferences || {},
+      lastUpdated: new Date()
+    };
+    
+    await db.collection('user_memory').doc(userId).set(memoryDoc, { merge: true });
+    console.log('💾 [MEMORY] Memoria guardada para usuario:', userId);
+    return true;
+  } catch (error) {
+    console.error('❌ [MEMORY] Error guardando memoria:', error);
+    return false;
+  }
+};
+
+// Función para obtener memoria del usuario
+const getUserMemory = async (userId) => {
+  try {
+    if (!db) return null;
+    
+    const memoryDoc = await db.collection('user_memory').doc(userId).get();
+    
+    if (memoryDoc.exists) {
+      console.log('🔍 [MEMORY] Memoria recuperada para usuario:', userId);
+      return memoryDoc.data();
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ [MEMORY] Error obteniendo memoria:', error);
+    return null;
+  }
+};
+
+// Función para guardar Q&A validado
+const saveValidatedQA = async (question, answer, tags = [], qualityScore = 1.0) => {
+  try {
+    if (!db) return false;
+    
+    const qaDoc = {
+      question: question,
+      answer: answer,
+      tags: tags,
+      qualityScore: qualityScore,
+      createdAt: new Date(),
+      isActive: true,
+      usageCount: 0
+    };
+    
+    await db.collection('validated_qa').add(qaDoc);
+    console.log('💾 [QA] Q&A validado guardado');
+    return true;
+  } catch (error) {
+    console.error('❌ [QA] Error guardando Q&A:', error);
+    return false;
+  }
+};
+
+// Función para guardar feedback del usuario
+const saveFeedback = async (userId, conversationId, feedback) => {
+  try {
+    if (!db) return false;
+    
+    const feedbackDoc = {
+      userId: userId,
+      conversationId: conversationId,
+      feedback: feedback, // 'positive' | 'negative'
+      timestamp: new Date(),
+      processed: false
+    };
+    
+    await db.collection('user_feedback').add(feedbackDoc);
+    console.log('💾 [FEEDBACK] Feedback guardado:', feedback);
+    return true;
+  } catch (error) {
+    console.error('❌ [FEEDBACK] Error guardando feedback:', error);
+    return false;
+  }
+};
