@@ -2284,11 +2284,91 @@ app.post('/api/doula/knowledge', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para aprendizaje validado (POST /learn)
+app.post('/api/doula/learn', authenticateToken, async (req, res) => {
+  try {
+    const { 
+      text, 
+      metadata, 
+      validation = {
+        approved: false,
+        approvedBy: null,
+        approvedAt: null,
+        checklist: {
+          sourceVerified: false,
+          medicalAccuracy: false,
+          toneAppropriate: false,
+          contentRelevant: false
+        }
+      }
+    } = req.body;
+
+    if (!text || text.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'El texto es requerido'
+      });
+    }
+
+    // Validar que el checklist esté completo
+    const checklist = validation.checklist;
+    const isFullyValidated = Object.values(checklist).every(item => item === true);
+
+    if (!isFullyValidated) {
+      return res.status(400).json({
+        success: false,
+        message: 'El conocimiento debe pasar todas las validaciones del checklist',
+        checklist: checklist
+      });
+    }
+
+    // Agregar metadatos de validación
+    const validatedMetadata = {
+      ...metadata,
+      validation: {
+        ...validation,
+        approved: true,
+        approvedAt: new Date(),
+        approvedBy: req.user.uid
+      },
+      version: metadata.version || '1.0',
+      createdAt: new Date(),
+      isActive: true
+    };
+
+    const success = await saveKnowledge(text, validatedMetadata);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: 'Conocimiento validado y agregado correctamente',
+        data: {
+          text: text.substring(0, 100) + '...',
+          metadata: validatedMetadata
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error al agregar conocimiento validado'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error en aprendizaje validado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en aprendizaje validado',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para guardar feedback del usuario
 app.post('/api/doula/feedback', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { conversationId, feedback } = req.body;
+    const { conversationId, feedback, details } = req.body;
 
     if (!feedback || !['positive', 'negative'].includes(feedback)) {
       return res.status(400).json({
@@ -2297,19 +2377,48 @@ app.post('/api/doula/feedback', authenticateToken, async (req, res) => {
       });
     }
 
-    const success = await saveFeedback(uid, conversationId, feedback);
-    
-    if (success) {
-      res.json({
-        success: true,
-        message: 'Feedback guardado correctamente'
-      });
-    } else {
-      res.status(500).json({
+    const feedbackData = {
+      userId: uid,
+      conversationId: conversationId,
+      feedback: feedback,
+      details: details || {},
+      timestamp: new Date(),
+      processed: false
+    };
+
+    if (!db) {
+      return res.status(500).json({
         success: false,
-        message: 'Error al guardar feedback'
+        message: 'Base de datos no disponible'
       });
     }
+
+    await db.collection('user_feedback').add(feedbackData);
+    
+    console.log('💾 [FEEDBACK] Feedback guardado:', feedback);
+    
+    // Si es feedback positivo, considerar guardar como Q&A validado
+    if (feedback === 'positive' && details && details.question && details.answer) {
+      const qaData = {
+        question: details.question,
+        answer: details.answer,
+        tags: details.tags || [],
+        qualityScore: 0.9,
+        createdAt: new Date(),
+        isActive: true,
+        usageCount: 0,
+        source: 'user_feedback',
+        validatedBy: uid
+      };
+      
+      await db.collection('validated_qa').add(qaData);
+      console.log('✅ [QA] Q&A validado guardado desde feedback');
+    }
+    
+    res.json({
+      success: true,
+      message: 'Feedback guardado correctamente'
+    });
 
   } catch (error) {
     console.error('❌ Error guardando feedback:', error);
@@ -2351,6 +2460,137 @@ app.put('/api/doula/memory', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al actualizar memoria',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para borrar memoria del usuario
+app.delete('/api/doula/memory', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    await db.collection('user_memory').doc(uid).delete();
+    
+    console.log('🗑️ [MEMORY] Memoria borrada para usuario:', uid);
+    
+    res.json({
+      success: true,
+      message: 'Memoria borrada correctamente'
+    });
+
+  } catch (error) {
+    console.error('❌ Error borrando memoria:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al borrar memoria',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para tests automáticos de calidad
+app.post('/api/doula/quality-test', authenticateToken, async (req, res) => {
+  try {
+    const testQuestions = [
+      {
+        question: "¿Qué ejercicios puedo hacer durante el embarazo?",
+        expectedCategory: "embarazo",
+        expectedKeywords: ["caminar", "yoga", "natación", "seguro"]
+      },
+      {
+        question: "¿Cómo puedo prepararme para la lactancia?",
+        expectedCategory: "lactancia",
+        expectedKeywords: ["contacto", "agarre", "demanda", "beneficios"]
+      },
+      {
+        question: "¿Cuáles son los síntomas del primer trimestre?",
+        expectedCategory: "embarazo",
+        expectedKeywords: ["náuseas", "fatiga", "senos", "hormonas"]
+      },
+      {
+        question: "¿Puedes ayudarme con programación en JavaScript?",
+        expectedCategory: "off_topic",
+        expectedResponse: "especializada en acompañamiento durante el embarazo"
+      }
+    ];
+
+    const results = [];
+    let totalScore = 0;
+
+    for (const test of testQuestions) {
+      try {
+        // Simular llamada al chat
+        const response = await generateDoulaResponse(test.question, '', '', 'TestUser');
+        
+        let score = 0;
+        let feedback = '';
+
+        if (test.expectedCategory === 'off_topic') {
+          // Verificar que redirija correctamente
+          if (response.includes(test.expectedResponse)) {
+            score = 1;
+            feedback = '✅ Redirección correcta para tema fuera del ámbito';
+          } else {
+            feedback = '❌ No redirigió correctamente tema fuera del ámbito';
+          }
+        } else {
+          // Verificar palabras clave esperadas
+          const keywordMatches = test.expectedKeywords.filter(keyword => 
+            response.toLowerCase().includes(keyword.toLowerCase())
+          );
+          
+          score = keywordMatches.length / test.expectedKeywords.length;
+          feedback = `✅ Encontró ${keywordMatches.length}/${test.expectedKeywords.length} palabras clave`;
+        }
+
+        results.push({
+          question: test.question,
+          expectedCategory: test.expectedCategory,
+          score: score,
+          feedback: feedback,
+          response: response.substring(0, 200) + '...'
+        });
+
+        totalScore += score;
+
+      } catch (error) {
+        results.push({
+          question: test.question,
+          expectedCategory: test.expectedCategory,
+          score: 0,
+          feedback: '❌ Error en test',
+          error: error.message
+        });
+      }
+    }
+
+    const averageScore = totalScore / testQuestions.length;
+    const qualityStatus = averageScore >= 0.8 ? 'EXCELENTE' : averageScore >= 0.6 ? 'BUENO' : 'NEEDS_IMPROVEMENT';
+
+    res.json({
+      success: true,
+      data: {
+        testDate: new Date(),
+        totalTests: testQuestions.length,
+        averageScore: averageScore,
+        qualityStatus: qualityStatus,
+        results: results
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error en test de calidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en test de calidad',
       error: error.message
     });
   }
