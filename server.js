@@ -2600,6 +2600,7 @@ app.post('/api/doula/quality-test', authenticateToken, async (req, res) => {
 app.post('/api/children/development-info', authenticateToken, async (req, res) => {
   try {
     const { name, ageInMonths, isUnborn = false, gestationWeeks = null } = req.body;
+    const userId = req.user.uid;
 
     if (!name || !name.trim()) {
       return res.status(400).json({
@@ -2622,15 +2623,27 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
       });
     }
 
-    let developmentInfo = [];
+    // Obtener respuestas previas para este niño
+    const childKey = `${name.trim()}_${isUnborn ? 'unborn' : ageInMonths}months`;
+    const previousResponses = await getPreviousDevelopmentResponses(userId, childKey);
 
+    // Obtener información variada
+    let developmentInfo = [];
     if (isUnborn) {
-      // Información para bebés por nacer
-      developmentInfo = getUnbornDevelopmentInfo(gestationWeeks);
+      developmentInfo = getUnbornDevelopmentInfoVaried(gestationWeeks, previousResponses);
     } else {
-      // Información para niños nacidos
-      developmentInfo = getChildDevelopmentInfo(ageInMonths);
+      developmentInfo = getChildDevelopmentInfoVaried(ageInMonths, previousResponses);
     }
+
+    // Guardar esta respuesta para futuras consultas
+    await saveDevelopmentResponse(userId, childKey, {
+      childName: name.trim(),
+      ageInMonths: isUnborn ? null : ageInMonths,
+      gestationWeeks: isUnborn ? gestationWeeks : null,
+      isUnborn: isUnborn,
+      developmentInfo: developmentInfo,
+      timestamp: new Date()
+    });
 
     res.json({
       success: true,
@@ -2640,7 +2653,9 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
         gestationWeeks: isUnborn ? gestationWeeks : null,
         isUnborn: isUnborn,
         developmentInfo: developmentInfo,
-        timestamp: new Date()
+        timestamp: new Date(),
+        responseCount: previousResponses.length + 1,
+        isNewInfo: previousResponses.length === 0
       }
     });
 
@@ -2653,6 +2668,90 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
     });
   }
 });
+
+// Función para obtener respuestas previas de desarrollo
+const getPreviousDevelopmentResponses = async (userId, childKey) => {
+  try {
+    const response = await db.collection('development_responses')
+      .doc(userId)
+      .collection('children')
+      .doc(childKey)
+      .collection('responses')
+      .orderBy('timestamp', 'desc')
+      .limit(10)
+      .get();
+
+    return response.docs.map(doc => doc.data());
+  } catch (error) {
+    console.error('Error obteniendo respuestas previas:', error);
+    return [];
+  }
+};
+
+// Función para guardar respuesta de desarrollo
+const saveDevelopmentResponse = async (userId, childKey, responseData) => {
+  try {
+    await db.collection('development_responses')
+      .doc(userId)
+      .collection('children')
+      .doc(childKey)
+      .collection('responses')
+      .add({
+        ...responseData,
+        savedAt: new Date()
+      });
+  } catch (error) {
+    console.error('Error guardando respuesta:', error);
+  }
+};
+
+// Función para obtener información de desarrollo de bebés por nacer (variada)
+const getUnbornDevelopmentInfoVaried = (gestationWeeks, previousResponses) => {
+  // Obtener todas las opciones disponibles para esta edad
+  const allOptions = getAllUnbornOptions(gestationWeeks);
+  
+  // Filtrar opciones ya mostradas
+  const usedOptions = previousResponses.flatMap(response => 
+    response.developmentInfo.map(info => info.substring(0, 50)) // Usar inicio del texto como identificador
+  );
+  
+  const availableOptions = allOptions.filter(option => 
+    !usedOptions.some(used => option.includes(used.substring(0, 30)))
+  );
+  
+  // Si no hay suficientes opciones nuevas, mezclar con algunas usadas
+  if (availableOptions.length < 3) {
+    const shuffledAll = allOptions.sort(() => Math.random() - 0.5);
+    return shuffledAll.slice(0, 3);
+  }
+  
+  // Seleccionar 3 opciones aleatorias de las disponibles
+  return availableOptions.sort(() => Math.random() - 0.5).slice(0, 3);
+};
+
+// Función para obtener información de desarrollo de niños nacidos (variada)
+const getChildDevelopmentInfoVaried = (ageInMonths, previousResponses) => {
+  // Obtener todas las opciones disponibles para esta edad
+  const allOptions = getAllChildOptions(ageInMonths);
+  
+  // Filtrar opciones ya mostradas
+  const usedOptions = previousResponses.flatMap(response => 
+    response.developmentInfo.map(info => info.substring(0, 50))
+  );
+  
+  const availableOptions = allOptions.filter(option => 
+    !usedOptions.some(used => option.includes(used.substring(0, 30)))
+  );
+  
+  // Si no hay suficientes opciones nuevas, mezclar con algunas usadas
+  if (availableOptions.length < 3) {
+    const shuffledAll = allOptions.sort(() => Math.random() - 0.5);
+    return shuffledAll.slice(0, 3);
+  }
+  
+  // Seleccionar 3 opciones aleatorias de las disponibles
+  return availableOptions.sort(() => Math.random() - 0.5).slice(0, 3);
+};
 
 // Función para obtener información de desarrollo de bebés por nacer
 const getUnbornDevelopmentInfo = (gestationWeeks) => {
@@ -2681,6 +2780,149 @@ const getUnbornDevelopmentInfo = (gestationWeeks) => {
       "⏰ **Signos de parto**: Presta atención a contracciones regulares, rotura de aguas o pérdida del tapón mucoso."
     ];
   }
+};
+
+// Función para obtener todas las opciones de bebés por nacer
+const getAllUnbornOptions = (gestationWeeks) => {
+  const options = [];
+  
+  if (gestationWeeks <= 12) {
+    options.push(
+      "🫀 **Desarrollo del corazón**: El corazón de tu bebé ya late y se están formando los principales órganos. Es un período crítico de desarrollo.",
+      "🧬 **Formación de órganos**: Se están desarrollando el cerebro, hígado, riñones y otros órganos vitales. La nutrición materna es fundamental.",
+      "⚠️ **Cuidados especiales**: Evita alcohol, tabaco y medicamentos sin prescripción médica. Descansa lo suficiente y mantén una dieta equilibrada.",
+      "🌱 **Crecimiento celular**: Las células se multiplican rápidamente formando todos los sistemas del cuerpo. Cada día es crucial.",
+      "💊 **Suplementos importantes**: El ácido fólico es esencial para prevenir defectos del tubo neural. Consulta con tu médico."
+    );
+  } else if (gestationWeeks <= 24) {
+    options.push(
+      "👶 **Movimientos fetales**: Tu bebé ya se mueve y puedes sentir sus pataditas. Los movimientos son una señal de bienestar.",
+      "👂 **Desarrollo sensorial**: Ya puede oír sonidos y responde a tu voz. Hablarle y cantarle fortalece el vínculo.",
+      "📏 **Crecimiento acelerado**: Tu bebé crece rápidamente. Mantén una buena nutrición y control prenatal regular.",
+      "🎵 **Estimulación auditiva**: El bebé puede distinguir tu voz de otros sonidos. La música suave puede ser relajante.",
+      "🫁 **Desarrollo pulmonar**: Los pulmones comienzan a formarse aunque aún no están maduros para respirar.",
+      "👁️ **Formación de ojos**: Los ojos se están desarrollando y ya tienen párpados que se abren y cierran."
+    );
+  } else if (gestationWeeks <= 36) {
+    options.push(
+      "🫁 **Maduración pulmonar**: Los pulmones se están preparando para respirar. El bebé practica movimientos respiratorios.",
+      "👁️ **Desarrollo visual**: Los ojos se abren y puede distinguir entre luz y oscuridad. Responde a estímulos luminosos.",
+      "💪 **Posición de parto**: El bebé se está posicionando para el nacimiento. Los movimientos pueden ser más limitados.",
+      "🧠 **Desarrollo cerebral**: El cerebro crece rápidamente y se forman nuevas conexiones neuronales.",
+      "💤 **Ciclos de sueño**: El bebé tiene ciclos de sueño y vigilia. Puedes notar patrones en sus movimientos.",
+      "🍎 **Nutrición fetal**: El bebé absorbe nutrientes directamente de tu sangre. Una dieta balanceada es crucial."
+    );
+  } else {
+    options.push(
+      "🎯 **Listo para nacer**: Tu bebé está completamente desarrollado y listo para el nacimiento en cualquier momento.",
+      "📦 **Posición final**: Probablemente esté en posición cefálica (cabeza abajo) preparándose para el parto.",
+      "⏰ **Signos de parto**: Presta atención a contracciones regulares, rotura de aguas o pérdida del tapón mucoso.",
+      "🤱 **Preparación para lactancia**: Los senos se preparan para la producción de leche. El calostro ya está disponible.",
+      "🏥 **Plan de parto**: Ten listo tu plan de parto y la maleta para el hospital. Todo puede suceder muy rápido.",
+      "👶 **Tamaño final**: Tu bebé pesa entre 2.5-4 kg y mide aproximadamente 50 cm. Está listo para el mundo exterior."
+    );
+  }
+  
+  return options;
+};
+
+// Función para obtener todas las opciones de niños nacidos
+const getAllChildOptions = (ageInMonths) => {
+  const options = [];
+  
+  if (ageInMonths <= 3) {
+    options.push(
+      "👀 **Desarrollo visual**: Tu bebé puede seguir objetos con la mirada y reconoce tu rostro. El contacto visual es fundamental.",
+      "😊 **Primeras sonrisas**: Aparecen las sonrisas sociales y el bebé responde a tu voz y caricias.",
+      "💪 **Control de cabeza**: Comienza a sostener la cabeza cuando está boca abajo. El tiempo boca abajo es importante.",
+      "🎵 **Reconocimiento de voces**: Distingue tu voz de otras y se calma cuando te escucha.",
+      "🤱 **Alimentación frecuente**: Necesita alimentarse cada 2-3 horas. La lactancia a demanda es lo ideal.",
+      "💤 **Patrones de sueño**: Duerme entre 14-17 horas al día en ciclos cortos."
+    );
+  } else if (ageInMonths <= 6) {
+    options.push(
+      "🤱 **Alimentación complementaria**: Está listo para comenzar con papillas. Introduce alimentos uno por uno.",
+      "🦷 **Primeros dientes**: Pueden aparecer los primeros dientes. Ofrece mordedores fríos para aliviar las molestias.",
+      "🔄 **Volteo**: Aprende a darse la vuelta de boca arriba a boca abajo y viceversa. Supervisa siempre.",
+      "🎤 **Balbuceo temprano**: Produce sonidos como 'ah', 'oh', 'eh'. Responde a tu conversación.",
+      "👐 **Alcance de objetos**: Estira los brazos para alcanzar juguetes y objetos cercanos.",
+      "🪑 **Sentarse con apoyo**: Puede sentarse brevemente con apoyo y mantiene la cabeza estable."
+    );
+  } else if (ageInMonths <= 9) {
+    options.push(
+      "🪑 **Sentarse solo**: Ya puede sentarse sin apoyo y mantenerse estable. El equilibrio mejora día a día.",
+      "🤏 **Pinza fina**: Desarrolla la capacidad de agarrar objetos pequeños entre el pulgar y el índice.",
+      "🗣️ **Balbuceo**: Produce sonidos como 'mamá', 'papá'. Responde a su nombre y entiende palabras simples.",
+      "🦷 **Más dientes**: Continúan apareciendo dientes. La dentición puede causar molestias.",
+      "🎯 **Juego interactivo**: Disfruta juegos como 'cucú' y 'palmas palmitas'.",
+      "🦵 **Gateo**: Comienza a gatear o se arrastra para moverse. Supervisa en todo momento."
+    );
+  } else if (ageInMonths <= 12) {
+    options.push(
+      "🚶 **Primeros pasos**: Puede dar sus primeros pasos sosteniéndose de muebles o de tu mano. Cada bebé tiene su ritmo.",
+      "👋 **Gestos comunicativos**: Hace gestos como saludar, señalar y aplaudir. La comunicación no verbal se desarrolla.",
+      "🍽️ **Alimentación independiente**: Quiere comer solo y explorar texturas. Ofrece alimentos seguros y variados.",
+      "🗣️ **Primeras palabras**: Dice algunas palabras como 'mamá', 'papá', 'agua'. Entiende muchas más.",
+      "🎨 **Exploración activa**: Toca, golpea y explora todo lo que encuentra. Es su forma de aprender.",
+      "👥 **Reconocimiento social**: Distingue entre familiares y extraños. Puede mostrar timidez."
+    );
+  } else if (ageInMonths <= 18) {
+    options.push(
+      "🏃 **Caminar estable**: Ya camina con seguridad y puede subir escaleras gateando. Supervisa en todo momento.",
+      "🗣️ **Primeras palabras**: Dice entre 5-20 palabras y entiende muchas más. Lee cuentos y habla constantemente.",
+      "🎯 **Juego simbólico**: Comienza a imitar acciones como hablar por teléfono o dar de comer a muñecos.",
+      "🎵 **Música y baile**: Disfruta la música y puede bailar moviendo el cuerpo al ritmo.",
+      "🧩 **Juegos de construcción**: Apila bloques y construye torres simples.",
+      "👟 **Vestirse**: Intenta ponerse zapatos y algunas prendas de ropa."
+    );
+  } else if (ageInMonths <= 24) {
+    options.push(
+      "💬 **Explosión del lenguaje**: Aprende nuevas palabras cada día y forma frases de 2-3 palabras.",
+      "🎨 **Creatividad**: Disfruta pintar, dibujar y crear. Ofrece materiales seguros para expresarse.",
+      "👥 **Socialización**: Muestra interés por otros niños aunque aún juega en paralelo. Las citas de juego son beneficiosas.",
+      "🎭 **Juego de roles**: Imita roles como ser mamá, papá, doctor. El juego imaginativo se desarrolla.",
+      "🏃‍♂️ **Actividad física**: Corre, salta y trepa. Necesita mucha actividad física diaria.",
+      "🧠 **Memoria**: Recuerda eventos recientes y puede seguir rutinas simples."
+    );
+  } else if (ageInMonths <= 36) {
+    options.push(
+      "🧩 **Pensamiento lógico**: Resuelve rompecabezas simples y entiende conceptos como grande/pequeño, arriba/abajo.",
+      "🎭 **Juego de roles**: Imita roles como ser mamá, papá, doctor. El juego imaginativo se desarrolla.",
+      "🎵 **Habilidades musicales**: Disfruta cantar, bailar y hacer música. La música estimula el desarrollo cerebral.",
+      "📚 **Interés por libros**: Disfruta que le lean cuentos y puede 'leer' libros conocidos.",
+      "🎨 **Arte y manualidades**: Crea dibujos más detallados y disfruta actividades artísticas.",
+      "👥 **Amistades**: Comienza a formar amistades reales y entiende conceptos como compartir."
+    );
+  } else if (ageInMonths <= 48) {
+    options.push(
+      "📚 **Preparación escolar**: Desarrolla habilidades pre-lectura como reconocer letras y contar.",
+      "🎨 **Expresión artística**: Crea dibujos más detallados y puede representar personas y objetos.",
+      "🤝 **Cooperación**: Aprende a compartir, esperar turnos y seguir reglas simples en grupo.",
+      "🧮 **Conceptos matemáticos**: Cuenta hasta 10, reconoce números y entiende conceptos básicos.",
+      "🎭 **Juego dramático**: Crea historias complejas y actúa escenas completas.",
+      "🏃‍♂️ **Habilidades motoras**: Salta en un pie, patea pelotas y tiene mejor coordinación."
+    );
+  } else if (ageInMonths <= 60) {
+    options.push(
+      "📖 **Lectura emergente**: Reconoce algunas palabras escritas y puede 'leer' cuentos conocidos.",
+      "🔢 **Conceptos matemáticos**: Cuenta hasta 10, reconoce números y entiende conceptos básicos de cantidad.",
+      "🎯 **Independencia**: Se viste solo, usa el baño independientemente y ayuda en tareas simples.",
+      "🎨 **Creatividad avanzada**: Crea historias, dibujos y proyectos más complejos.",
+      "👥 **Habilidades sociales**: Entiende emociones, resuelve conflictos y forma amistades duraderas.",
+      "🏫 **Preparación escolar**: Está listo para el aprendizaje formal y puede seguir instrucciones complejas."
+    );
+  } else {
+    options.push(
+      "🎓 **Desarrollo escolar**: Está listo para el aprendizaje formal. Las habilidades sociales y académicas se desarrollan.",
+      "🏃‍♂️ **Actividad física**: Disfruta deportes y actividades físicas. El ejercicio regular es importante.",
+      "🧠 **Pensamiento abstracto**: Comienza a entender conceptos más complejos y puede resolver problemas simples.",
+      "📚 **Lectura independiente**: Lee libros simples y disfruta la literatura infantil.",
+      "🎨 **Expresión artística**: Desarrolla talentos artísticos y disfruta actividades creativas.",
+      "👥 **Relaciones sociales**: Forma amistades más complejas y entiende dinámicas sociales."
+    );
+  }
+  
+  return options;
 };
 
 // Función para obtener información de desarrollo de niños nacidos
@@ -2747,6 +2989,57 @@ const getChildDevelopmentInfo = (ageInMonths) => {
     ];
   }
 };
+
+// Endpoint para limpiar historial de respuestas de desarrollo
+app.delete('/api/children/development-history', authenticateToken, async (req, res) => {
+  try {
+    const { childName, ageInMonths, isUnborn = false } = req.body;
+    const userId = req.user.uid;
+
+    if (!childName || !childName.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre del niño es requerido'
+      });
+    }
+
+    const childKey = `${childName.trim()}_${isUnborn ? 'unborn' : ageInMonths}months`;
+
+    // Obtener todas las respuestas para este niño
+    const responsesRef = db.collection('development_responses')
+      .doc(userId)
+      .collection('children')
+      .doc(childKey)
+      .collection('responses');
+
+    const responses = await responsesRef.get();
+
+    // Eliminar todas las respuestas
+    const batch = db.batch();
+    responses.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+
+    await batch.commit();
+
+    res.json({
+      success: true,
+      message: 'Historial de respuestas eliminado',
+      data: {
+        childName: childName.trim(),
+        deletedCount: responses.docs.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error eliminando historial:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando historial',
+      error: error.message
+    });
+  }
+});
 
 // Endpoint para actualizar el nombre del usuario
 app.put('/api/auth/update-name', authenticateToken, async (req, res) => {
