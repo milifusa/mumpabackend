@@ -2762,15 +2762,20 @@ const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
   
   // Si ya pasó las 42 semanas, considerar 40 semanas (término completo)
   if (currentWeeks > 42) {
+    console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${currentWeeks} semanas > 42, retornando 40 semanas (${diffDays} días desde creación)`);
     return 40;
   }
   
   // Si es muy temprano (menos de 4 semanas), considerar 4 semanas mínimo
   if (currentWeeks < 4) {
+    console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${currentWeeks} semanas < 4, retornando 4 semanas (${diffDays} días desde creación)`);
     return 4;
   }
   
-  return Math.max(4, Math.min(42, currentWeeks));
+  const finalWeeks = Math.max(4, Math.min(42, currentWeeks));
+  console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${currentWeeks} semanas (${diffDays} días desde creación)`);
+  
+  return finalWeeks;
 };
 
 // Función para obtener información actualizada de un hijo
