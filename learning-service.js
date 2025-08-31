@@ -164,6 +164,26 @@ export const learningService = {
     }
   },
 
+  // ===== INFORMACIÓN DE DESARROLLO INFANTIL =====
+  getChildDevelopmentInfo: async (name, ageInMonths, isUnborn = false, gestationWeeks = null) => {
+    try {
+      console.log('👶 [DEVELOPMENT] Obteniendo información de desarrollo para:', name);
+      
+      const response = await api.post('/api/children/development-info', {
+        name,
+        ageInMonths,
+        isUnborn,
+        gestationWeeks
+      });
+      
+      console.log('✅ [DEVELOPMENT] Información obtenida:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEVELOPMENT] Error obteniendo información:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
   // ===== OBTENER CONOCIMIENTO BASE =====
   getBaseKnowledge: () => {
     return [
