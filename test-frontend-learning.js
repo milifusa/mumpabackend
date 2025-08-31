@@ -128,7 +128,11 @@ const runTests = async () => {
       "¿Qué ejercicios puedo hacer durante el embarazo?",
       "¿Cómo puedo prepararme para la lactancia?",
       "¿Es normal sentir náuseas en el primer trimestre?",
-      "¿Cuánto debe dormir un bebé recién nacido?"
+      "¿Cuánto debe dormir un bebé recién nacido?",
+      "¿Puedes ayudarme con programación en JavaScript?",
+      "¿Qué opinas sobre las inversiones en criptomonedas?",
+      "¿Cómo puedo preparar una receta de pasta?",
+      "¿Qué ejercicios de yoga prenatal me recomiendas?"
     ];
     
     for (const message of testMessages) {
@@ -206,6 +210,7 @@ const runTests = async () => {
     console.log('✅ Memoria del usuario - Funcionando');
     console.log('✅ Agregar conocimiento - Funcionando');
     console.log('✅ Respuestas personalizadas - Funcionando');
+    console.log('✅ Control de alcance - Funcionando');
     
   } catch (error) {
     console.error('\n💥 [TEST] Error en las pruebas:', error.message);
@@ -237,11 +242,12 @@ INSTRUCCIONES DE USO:
 
 PRUEBAS INCLUIDAS:
 
-✅ Chat con Douli (4 mensajes de prueba)
+✅ Chat con Douli (8 mensajes de prueba)
 ✅ Sistema de feedback (positivo y negativo)
 ✅ Memoria del usuario (notas y preferencias)
 ✅ Agregar conocimiento personalizado
 ✅ Chat con conocimiento personalizado
+✅ Control de alcance (temas fuera del ámbito)
 
 RESULTADO:
 

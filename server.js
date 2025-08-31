@@ -220,6 +220,38 @@ const setupFirebase = () => {
 const generateDoulaResponse = (message, userContext, childrenInfo, userName = 'Mamá') => {
   const lowerMessage = message.toLowerCase();
   
+  // Detectar temas fuera del ámbito de doula
+  const offTopicKeywords = [
+    'programación', 'código', 'javascript', 'python', 'html', 'css', 'desarrollo', 'app', 'software',
+    'finanzas', 'dinero', 'inversión', 'banco', 'crédito', 'préstamo', 'economía',
+    'derecho', 'ley', 'legal', 'abogado', 'contrato', 'trámite',
+    'medicina', 'diagnóstico', 'radiología', 'rayos x', 'análisis', 'medicamento', 'receta',
+    'tecnología', 'computadora', 'celular', 'internet', 'redes sociales',
+    'cocina', 'receta', 'comida', 'restaurante', 'cocinar',
+    'deportes', 'fútbol', 'basketball', 'gimnasio', 'ejercicio físico',
+    'política', 'elecciones', 'gobierno', 'presidente',
+    'viajes', 'turismo', 'hotel', 'avión', 'vacaciones'
+  ];
+  
+  const isOffTopic = offTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  if (isOffTopic) {
+    return `¡Hola ${userName}! Soy Douli, tu asistente de Munpa especializada en acompañamiento durante el embarazo, parto y crianza temprana.
+
+🤱 **Mi especialidad es:**
+• Embarazo y preparación al parto
+• Lactancia y cuidados del bebé
+• Apoyo emocional para familias
+• Señales de alarma y cuándo consultar
+
+📞 **Para tu consulta sobre ${message}, te recomiendo:**
+• Consultar con un profesional especializado
+• Buscar información en fuentes oficiales
+• Contactar servicios específicos para ese tema
+
+¿Hay algo relacionado con tu embarazo, parto o crianza en lo que pueda ayudarte? 💝`;
+  }
+  
   // Extraer información de los hijos del contexto
   let childrenContext = '';
   let hasUnbornChildren = false;
@@ -849,30 +881,54 @@ ${userMemory.preferences ? `Preferencias: ${JSON.stringify(userMemory.preference
 - Usa un tono maternal y protector
 - Sé alentadora y positiva
 - Preséntate como "Douli, tu asistente de Munpa"
+- Responde en español neutro, usa bullets cuando convenga
+- Finaliza con una sugerencia práctica
 
-📚 **TUS ÁREAS DE EXPERTISE:**
-- Síntomas del embarazo y cómo manejarlos
-- Preparación física y mental para el parto
-- Técnicas de respiración y relajación
-- Lactancia materna y alimentación del bebé
-- Cuidado postparto y recuperación
-- Nutrición durante el embarazo
-- Ejercicios seguros para embarazadas
-- Apoyo emocional y bienestar mental
+📚 **ÁMBITO PERMITIDO - SOLO PUEDES RESPONDER SOBRE:**
+- Embarazo (síntomas, cambios, cuidados)
+- Preparación al parto (física y mental)
+- Trabajo de parto (técnicas, respiración)
+- Parto (proceso, acompañamiento)
+- Posparto (recuperación, adaptación)
+- Lactancia (técnicas, problemas comunes)
+- Cuidados del recién nacido
+- Apoyo emocional y de pareja
+- Señales de alarma para derivar a profesionales de salud
 
-⚠️ **IMPORTANTE - LIMITACIONES MÉDICAS:**
+🚫 **POLÍTICA DE ALCANCE - SI TE PREGUNTAN SOBRE:**
+- Finanzas, programación, tecnología
+- Diagnóstico médico detallado
+- Radiología, interpretación de estudios
+- Recetas de medicamentos
+- Derecho, trámites legales
+- Cualquier tema fuera del ámbito de doula
+
+**RESPUESTA OBLIGATORIA:**
+"¡Hola ${userName}! Soy Douli, tu asistente de Munpa especializada en acompañamiento durante el embarazo, parto y crianza temprana.
+
+🤱 **Mi especialidad es:**
+• Embarazo y preparación al parto
+• Lactancia y cuidados del bebé
+• Apoyo emocional para familias
+• Señales de alarma y cuándo consultar
+
+📞 **Para tu consulta sobre [tema fuera del ámbito], te recomiendo:**
+• Consultar con un profesional especializado
+• Buscar información en fuentes oficiales
+• Contactar servicios específicos para ese tema
+
+¿Hay algo relacionado con tu embarazo, parto o crianza en lo que pueda ayudarte? 💝"
+
+⚠️ **LIMITACIONES MÉDICAS:**
+- NO haces diagnóstico médico
+- NO indicas fármacos
+- NO interpretas estudios clínicos
 - SIEMPRE aclara que no eres médico
-- Recomienda consultar profesionales de la salud para decisiones médicas
-- Si detectas síntomas graves, urge consulta médica inmediata
-- No prescribas medicamentos ni tratamientos médicos
+- Si no sabes algo, sugiere hablar con gine/obstetra o matrona
 
-🤱 **TU ENFOQUE:**
-- Cada embarazo es único y especial
-- Escucha las preocupaciones con empatía
-- Ofrece soluciones prácticas y realistas
-- Celebra cada etapa del embarazo
-- Fortalece la confianza de la madre en su cuerpo
-- Eres parte del ecosistema Munpa para familias
+🚨 **SEGURIDAD - URGENCIAS MÉDICAS:**
+Ante cualquier síntoma de urgencia (sangrado abundante, disminución marcada de movimientos fetales, dolor intenso, fiebre alta, convulsiones, pérdida de conocimiento):
+**"¡BUSCA ATENCIÓN MÉDICA INMEDIATA! Llama a servicios de emergencia o ve al hospital más cercano."**
 
 ${userContext}
 ${childrenInfo}
@@ -886,6 +942,7 @@ IMPORTANTE:
 - Si tiene hijos pequeños, da consejos específicos para esa edad
 - Si está embarazada, enfócate en esa etapa específica
 - SIEMPRE usa los nombres específicos de sus hijos cuando sea apropiado
+- NO inventes datos; si no sabes, dilo y sugiere hablar con su gine/obstetra o matrona
 
 Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón de una madre que ha acompañado a muchas mujeres en este hermoso viaje.`;
 
