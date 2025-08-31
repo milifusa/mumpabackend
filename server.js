@@ -1705,7 +1705,7 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
 app.post('/api/auth/children', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { name, isUnborn, birthDate, dueDate, photoUrl } = req.body;
+    const { name, ageInMonths, isUnborn, gestationWeeks, photoUrl } = req.body;
 
     if (!name) {
       return res.status(400).json({
@@ -1714,35 +1714,20 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validar fechas según el tipo de niño
-    if (isUnborn) {
-      if (!dueDate) {
-        return res.status(400).json({
-          success: false,
-          message: 'Para bebés no nacidos, la fecha de nacimiento estimada es requerida'
-        });
-      }
-      const dueDateObj = new Date(dueDate);
-      if (isNaN(dueDateObj.getTime())) {
-        return res.status(400).json({
-          success: false,
-          message: 'Fecha de nacimiento estimada inválida'
-        });
-      }
-    } else {
-      if (!birthDate) {
-        return res.status(400).json({
-          success: false,
-          message: 'Para bebés nacidos, la fecha de nacimiento es requerida'
-        });
-      }
-      const birthDateObj = new Date(birthDate);
-      if (isNaN(birthDateObj.getTime())) {
-        return res.status(400).json({
-          success: false,
-          message: 'Fecha de nacimiento inválida'
-        });
-      }
+    // Validar que si es un bebé no nacido, tenga semanas de gestación
+    if (isUnborn && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para bebés no nacidos, las semanas de gestación deben estar entre 1 y 42'
+      });
+    }
+
+    // Validar que si es un bebé nacido, tenga edad en meses
+    if (!isUnborn && (ageInMonths === undefined || ageInMonths < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Para bebés nacidos, la edad en meses es requerida y debe ser mayor o igual a 0'
+      });
     }
 
     if (!db) {
@@ -1752,15 +1737,17 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       });
     }
 
+    const now = new Date();
     const childData = {
       parentId: uid,
       name: name.trim(),
-      birthDate: isUnborn ? null : new Date(birthDate),
-      dueDate: isUnborn ? new Date(dueDate) : null,
+      ageInMonths: isUnborn ? null : parseInt(ageInMonths),
+      gestationWeeks: isUnborn ? parseInt(gestationWeeks) : null,
       isUnborn: isUnborn || false,
       photoUrl: photoUrl || null,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: now, // Fecha de registro
+      registeredAt: now, // Fecha cuando se registró la edad/semanas
+      updatedAt: now
     };
 
     const childRef = await db.collection('children').add(childData);
@@ -2642,13 +2629,13 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
         });
       }
 
-      // Calcular edad actual
+      // Calcular edad actual basada en fecha de registro
       const childInfo = getChildCurrentInfo(child);
       currentAgeInMonths = childInfo.currentAgeInMonths;
       currentGestationWeeks = childInfo.currentGestationWeeks;
       isUnborn = child.isUnborn;
       
-      console.log(`📊 [DEVELOPMENT] ${child.name}: ${isUnborn ? currentGestationWeeks + ' semanas' : currentAgeInMonths + ' meses'}`);
+      console.log(`📊 [DEVELOPMENT] ${child.name}: ${isUnborn ? currentGestationWeeks + ' semanas' : currentAgeInMonths + ' meses'} (calculado desde ${childInfo.registeredAgeInMonths || childInfo.registeredGestationWeeks})`);
     } else if (name) {
       // Modo de compatibilidad: usar nombre y parámetros manuales
       const { ageInMonths, isUnborn: manualIsUnborn, gestationWeeks } = req.body;
@@ -2721,7 +2708,9 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
         timestamp: new Date(),
         responseCount: previousResponses.length + 1,
         isNewInfo: previousResponses.length === 0,
-        calculatedAge: true
+        calculatedAge: true,
+        registeredAge: child ? (child.isUnborn ? childInfo.registeredGestationWeeks : childInfo.registeredAgeInMonths) : null,
+        daysSinceRegistration: child ? childInfo.daysSinceRegistration : null
       }
     });
 
@@ -2735,55 +2724,67 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
   }
 });
 
-// Función para calcular edad en meses desde fecha de nacimiento
-const calculateAgeInMonths = (birthDate) => {
+// Función para calcular edad actual basada en fecha de registro
+const calculateCurrentAge = (registeredAge, registeredAt) => {
   const now = new Date();
-  const birth = new Date(birthDate);
-  const diffTime = Math.abs(now - birth);
+  const registeredDate = new Date(registeredAt);
+  const diffTime = now - registeredDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  const months = Math.floor(diffDays / 30.44); // Promedio de días por mes
-  return Math.max(0, months);
+  const diffMonths = Math.floor(diffDays / 30.44); // Promedio de días por mes
+  
+  return Math.max(0, registeredAge + diffMonths);
 };
 
-// Función para calcular semanas de gestación desde fecha estimada
-const calculateGestationWeeks = (dueDate) => {
+// Función para calcular semanas de gestación actual basada en fecha de registro
+const calculateCurrentGestationWeeks = (registeredWeeks, registeredAt) => {
   const now = new Date();
-  const due = new Date(dueDate);
-  const diffTime = due - now;
+  const registeredDate = new Date(registeredAt);
+  const diffTime = now - registeredDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  const weeks = Math.floor(diffDays / 7);
+  const diffWeeks = Math.floor(diffDays / 7);
   
-  // Si ya pasó la fecha estimada, considerar 40 semanas (término completo)
-  if (weeks < 0) {
+  const currentWeeks = registeredWeeks + diffWeeks;
+  
+  // Si ya pasó las 42 semanas, considerar 40 semanas (término completo)
+  if (currentWeeks > 42) {
     return 40;
   }
   
   // Si es muy temprano (menos de 4 semanas), considerar 4 semanas mínimo
-  if (weeks < 4) {
+  if (currentWeeks < 4) {
     return 4;
   }
   
-  return Math.min(42, weeks); // Máximo 42 semanas
+  return Math.max(4, Math.min(42, currentWeeks));
 };
 
 // Función para obtener información actualizada de un hijo
 const getChildCurrentInfo = (child) => {
   const now = new Date();
+  const registeredDate = new Date(child.registeredAt);
   
   if (child.isUnborn) {
-    const gestationWeeks = calculateGestationWeeks(child.dueDate);
+    const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.registeredAt);
+    const daysSinceRegistration = Math.floor((now - registeredDate) / (1000 * 60 * 60 * 24));
+    
     return {
       ...child,
-      currentGestationWeeks: gestationWeeks,
+      currentGestationWeeks: currentGestationWeeks,
       currentAgeInMonths: null,
-      isOverdue: gestationWeeks >= 40
+      registeredGestationWeeks: child.gestationWeeks,
+      daysSinceRegistration: daysSinceRegistration,
+      isOverdue: currentGestationWeeks >= 40
     };
   } else {
-    const ageInMonths = calculateAgeInMonths(child.birthDate);
+    const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.registeredAt);
+    const daysSinceRegistration = Math.floor((now - registeredDate) / (1000 * 60 * 60 * 24));
+    
     return {
       ...child,
-      currentAgeInMonths: ageInMonths,
-      currentGestationWeeks: null
+      currentAgeInMonths: currentAgeInMonths,
+      currentGestationWeeks: null,
+      registeredAgeInMonths: child.ageInMonths,
+      daysSinceRegistration: daysSinceRegistration
     };
   }
 };
@@ -3260,8 +3261,8 @@ app.get('/api/auth/children/current-info', authenticateToken, async (req, res) =
         id: doc.id,
         ...currentInfo,
         // Información adicional calculada
-        daysSinceBirth: childData.birthDate ? Math.floor((new Date() - new Date(childData.birthDate)) / (1000 * 60 * 60 * 24)) : null,
-        daysUntilDue: childData.dueDate ? Math.floor((new Date(childData.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) : null,
+        registeredDate: childData.registeredAt,
+        daysSinceRegistration: currentInfo.daysSinceRegistration,
         isOverdue: currentInfo.isOverdue || false
       });
     });

@@ -142,24 +142,24 @@ const runAgeCalculationTests = async () => {
       return;
     }
     
-    // 2. Crear hijos de prueba con diferentes fechas
+    // 2. Crear hijos de prueba con diferentes edades/semanas
     const testChildren = [
       {
         name: 'María Test',
         isUnborn: false,
-        birthDate: new Date(Date.now() - (6 * 30 * 24 * 60 * 60 * 1000)).toISOString(), // 6 meses atrás
+        ageInMonths: 6, // Tenía 6 meses cuando se registró
         photoUrl: null
       },
       {
         name: 'Juan Test',
         isUnborn: false,
-        birthDate: new Date(Date.now() - (12 * 30 * 24 * 60 * 60 * 1000)).toISOString(), // 12 meses atrás
+        ageInMonths: 12, // Tenía 12 meses cuando se registró
         photoUrl: null
       },
       {
         name: 'Esperanza Test',
         isUnborn: true,
-        dueDate: new Date(Date.now() + (8 * 7 * 24 * 60 * 60 * 1000)).toISOString(), // 8 semanas en el futuro
+        gestationWeeks: 32, // Tenía 32 semanas cuando se registró
         photoUrl: null
       }
     ];
@@ -189,11 +189,10 @@ const runAgeCalculationTests = async () => {
     if (currentInfo) {
       currentInfo.children.forEach(child => {
         console.log(`\n👶 ${child.name}:`);
-        console.log(`   📅 Fecha de nacimiento: ${child.birthDate ? new Date(child.birthDate).toLocaleDateString() : 'N/A'}`);
-        console.log(`   📅 Fecha estimada: ${child.dueDate ? new Date(child.dueDate).toLocaleDateString() : 'N/A'}`);
+        console.log(`   📅 Fecha de registro: ${new Date(child.registeredDate).toLocaleDateString()}`);
+        console.log(`   📊 Edad registrada: ${child.isUnborn ? child.registeredGestationWeeks + ' semanas' : child.registeredAgeInMonths + ' meses'}`);
         console.log(`   📊 Edad actual: ${child.isUnborn ? child.currentGestationWeeks + ' semanas' : child.currentAgeInMonths + ' meses'}`);
-        console.log(`   📈 Días desde nacimiento: ${child.daysSinceBirth || 'N/A'}`);
-        console.log(`   📉 Días hasta nacimiento: ${child.daysUntilDue || 'N/A'}`);
+        console.log(`   📈 Días desde registro: ${child.daysSinceRegistration || 'N/A'}`);
         console.log(`   ⚠️ Sobrepasado: ${child.isOverdue ? 'Sí' : 'No'}`);
       });
     }
