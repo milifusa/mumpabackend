@@ -799,13 +799,36 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
             });
           });
           
-          // Crear contexto personalizado del usuario
+          // Crear contexto personalizado del usuario con semanas actualizadas
+          let userGestationWeeks = userData.gestationWeeks;
+          
+          // Si el usuario está embarazada y tiene semanas registradas, calcular las actuales
+          if (userData.isPregnant && userData.gestationWeeks && userData.createdAt) {
+            const now = new Date();
+            const createdDate = new Date(userData.createdAt);
+            const diffTime = now - createdDate;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const diffWeeks = Math.floor(diffDays / 7);
+            const currentWeeks = userData.gestationWeeks + diffWeeks;
+            
+            // Aplicar límites
+            if (currentWeeks > 42) {
+              userGestationWeeks = 40; // Término completo
+            } else if (currentWeeks < 4) {
+              userGestationWeeks = 4; // Mínimo
+            } else {
+              userGestationWeeks = currentWeeks;
+            }
+            
+            console.log(`📊 [USER GESTATION] Usuario: ${userData.gestationWeeks} semanas + ${diffWeeks} semanas = ${userGestationWeeks} semanas (${diffDays} días desde creación)`);
+          }
+          
           userContext = `
             Información del usuario:
             - Género: ${userData.gender === 'F' ? 'Mujer' : 'Hombre'}
             - Número de hijos: ${userData.childrenCount || 0}
             - Embarazada: ${userData.isPregnant ? 'Sí' : 'No'}
-            ${userData.gestationWeeks ? `- Semanas de gestación: ${userData.gestationWeeks}` : ''}
+            ${userGestationWeeks ? `- Semanas de gestación: ${userGestationWeeks} (calculadas automáticamente)` : ''}
           `;
           
           // Crear contexto detallado de los hijos con edades actualizadas
