@@ -165,21 +165,48 @@ export const learningService = {
   },
 
   // ===== INFORMACIÓN DE DESARROLLO INFANTIL =====
-  getChildDevelopmentInfo: async (name, ageInMonths, isUnborn = false, gestationWeeks = null) => {
+  getChildDevelopmentInfo: async (childId = null, name = null, ageInMonths = null, isUnborn = false, gestationWeeks = null) => {
     try {
-      console.log('👶 [DEVELOPMENT] Obteniendo información de desarrollo para:', name);
+      console.log('👶 [DEVELOPMENT] Obteniendo información de desarrollo...');
       
-      const response = await api.post('/api/children/development-info', {
-        name,
-        ageInMonths,
-        isUnborn,
-        gestationWeeks
-      });
+      const requestData = {};
+      
+      if (childId) {
+        // Usar childId para obtener información automática
+        requestData.childId = childId;
+        console.log('👶 [DEVELOPMENT] Usando childId:', childId);
+      } else if (name) {
+        // Modo manual con parámetros específicos
+        requestData.name = name;
+        requestData.ageInMonths = ageInMonths;
+        requestData.isUnborn = isUnborn;
+        requestData.gestationWeeks = gestationWeeks;
+        console.log('👶 [DEVELOPMENT] Usando parámetros manuales para:', name);
+      } else {
+        throw new Error('Se requiere childId o nombre del niño');
+      }
+      
+      const response = await api.post('/api/children/development-info', requestData);
       
       console.log('✅ [DEVELOPMENT] Información obtenida:', response.data);
       return response.data;
     } catch (error) {
       console.error('❌ [DEVELOPMENT] Error obteniendo información:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  // ===== OBTENER INFORMACIÓN ACTUALIZADA DE HIJOS =====
+  getChildrenCurrentInfo: async () => {
+    try {
+      console.log('👶 [CHILDREN] Obteniendo información actualizada de hijos...');
+      
+      const response = await api.get('/api/auth/children/current-info');
+      
+      console.log('✅ [CHILDREN] Información obtenida:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [CHILDREN] Error obteniendo información:', error.response?.data || error.message);
       throw error;
     }
   },

@@ -1705,7 +1705,7 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
 app.post('/api/auth/children', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { name, ageInMonths, isUnborn, gestationWeeks } = req.body;
+    const { name, isUnborn, birthDate, dueDate, photoUrl } = req.body;
 
     if (!name) {
       return res.status(400).json({
@@ -1714,20 +1714,35 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validar que si es un bebé no nacido, tenga semanas de gestación
-    if (isUnborn && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para bebés no nacidos, las semanas de gestación deben estar entre 1 y 42'
-      });
-    }
-
-    // Validar que si es un bebé nacido, tenga edad en meses
-    if (!isUnborn && (ageInMonths === undefined || ageInMonths < 0)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para bebés nacidos, la edad en meses es requerida y debe ser mayor o igual a 0'
-      });
+    // Validar fechas según el tipo de niño
+    if (isUnborn) {
+      if (!dueDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para bebés no nacidos, la fecha de nacimiento estimada es requerida'
+        });
+      }
+      const dueDateObj = new Date(dueDate);
+      if (isNaN(dueDateObj.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Fecha de nacimiento estimada inválida'
+        });
+      }
+    } else {
+      if (!birthDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para bebés nacidos, la fecha de nacimiento es requerida'
+        });
+      }
+      const birthDateObj = new Date(birthDate);
+      if (isNaN(birthDateObj.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Fecha de nacimiento inválida'
+        });
+      }
     }
 
     if (!db) {
@@ -1740,10 +1755,10 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     const childData = {
       parentId: uid,
       name: name.trim(),
-      ageInMonths: isUnborn ? null : parseInt(ageInMonths),
+      birthDate: isUnborn ? null : new Date(birthDate),
+      dueDate: isUnborn ? new Date(dueDate) : null,
       isUnborn: isUnborn || false,
-      gestationWeeks: isUnborn ? parseInt(gestationWeeks) : null,
-      photoUrl: null, // Campo para foto (se puede actualizar después)
+      photoUrl: photoUrl || null,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -2599,47 +2614,96 @@ app.post('/api/doula/quality-test', authenticateToken, async (req, res) => {
 // Endpoint para obtener información de desarrollo infantil por edad
 app.post('/api/children/development-info', authenticateToken, async (req, res) => {
   try {
-    const { name, ageInMonths, isUnborn = false, gestationWeeks = null } = req.body;
+    const { childId, name } = req.body;
     const userId = req.user.uid;
 
-    if (!name || !name.trim()) {
+    let child = null;
+    let currentAgeInMonths = null;
+    let currentGestationWeeks = null;
+    let isUnborn = false;
+
+    // Si se proporciona childId, buscar el hijo en la base de datos
+    if (childId) {
+      const childDoc = await db.collection('children').doc(childId).get();
+      if (!childDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Hijo no encontrado'
+        });
+      }
+      
+      child = childDoc.data();
+      
+      // Verificar que el hijo pertenece al usuario
+      if (child.parentId !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes permisos para acceder a este hijo'
+        });
+      }
+
+      // Calcular edad actual
+      const childInfo = getChildCurrentInfo(child);
+      currentAgeInMonths = childInfo.currentAgeInMonths;
+      currentGestationWeeks = childInfo.currentGestationWeeks;
+      isUnborn = child.isUnborn;
+      
+      console.log(`📊 [DEVELOPMENT] ${child.name}: ${isUnborn ? currentGestationWeeks + ' semanas' : currentAgeInMonths + ' meses'}`);
+    } else if (name) {
+      // Modo de compatibilidad: usar nombre y parámetros manuales
+      const { ageInMonths, isUnborn: manualIsUnborn, gestationWeeks } = req.body;
+      
+      if (!name.trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'El nombre del niño es requerido'
+        });
+      }
+
+      if (manualIsUnborn && !gestationWeeks) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para niños por nacer, las semanas de gestación son requeridas'
+        });
+      }
+
+      if (!manualIsUnborn && !ageInMonths && ageInMonths !== 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para niños nacidos, la edad en meses es requerida'
+        });
+      }
+
+      currentAgeInMonths = manualIsUnborn ? null : ageInMonths;
+      currentGestationWeeks = manualIsUnborn ? gestationWeeks : null;
+      isUnborn = manualIsUnborn;
+      
+      console.log(`📊 [DEVELOPMENT] ${name}: ${isUnborn ? currentGestationWeeks + ' semanas' : currentAgeInMonths + ' meses'} (manual)`);
+    } else {
       return res.status(400).json({
         success: false,
-        message: 'El nombre del niño es requerido'
+        message: 'Se requiere childId o nombre del niño'
       });
     }
 
-    if (isUnborn && !gestationWeeks) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para niños por nacer, las semanas de gestación son requeridas'
-      });
-    }
-
-    if (!isUnborn && !ageInMonths && ageInMonths !== 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para niños nacidos, la edad en meses es requerida'
-      });
-    }
-
-    // Obtener respuestas previas para este niño
-    const childKey = `${name.trim()}_${isUnborn ? 'unborn' : ageInMonths}months`;
+    // Crear clave única para el historial
+    const childKey = child ? `${child.id}_${isUnborn ? 'unborn' : 'born'}` : `${name.trim()}_${isUnborn ? 'unborn' : 'born'}`;
     const previousResponses = await getPreviousDevelopmentResponses(userId, childKey);
 
     // Obtener información variada desde OpenAI
     let developmentInfo = [];
     if (isUnborn) {
-      developmentInfo = await getUnbornDevelopmentInfoFromAI(gestationWeeks, previousResponses, name.trim());
+      developmentInfo = await getUnbornDevelopmentInfoFromAI(currentGestationWeeks, previousResponses, child ? child.name : name.trim());
     } else {
-      developmentInfo = await getChildDevelopmentInfoFromAI(ageInMonths, previousResponses, name.trim());
+      developmentInfo = await getChildDevelopmentInfoFromAI(currentAgeInMonths, previousResponses, child ? child.name : name.trim());
     }
 
     // Guardar esta respuesta para futuras consultas
     await saveDevelopmentResponse(userId, childKey, {
-      childName: name.trim(),
-      ageInMonths: isUnborn ? null : ageInMonths,
-      gestationWeeks: isUnborn ? gestationWeeks : null,
+      childName: child ? child.name : name.trim(),
+      childId: child ? child.id : null,
+      ageInMonths: currentAgeInMonths,
+      gestationWeeks: currentGestationWeeks,
       isUnborn: isUnborn,
       developmentInfo: developmentInfo,
       timestamp: new Date()
@@ -2648,14 +2712,16 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
     res.json({
       success: true,
       data: {
-        childName: name.trim(),
-        ageInMonths: isUnborn ? null : ageInMonths,
-        gestationWeeks: isUnborn ? gestationWeeks : null,
+        childName: child ? child.name : name.trim(),
+        childId: child ? child.id : null,
+        ageInMonths: currentAgeInMonths,
+        gestationWeeks: currentGestationWeeks,
         isUnborn: isUnborn,
         developmentInfo: developmentInfo,
         timestamp: new Date(),
         responseCount: previousResponses.length + 1,
-        isNewInfo: previousResponses.length === 0
+        isNewInfo: previousResponses.length === 0,
+        calculatedAge: true
       }
     });
 
@@ -2668,6 +2734,59 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
     });
   }
 });
+
+// Función para calcular edad en meses desde fecha de nacimiento
+const calculateAgeInMonths = (birthDate) => {
+  const now = new Date();
+  const birth = new Date(birthDate);
+  const diffTime = Math.abs(now - birth);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const months = Math.floor(diffDays / 30.44); // Promedio de días por mes
+  return Math.max(0, months);
+};
+
+// Función para calcular semanas de gestación desde fecha estimada
+const calculateGestationWeeks = (dueDate) => {
+  const now = new Date();
+  const due = new Date(dueDate);
+  const diffTime = due - now;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const weeks = Math.floor(diffDays / 7);
+  
+  // Si ya pasó la fecha estimada, considerar 40 semanas (término completo)
+  if (weeks < 0) {
+    return 40;
+  }
+  
+  // Si es muy temprano (menos de 4 semanas), considerar 4 semanas mínimo
+  if (weeks < 4) {
+    return 4;
+  }
+  
+  return Math.min(42, weeks); // Máximo 42 semanas
+};
+
+// Función para obtener información actualizada de un hijo
+const getChildCurrentInfo = (child) => {
+  const now = new Date();
+  
+  if (child.isUnborn) {
+    const gestationWeeks = calculateGestationWeeks(child.dueDate);
+    return {
+      ...child,
+      currentGestationWeeks: gestationWeeks,
+      currentAgeInMonths: null,
+      isOverdue: gestationWeeks >= 40
+    };
+  } else {
+    const ageInMonths = calculateAgeInMonths(child.birthDate);
+    return {
+      ...child,
+      currentAgeInMonths: ageInMonths,
+      currentGestationWeeks: null
+    };
+  }
+};
 
 // Función para obtener respuestas previas de desarrollo
 const getPreviousDevelopmentResponses = async (userId, childKey) => {
@@ -3114,6 +3233,57 @@ const getChildDevelopmentInfo = (ageInMonths) => {
     ];
   }
 };
+
+// Endpoint para obtener información actualizada de hijos
+app.get('/api/auth/children/current-info', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener todos los hijos del usuario
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .get();
+
+    const children = [];
+    childrenSnapshot.forEach(doc => {
+      const childData = doc.data();
+      const currentInfo = getChildCurrentInfo(childData);
+      
+      children.push({
+        id: doc.id,
+        ...currentInfo,
+        // Información adicional calculada
+        daysSinceBirth: childData.birthDate ? Math.floor((new Date() - new Date(childData.birthDate)) / (1000 * 60 * 60 * 24)) : null,
+        daysUntilDue: childData.dueDate ? Math.floor((new Date(childData.dueDate) - new Date()) / (1000 * 60 * 60 * 24)) : null,
+        isOverdue: currentInfo.isOverdue || false
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        children: children,
+        totalChildren: children.length,
+        timestamp: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo información actualizada de hijos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo información de hijos',
+      error: error.message
+    });
+  }
+});
 
 // Endpoint para limpiar historial de respuestas de desarrollo
 app.delete('/api/children/development-history', authenticateToken, async (req, res) => {
