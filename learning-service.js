@@ -1,7 +1,7 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = 'https://mumpabackend-dmu43qca8-mishu-lojans-projects.vercel.app';
+const API_BASE_URL = 'https://mumpabackend-lyop389dp-mishu-lojans-projects.vercel.app';
 
 // Crear instancia de axios
 const api = axios.create({
