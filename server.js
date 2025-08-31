@@ -2736,9 +2736,18 @@ const calculateCurrentAge = (registeredAge, registeredAt) => {
   const registeredDate = new Date(registeredAt);
   const diffTime = now - registeredDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  // Calcular meses completos
   const diffMonths = Math.floor(diffDays / 30.44); // Promedio de días por mes
   
-  return Math.max(0, registeredAge + diffMonths);
+  // Si han pasado al menos 15 días, considerar un mes adicional
+  const additionalMonth = (diffDays >= 15) ? 1 : 0;
+  
+  const currentAge = Math.max(0, registeredAge + diffMonths + additionalMonth);
+  
+  console.log(`📊 [AGE CALCULATION] ${registeredAge} meses + ${diffMonths} meses + ${additionalMonth} mes adicional = ${currentAge} meses (${diffDays} días transcurridos)`);
+  
+  return currentAge;
 };
 
 // Función para calcular semanas de gestación actual basada en fecha de registro
