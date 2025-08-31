@@ -2767,8 +2767,20 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
         responseCount: previousResponses.length + 1,
         isNewInfo: previousResponses.length === 0,
         calculatedAge: true,
+        // Información detallada de edades
         registeredAge: child ? (child.isUnborn ? childInfo.registeredGestationWeeks : childInfo.registeredAgeInMonths) : null,
-        daysSinceCreation: child ? childInfo.daysSinceCreation : null
+        currentAge: child ? (child.isUnborn ? childInfo.currentGestationWeeks : childInfo.currentAgeInMonths) : null,
+        daysSinceCreation: child ? childInfo.daysSinceCreation : null,
+        // Información adicional para bebés por nacer
+        isOverdue: child ? childInfo.isOverdue : false,
+        // Información de cálculo
+        calculationInfo: child ? {
+          registeredWeeks: child.isUnborn ? childInfo.registeredGestationWeeks : null,
+          registeredMonths: child.isUnborn ? null : childInfo.registeredAgeInMonths,
+          currentWeeks: child.isUnborn ? childInfo.currentGestationWeeks : null,
+          currentMonths: child.isUnborn ? null : childInfo.currentAgeInMonths,
+          daysSinceCreation: childInfo.daysSinceCreation
+        } : null
       }
     });
 
