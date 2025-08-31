@@ -775,7 +775,7 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
           // Recuperar conocimiento relevante
           relevantKnowledge = await retrieveKnowledge(message, knowledgeFilters);
           
-          // Obtener información de los hijos
+          // Obtener información actualizada de los hijos con edades calculadas
           const childrenSnapshot = await db.collection('children')
             .where('parentId', '==', uid)
             .orderBy('createdAt', 'desc')
@@ -784,13 +784,18 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
           const children = [];
           childrenSnapshot.forEach(doc => {
             const childData = doc.data();
+            const currentInfo = getChildCurrentInfo(childData);
             children.push({
               id: doc.id,
               name: childData.name,
               ageInMonths: childData.ageInMonths,
+              currentAgeInMonths: currentInfo.currentAgeInMonths,
               isUnborn: childData.isUnborn,
               gestationWeeks: childData.gestationWeeks,
-              createdAt: childData.createdAt
+              currentGestationWeeks: currentInfo.currentGestationWeeks,
+              createdAt: childData.createdAt,
+              registeredAt: childData.registeredAt,
+              daysSinceRegistration: currentInfo.daysSinceRegistration
             });
           });
           
@@ -803,20 +808,20 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
             ${userData.gestationWeeks ? `- Semanas de gestación: ${userData.gestationWeeks}` : ''}
           `;
           
-          // Crear contexto detallado de los hijos
+          // Crear contexto detallado de los hijos con edades actualizadas
           if (children.length > 0) {
             childrenInfo = `
-            Información de los hijos:
+            Información de los hijos (edades actualizadas automáticamente):
             ${children.map((child, index) => {
               if (child.isUnborn) {
-                return `- ${child.name}: Por nacer (${child.gestationWeeks} semanas de gestación)`;
+                return `- ${child.name}: Por nacer (${child.currentGestationWeeks} semanas de gestación, registrado con ${child.gestationWeeks} semanas hace ${child.daysSinceRegistration} días)`;
               } else {
-                const years = Math.floor(child.ageInMonths / 12);
-                const months = child.ageInMonths % 12;
+                const years = Math.floor(child.currentAgeInMonths / 12);
+                const months = child.currentAgeInMonths % 12;
                 const ageText = years > 0 
                   ? `${years} año${years > 1 ? 's' : ''}${months > 0 ? ` y ${months} mes${months > 1 ? 'es' : ''}` : ''}`
                   : `${months} mes${months > 1 ? 'es' : ''}`;
-                return `- ${child.name}: ${ageText} de edad`;
+                return `- ${child.name}: ${ageText} de edad (registrado con ${child.ageInMonths} meses hace ${child.daysSinceRegistration} días)`;
               }
             }).join('\n            ')}
             
@@ -834,9 +839,10 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
             },
             children: children.map(c => ({
               name: c.name,
-              ageInMonths: c.ageInMonths,
+              registeredAge: c.isUnborn ? c.gestationWeeks + ' semanas' : c.ageInMonths + ' meses',
+              currentAge: c.isUnborn ? c.currentGestationWeeks + ' semanas' : c.currentAgeInMonths + ' meses',
               isUnborn: c.isUnborn,
-              gestationWeeks: c.gestationWeeks
+              daysSinceRegistration: c.daysSinceRegistration
             }))
           });
         }
