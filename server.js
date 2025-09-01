@@ -1738,9 +1738,19 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
 
     const children = [];
     childrenSnapshot.forEach(doc => {
+      const childData = doc.data();
+      const currentInfo = getChildCurrentInfo(childData);
+      
       children.push({
         id: doc.id,
-        ...doc.data()
+        ...childData,
+        // Información calculada automáticamente
+        currentAgeInMonths: currentInfo.currentAgeInMonths,
+        currentGestationWeeks: currentInfo.currentGestationWeeks,
+        registeredAgeInMonths: currentInfo.registeredAgeInMonths,
+        registeredGestationWeeks: currentInfo.registeredGestationWeeks,
+        daysSinceCreation: currentInfo.daysSinceCreation,
+        isOverdue: currentInfo.isOverdue || false
       });
     });
 
