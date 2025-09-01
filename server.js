@@ -2807,7 +2807,17 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
 // Función para calcular edad actual basada en fecha de creación
 const calculateCurrentAge = (registeredAge, createdAt) => {
   const now = new Date();
-  const createdDate = new Date(createdAt);
+  
+  // Manejar Timestamp de Firestore
+  let createdDate;
+  if (createdAt && typeof createdAt === 'object' && createdAt._seconds) {
+    // Es un Timestamp de Firestore
+    createdDate = new Date(createdAt._seconds * 1000);
+  } else {
+    // Es una fecha normal
+    createdDate = new Date(createdAt);
+  }
+  
   const diffTime = now - createdDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
@@ -2825,7 +2835,17 @@ const calculateCurrentAge = (registeredAge, createdAt) => {
 // Función para calcular semanas de gestación actual basada en fecha de creación
 const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
   const now = new Date();
-  const createdDate = new Date(createdAt);
+  
+  // Manejar Timestamp de Firestore
+  let createdDate;
+  if (createdAt && typeof createdAt === 'object' && createdAt._seconds) {
+    // Es un Timestamp de Firestore
+    createdDate = new Date(createdAt._seconds * 1000);
+  } else {
+    // Es una fecha normal
+    createdDate = new Date(createdAt);
+  }
+  
   const diffTime = now - createdDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   const diffWeeks = Math.floor(diffDays / 7);
@@ -2850,7 +2870,16 @@ const getChildCurrentInfo = (child) => {
   console.log(`🔍 [DEBUG] gestationWeeks:`, child.gestationWeeks);
   
   const now = new Date();
-  const createdDate = new Date(child.createdAt);
+  
+  // Manejar Timestamp de Firestore para daysSinceCreation
+  let createdDate;
+  if (child.createdAt && typeof child.createdAt === 'object' && child.createdAt._seconds) {
+    // Es un Timestamp de Firestore
+    createdDate = new Date(child.createdAt._seconds * 1000);
+  } else {
+    // Es una fecha normal
+    createdDate = new Date(child.createdAt);
+  }
   
   console.log(`🔍 [DEBUG] createdDate:`, createdDate);
   console.log(`🔍 [DEBUG] now:`, now);
