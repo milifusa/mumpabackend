@@ -2801,15 +2801,13 @@ const calculateCurrentAge = (registeredAge, createdAt) => {
   const diffTime = now - createdDate;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
-  // Calcular meses completos
+  // Calcular meses completos transcurridos
   const diffMonths = Math.floor(diffDays / 30.44); // Promedio de días por mes
   
-  // Si han pasado al menos 15 días, considerar un mes adicional
-  const additionalMonth = (diffDays >= 15) ? 1 : 0;
+  // Calcular edad actual sumando los meses transcurridos
+  const currentAge = Math.max(0, registeredAge + diffMonths);
   
-  const currentAge = Math.max(0, registeredAge + diffMonths + additionalMonth);
-  
-  console.log(`📊 [AGE CALCULATION] ${registeredAge} meses + ${diffMonths} meses + ${additionalMonth} mes adicional = ${currentAge} meses (${diffDays} días desde creación)`);
+  console.log(`📊 [AGE CALCULATION] ${registeredAge} meses + ${diffMonths} meses = ${currentAge} meses (${diffDays} días desde creación)`);
   
   return currentAge;
 };
@@ -2822,22 +2820,13 @@ const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   const diffWeeks = Math.floor(diffDays / 7);
   
+  // Calcular semanas actuales sumando las semanas transcurridas
   const currentWeeks = registeredWeeks + diffWeeks;
   
-  // Si ya pasó las 42 semanas, considerar 40 semanas (término completo)
-  if (currentWeeks > 42) {
-    console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${currentWeeks} semanas > 42, retornando 40 semanas (${diffDays} días desde creación)`);
-    return 40;
-  }
-  
-  // Si es muy temprano (menos de 4 semanas), considerar 4 semanas mínimo
-  if (currentWeeks < 4) {
-    console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${currentWeeks} semanas < 4, retornando 4 semanas (${diffDays} días desde creación)`);
-    return 4;
-  }
-  
+  // Limitar a un rango realista (4-42 semanas)
   const finalWeeks = Math.max(4, Math.min(42, currentWeeks));
-  console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${currentWeeks} semanas (${diffDays} días desde creación)`);
+  
+  console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${finalWeeks} semanas (${diffDays} días desde creación)`);
   
   return finalWeeks;
 };
