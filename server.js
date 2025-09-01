@@ -2843,12 +2843,28 @@ const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
 
 // Función para obtener información actualizada de un hijo
 const getChildCurrentInfo = (child) => {
+  console.log(`🔍 [DEBUG] Procesando hijo: ${child.name}`);
+  console.log(`🔍 [DEBUG] createdAt:`, child.createdAt);
+  console.log(`🔍 [DEBUG] isUnborn:`, child.isUnborn);
+  console.log(`🔍 [DEBUG] ageInMonths:`, child.ageInMonths);
+  console.log(`🔍 [DEBUG] gestationWeeks:`, child.gestationWeeks);
+  
   const now = new Date();
   const createdDate = new Date(child.createdAt);
   
+  console.log(`🔍 [DEBUG] createdDate:`, createdDate);
+  console.log(`🔍 [DEBUG] now:`, now);
+  
   if (child.isUnborn) {
+    console.log(`🔍 [DEBUG] Procesando hijo no nacido: ${child.name}`);
     const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.createdAt);
     const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
+    
+    console.log(`🔍 [DEBUG] Resultado para ${child.name}:`, {
+      currentGestationWeeks,
+      daysSinceCreation,
+      isOverdue: currentGestationWeeks >= 40
+    });
     
     return {
       ...child,
@@ -2859,8 +2875,14 @@ const getChildCurrentInfo = (child) => {
       isOverdue: currentGestationWeeks >= 40
     };
   } else {
+    console.log(`🔍 [DEBUG] Procesando hijo nacido: ${child.name}`);
     const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.createdAt);
     const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
+    
+    console.log(`🔍 [DEBUG] Resultado para ${child.name}:`, {
+      currentAgeInMonths,
+      daysSinceCreation
+    });
     
     return {
       ...child,
