@@ -3870,9 +3870,11 @@ app.post('/api/communities', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint para obtener todas las comunidades (públicas y privadas)
-app.get('/api/communities', async (req, res) => {
+// Endpoint para obtener todas las comunidades (públicas y privadas) excepto las del usuario
+app.get('/api/communities', authenticateToken, async (req, res) => {
   try {
+    const { uid } = req.user;
+
     if (!db) {
       return res.status(500).json({
         success: false,
@@ -3882,20 +3884,27 @@ app.get('/api/communities', async (req, res) => {
 
     let communitiesSnapshot;
     try {
-      // Intentar con ordenamiento - obtener TODAS las comunidades
+      // Intentar con ordenamiento - obtener TODAS las comunidades excepto las del usuario
       communitiesSnapshot = await db.collection('communities')
+        .where('creatorId', '!=', uid) // Excluir comunidades del usuario actual
+        .orderBy('creatorId') // Necesario para la consulta !=
         .orderBy('createdAt', 'desc')
         .get();
     } catch (indexError) {
       console.log('⚠️ [COMMUNITIES] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
-      // Fallback: obtener sin ordenamiento
-      communitiesSnapshot = await db.collection('communities')
-        .get();
+      // Fallback: obtener sin ordenamiento y filtrar en memoria
+      communitiesSnapshot = await db.collection('communities').get();
     }
 
     const communities = [];
     communitiesSnapshot.forEach(doc => {
       const data = doc.data();
+      
+      // Filtrar en memoria si no se pudo usar el índice
+      if (data.creatorId === uid) {
+        return; // Saltar comunidades del usuario actual
+      }
+      
       communities.push({
         id: doc.id,
         name: data.name,
