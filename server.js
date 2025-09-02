@@ -3697,3 +3697,228 @@ const saveFeedback = async (userId, conversationId, feedback) => {
     return false;
   }
 };
+
+// Endpoint para obtener tips personalizados de los hijos
+app.post('/api/children/tips', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { tipType = 'general' } = req.body; // general, alimentacion, desarrollo, salud, etc.
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener información actualizada de los hijos
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    if (childrenSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'No tienes hijos registrados'
+      });
+    }
+
+    const children = [];
+    childrenSnapshot.forEach(doc => {
+      const childData = doc.data();
+      const currentInfo = getChildCurrentInfo(childData);
+      children.push({
+        id: doc.id,
+        name: childData.name,
+        ageInMonths: childData.ageInMonths,
+        currentAgeInMonths: currentInfo.currentAgeInMonths,
+        isUnborn: childData.isUnborn,
+        gestationWeeks: childData.gestationWeeks,
+        currentGestationWeeks: currentInfo.currentGestationWeeks,
+        daysSinceCreation: currentInfo.daysSinceCreation
+      });
+    });
+
+    // Crear contexto para OpenAI
+    const childrenContext = children.map(child => {
+      if (child.isUnborn) {
+        return `${child.name}: Por nacer, ${child.currentGestationWeeks} semanas de gestación`;
+      } else {
+        const years = Math.floor(child.currentAgeInMonths / 12);
+        const months = child.currentAgeInMonths % 12;
+        const ageText = years > 0 
+          ? `${years} año${years > 1 ? 's' : ''}${months > 0 ? ` y ${months} mes${months > 1 ? 'es' : ''}` : ''}`
+          : `${months} mes${months > 1 ? 'es' : ''}`;
+        return `${child.name}: ${ageText} de edad`;
+      }
+    }).join(', ');
+
+    // Generar tips usando OpenAI
+    let tips = [];
+    if (openai) {
+      try {
+        const prompt = `Eres una doula experta llamada "Douli". Necesito que generes 3-5 tips cortos y útiles para una madre/padre basándote en la información de sus hijos.
+
+INFORMACIÓN DE LOS HIJOS:
+${childrenContext}
+
+TIPO DE TIP SOLICITADO: ${tipType}
+
+REQUISITOS:
+- Tips cortos (máximo 2 líneas cada uno)
+- Específicos para la edad/gestación de los hijos
+- Prácticos y accionables
+- En español
+- Formato: emoji + texto corto
+- Relacionados con el tipo solicitado
+
+Ejemplos de tipos:
+- general: consejos generales de crianza
+- alimentacion: consejos de alimentación
+- desarrollo: hitos de desarrollo
+- salud: consejos de salud
+- sueño: consejos de sueño
+- actividades: actividades recomendadas
+
+Genera solo los tips, sin explicaciones adicionales.`;
+
+        const completion = await openai.chat.completions.create({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {
+              role: "system",
+              content: "Eres una doula experta y compasiva que da consejos prácticos y útiles para padres."
+            },
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          max_tokens: 300,
+          temperature: 0.7
+        });
+
+        const response = completion.choices[0].message.content;
+        tips = response.split('\n').filter(tip => tip.trim().length > 0);
+
+      } catch (openaiError) {
+        console.error('❌ Error con OpenAI:', openaiError.message);
+        // Fallback con tips predefinidos
+        tips = generateFallbackTips(children, tipType);
+      }
+    } else {
+      // Fallback si OpenAI no está disponible
+      tips = generateFallbackTips(children, tipType);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        tips: tips,
+        children: children.map(child => ({
+          id: child.id,
+          name: child.name,
+          currentAge: child.isUnborn ? `${child.currentGestationWeeks} semanas` : `${child.currentAgeInMonths} meses`,
+          isUnborn: child.isUnborn
+        })),
+        tipType: tipType,
+        timestamp: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo tips:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo tips',
+      error: error.message
+    });
+  }
+});
+
+// Función para generar tips de fallback
+function generateFallbackTips(children, tipType) {
+  const tips = [];
+  
+  children.forEach(child => {
+    if (tipType === 'general' || tipType === 'desarrollo') {
+      if (child.isUnborn) {
+        if (child.currentGestationWeeks >= 40) {
+          tips.push('🤰 ¡Tu bebé está listo para nacer! Mantén la calma y confía en tu cuerpo.');
+        } else if (child.currentGestationWeeks >= 37) {
+          tips.push('👶 A partir de las 37 semanas tu bebé ya no es prematuro. ¡Estás en la recta final!');
+        } else if (child.currentGestationWeeks >= 28) {
+          tips.push('💕 Tu bebé ya puede soñar y reconocer tu voz. Habla con él/ella todos los días.');
+        }
+      } else {
+        if (child.currentAgeInMonths <= 6) {
+          tips.push('🍼 La leche materna es el mejor alimento para tu bebé. Amamanta a demanda.');
+        } else if (child.currentAgeInMonths <= 12) {
+          tips.push('🥄 Introduce alimentos sólidos gradualmente. Un alimento nuevo cada 3-4 días.');
+        } else if (child.currentAgeInMonths <= 24) {
+          tips.push('🚶 Tu pequeño está explorando el mundo. Mantén tu casa segura para niños.');
+        } else if (child.currentAgeInMonths <= 36) {
+          tips.push('🎨 Fomenta la creatividad con dibujos, manualidades y juegos imaginativos.');
+        } else {
+          tips.push('📚 Lee cuentos juntos. Es una excelente manera de fortalecer el vínculo.');
+        }
+      }
+    } else if (tipType === 'alimentacion') {
+      if (!child.isUnborn) {
+        if (child.currentAgeInMonths <= 6) {
+          tips.push('🤱 Amamanta exclusivamente hasta los 6 meses. No necesita agua ni otros alimentos.');
+        } else if (child.currentAgeInMonths <= 12) {
+          tips.push('🥑 Introduce frutas y verduras de colores variados para una nutrición completa.');
+        } else if (child.currentAgeInMonths <= 24) {
+          tips.push('🥛 Ofrece 3 comidas principales y 2-3 refrigerios saludables al día.');
+        } else {
+          tips.push('🍎 Incluye proteínas magras, granos enteros y muchas frutas y verduras.');
+        }
+      }
+    } else if (tipType === 'salud') {
+      if (!child.isUnborn) {
+        if (child.currentAgeInMonths <= 12) {
+          tips.push('💉 Mantén al día el calendario de vacunación. Es fundamental para su salud.');
+        } else if (child.currentAgeInMonths <= 24) {
+          tips.push('🦷 Cepilla sus dientes 2 veces al día con pasta dental con flúor.');
+        } else {
+          tips.push('🏃 Fomenta al menos 1 hora de actividad física diaria para un desarrollo saludable.');
+        }
+      }
+    } else if (tipType === 'sueño') {
+      if (!child.isUnborn) {
+        if (child.currentAgeInMonths <= 6) {
+          tips.push('😴 Los bebés necesitan 14-17 horas de sueño total al día. Respeta sus ritmos.');
+        } else if (child.currentAgeInMonths <= 12) {
+          tips.push('🌙 Establece una rutina de sueño consistente: baño, cuento y cuna a la misma hora.');
+        } else if (child.currentAgeInMonths <= 24) {
+          tips.push('🛏️ Los niños de 1-2 años necesitan 11-14 horas de sueño, incluyendo 1-2 siestas.');
+        } else {
+          tips.push('💤 Los niños de 3-5 años necesitan 10-13 horas de sueño. Mantén horarios regulares.');
+        }
+      }
+    } else if (tipType === 'actividades') {
+      if (!child.isUnborn) {
+        if (child.currentAgeInMonths <= 6) {
+          tips.push('🎵 Canta canciones y haz movimientos rítmicos. Estimula su desarrollo auditivo y motor.');
+        } else if (child.currentAgeInMonths <= 12) {
+          tips.push('🧸 Juega a esconder objetos. Desarrolla su memoria y comprensión de permanencia.');
+        } else if (child.currentAgeInMonths <= 24) {
+          tips.push('🏗️ Construye torres con bloques. Mejora su coordinación y pensamiento espacial.');
+        } else {
+          tips.push('🎭 Juega a disfrazarse. Fomenta la imaginación y la expresión creativa.');
+        }
+      }
+    }
+  });
+
+  // Si no hay tips específicos, agregar tips generales
+  if (tips.length === 0) {
+    tips.push('💕 Cada hijo es único. Confía en tu instinto maternal/paternal.');
+    tips.push('🤗 El amor y la paciencia son los mejores ingredientes para criar niños felices.');
+    tips.push('📱 Limita el tiempo de pantalla y prioriza el juego activo y la interacción.');
+  }
+
+  return tips.slice(0, 5); // Máximo 5 tips
+}
