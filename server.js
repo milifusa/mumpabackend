@@ -3454,6 +3454,14 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     const { uid } = req.user;
     const { tipType = 'general' } = req.body; // general, alimentacion, desarrollo, salud, etc.
 
+    // Verificar si ya se dio un tip recientemente para evitar repetición
+    const recentTipsSnapshot = await db.collection('userTips').where('userId', '==', uid).where('tipType', '==', tipType).orderBy('createdAt', 'desc').limit(5).get();
+    
+    let recentTips = [];
+    recentTipsSnapshot.forEach(doc => {
+      recentTips.push(doc.data().tip);
+    });
+
     if (!db) {
       return res.status(500).json({
         success: false,
@@ -3518,13 +3526,17 @@ ${isPregnant ? `Actualmente embarazada de ${currentGestationWeeks} semanas` : 'N
 
 TIPO DE TIP SOLICITADO: ${tipType}
 
+TIPS RECIENTES (NO REPITAS ESTOS):
+${recentTips.length > 0 ? recentTips.map(tip => `- ${tip}`).join('\n') : 'Ninguno'}
+
 REQUISITOS:
 - SOLO 1 tip (no más)
 - Práctico y accionable
 - En español
 - Formato: emoji + texto corto
 - Relacionado con el tipo solicitado
-- Diferente cada vez (evita repetir información)
+- COMPLETAMENTE DIFERENTE a los tips recientes mostrados arriba
+- ÚNICO y ORIGINAL
 
 TIPOS DE TIPS:
 - general: consejos generales de crianza para UN SOLO HIJO específico
@@ -3546,6 +3558,8 @@ IMPORTANTE:
 - Sé específico y personalizado
 - Evita respuestas genéricas
 - Incluye emoji relevante
+- NO REPITAS ningún tip de la lista de "TIPS RECIENTES"
+- Crea algo completamente nuevo y original
 - No incluyas explicaciones adicionales
 
 Genera el tip ahora:`;
@@ -3579,6 +3593,26 @@ Genera el tip ahora:`;
       tips = generateFallbackTips(children, tipType);
     }
 
+    // Almacenar el tip generado para evitar repeticiones futuras
+    if (tips.length > 0) {
+      try {
+        await db.collection('userTips').add({
+          userId: uid,
+          tipType: tipType,
+          tip: tips[0],
+          childrenContext: childrenContext,
+          isPregnant: isPregnant,
+          currentGestationWeeks: currentGestationWeeks,
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // Expira en 30 días
+        });
+        console.log('✅ Tip almacenado para usuario:', uid, 'tipo:', tipType);
+      } catch (storageError) {
+        console.error('❌ Error almacenando tip:', storageError.message);
+        // Continuar aunque falle el almacenamiento
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -3604,7 +3638,51 @@ Genera el tip ahora:`;
   }
 });
 
+// Endpoint para limpiar tips antiguos (opcional, para mantenimiento)
+app.post('/api/children/cleanup-tips', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
 
+    // Eliminar tips expirados (más de 30 días)
+    const expiredDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const expiredTipsSnapshot = await db.collection('userTips')
+      .where('userId', '==', uid)
+      .where('expiresAt', '<', expiredDate)
+      .get();
+
+    let deletedCount = 0;
+    const batch = db.batch();
+    
+    expiredTipsSnapshot.forEach(doc => {
+      batch.delete(doc.ref);
+      deletedCount++;
+    });
+
+    if (deletedCount > 0) {
+      await batch.commit();
+      console.log(`🧹 Limpieza de tips: ${deletedCount} tips expirados eliminados para usuario ${uid}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Limpieza completada. ${deletedCount} tips expirados eliminados.`
+    });
+
+  } catch (error) {
+    console.error('❌ Error en limpieza de tips:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en limpieza de tips'
+    });
+  }
+});
 
 // Función para generar tips de fallback (solo para hijos)
 function generateFallbackTips(children, tipType) {
