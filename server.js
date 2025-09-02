@@ -3455,12 +3455,23 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     const { tipType = 'general' } = req.body; // general, alimentacion, desarrollo, salud, etc.
 
     // Verificar si ya se dio un tip recientemente para evitar repetición
-    const recentTipsSnapshot = await db.collection('userTips').where('userId', '==', uid).where('tipType', '==', tipType).orderBy('createdAt', 'desc').limit(5).get();
-    
     let recentTips = [];
-    recentTipsSnapshot.forEach(doc => {
-      recentTips.push(doc.data().tip);
-    });
+    try {
+      const recentTipsSnapshot = await db.collection('userTips')
+        .where('userId', '==', uid)
+        .where('tipType', '==', tipType)
+        .orderBy('createdAt', 'desc')
+        .limit(5)
+        .get();
+      
+      recentTipsSnapshot.forEach(doc => {
+        recentTips.push(doc.data().tip);
+      });
+    } catch (indexError) {
+      console.log('⚠️ Índice no disponible aún, continuando sin verificación de duplicados:', indexError.message);
+      // Continuar sin verificación de duplicados hasta que se cree el índice
+      recentTips = [];
+    }
 
     if (!db) {
       return res.status(500).json({
