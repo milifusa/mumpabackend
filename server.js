@@ -3589,93 +3589,96 @@ Genera SOLO 1 tip, sin explicaciones adicionales.`;
 
 // Función para generar tips de fallback
 function generateFallbackTips(children, tipType) {
-  // Seleccionar un hijo aleatorio para dar variedad
-  const randomChild = children[Math.floor(Math.random() * children.length)];
+  // Rotar entre los hijos para dar variedad - usar timestamp + tipType para más variedad
+  const now = Date.now();
+  const timeAndType = now + tipType.length + tipType.charCodeAt(0);
+  const childIndex = Math.floor((timeAndType / 30000) % children.length); // Cambia cada 30 segundos + variación por tipo
+  const selectedChild = children[childIndex];
   let tip = '';
   
   if (tipType === 'general' || tipType === 'desarrollo') {
-    if (randomChild.isUnborn) {
-      if (randomChild.currentGestationWeeks >= 40) {
-        tip = `🤰 ¡${randomChild.name} está listo para nacer! Mantén la calma y confía en tu cuerpo.`;
-      } else if (randomChild.currentGestationWeeks >= 37) {
-        tip = `👶 ${randomChild.name} ya no es prematuro desde las 37 semanas. ¡Estás en la recta final!`;
-      } else if (randomChild.currentGestationWeeks >= 28) {
-        tip = `💕 ${randomChild.name} ya puede soñar y reconocer tu voz. Habla con él/ella todos los días.`;
+    if (selectedChild.isUnborn) {
+      if (selectedChild.currentGestationWeeks >= 40) {
+        tip = `🤰 ¡${selectedChild.name} está listo para nacer! Mantén la calma y confía en tu cuerpo.`;
+      } else if (selectedChild.currentGestationWeeks >= 37) {
+        tip = `👶 ${selectedChild.name} ya no es prematuro desde las 37 semanas. ¡Estás en la recta final!`;
+      } else if (selectedChild.currentGestationWeeks >= 28) {
+        tip = `💕 ${selectedChild.name} ya puede soñar y reconocer tu voz. Habla con él/ella todos los días.`;
       } else {
-        tip = `🌟 ${randomChild.name} está creciendo bien en tu vientre. Mantén una alimentación saludable.`;
+        tip = `🌟 ${selectedChild.name} está creciendo bien en tu vientre. Mantén una alimentación saludable.`;
       }
     } else {
-      if (randomChild.currentAgeInMonths <= 6) {
-        tip = `🍼 La leche materna es el mejor alimento para ${randomChild.name}. Amamanta a demanda.`;
-      } else if (randomChild.currentAgeInMonths <= 12) {
-        tip = `🥄 Introduce alimentos sólidos gradualmente a ${randomChild.name}. Un alimento nuevo cada 3-4 días.`;
-      } else if (randomChild.currentAgeInMonths <= 24) {
-        tip = `🚶 ${randomChild.name} está explorando el mundo. Mantén tu casa segura para niños.`;
-      } else if (randomChild.currentAgeInMonths <= 36) {
-        tip = `🎨 Fomenta la creatividad de ${randomChild.name} con dibujos, manualidades y juegos imaginativos.`;
+      if (selectedChild.currentAgeInMonths <= 6) {
+        tip = `🍼 La leche materna es el mejor alimento para ${selectedChild.name}. Amamanta a demanda.`;
+      } else if (selectedChild.currentAgeInMonths <= 12) {
+        tip = `🥄 Introduce alimentos sólidos gradualmente a ${selectedChild.name}. Un alimento nuevo cada 3-4 días.`;
+      } else if (selectedChild.currentAgeInMonths <= 24) {
+        tip = `🚶 ${selectedChild.name} está explorando el mundo. Mantén tu casa segura para niños.`;
+      } else if (selectedChild.currentAgeInMonths <= 36) {
+        tip = `🎨 Fomenta la creatividad de ${selectedChild.name} con dibujos, manualidades y juegos imaginativos.`;
       } else {
-        tip = `📚 Lee cuentos con ${randomChild.name}. Es una excelente manera de fortalecer el vínculo.`;
+        tip = `📚 Lee cuentos con ${selectedChild.name}. Es una excelente manera de fortalecer el vínculo.`;
       }
     }
   } else if (tipType === 'alimentacion') {
-    if (!randomChild.isUnborn) {
-      if (randomChild.currentAgeInMonths <= 6) {
-        tip = `🤱 Amamanta exclusivamente a ${randomChild.name} hasta los 6 meses. No necesita agua ni otros alimentos.`;
-      } else if (randomChild.currentAgeInMonths <= 12) {
-        tip = `🥑 Introduce frutas y verduras de colores variados a ${randomChild.name} para una nutrición completa.`;
-      } else if (randomChild.currentAgeInMonths <= 24) {
-        tip = `🥛 Ofrece a ${randomChild.name} 3 comidas principales y 2-3 refrigerios saludables al día.`;
+    if (!selectedChild.isUnborn) {
+      if (selectedChild.currentAgeInMonths <= 6) {
+        tip = `🤱 Amamanta exclusivamente a ${selectedChild.name} hasta los 6 meses. No necesita agua ni otros alimentos.`;
+      } else if (selectedChild.currentAgeInMonths <= 12) {
+        tip = `🥑 Introduce frutas y verduras de colores variados a ${selectedChild.name} para una nutrición completa.`;
+      } else if (selectedChild.currentAgeInMonths <= 24) {
+        tip = `🥛 Ofrece a ${selectedChild.name} 3 comidas principales y 2-3 refrigerios saludables al día.`;
       } else {
-        tip = `🍎 Incluye en la dieta de ${randomChild.name} proteínas magras, granos enteros y muchas frutas y verduras.`;
+        tip = `🍎 Incluye en la dieta de ${selectedChild.name} proteínas magras, granos enteros y muchas frutas y verduras.`;
       }
     } else {
-      tip = `🤰 Para ${randomChild.name}, mantén una alimentación rica en ácido fólico, hierro y calcio durante el embarazo.`;
+      tip = `🤰 Para ${selectedChild.name}, mantén una alimentación rica en ácido fólico, hierro y calcio durante el embarazo.`;
     }
   } else if (tipType === 'salud') {
-    if (!randomChild.isUnborn) {
-      if (randomChild.currentAgeInMonths <= 12) {
-        tip = `💉 Mantén al día el calendario de vacunación de ${randomChild.name}. Es fundamental para su salud.`;
-      } else if (randomChild.currentAgeInMonths <= 24) {
-        tip = `🦷 Cepilla los dientes de ${randomChild.name} 2 veces al día con pasta dental con flúor.`;
+    if (!selectedChild.isUnborn) {
+      if (selectedChild.currentAgeInMonths <= 12) {
+        tip = `💉 Mantén al día el calendario de vacunación de ${selectedChild.name}. Es fundamental para su salud.`;
+      } else if (selectedChild.currentAgeInMonths <= 24) {
+        tip = `🦷 Cepilla los dientes de ${selectedChild.name} 2 veces al día con pasta dental con flúor.`;
       } else {
-        tip = `🏃 Fomenta en ${randomChild.name} al menos 1 hora de actividad física diaria para un desarrollo saludable.`;
+        tip = `🏃 Fomenta en ${selectedChild.name} al menos 1 hora de actividad física diaria para un desarrollo saludable.`;
       }
     } else {
-      tip = `🏥 Asiste a todas las citas prenatales para monitorear el desarrollo saludable de ${randomChild.name}.`;
+      tip = `🏥 Asiste a todas las citas prenatales para monitorear el desarrollo saludable de ${selectedChild.name}.`;
     }
   } else if (tipType === 'sueño') {
-    if (!randomChild.isUnborn) {
-      if (randomChild.currentAgeInMonths <= 6) {
-        tip = `😴 ${randomChild.name} necesita 14-17 horas de sueño total al día. Respeta sus ritmos naturales.`;
-      } else if (randomChild.currentAgeInMonths <= 12) {
-        tip = `🌙 Establece una rutina de sueño consistente para ${randomChild.name}: baño, cuento y cuna a la misma hora.`;
-      } else if (randomChild.currentAgeInMonths <= 24) {
-        tip = `🛏️ ${randomChild.name} necesita 11-14 horas de sueño, incluyendo 1-2 siestas durante el día.`;
+    if (!selectedChild.isUnborn) {
+      if (selectedChild.currentAgeInMonths <= 6) {
+        tip = `😴 ${selectedChild.name} necesita 14-17 horas de sueño total al día. Respeta sus ritmos naturales.`;
+      } else if (selectedChild.currentAgeInMonths <= 12) {
+        tip = `🌙 Establece una rutina de sueño consistente para ${selectedChild.name}: baño, cuento y cuna a la misma hora.`;
+      } else if (selectedChild.currentAgeInMonths <= 24) {
+        tip = `🛏️ ${selectedChild.name} necesita 11-14 horas de sueño, incluyendo 1-2 siestas durante el día.`;
       } else {
-        tip = `💤 ${randomChild.name} necesita 10-13 horas de sueño. Mantén horarios regulares para un descanso óptimo.`;
+        tip = `💤 ${selectedChild.name} necesita 10-13 horas de sueño. Mantén horarios regulares para un descanso óptimo.`;
       }
     } else {
-      tip = `😴 Descansa bien durante el embarazo. Tu descanso también beneficia el desarrollo de ${randomChild.name}.`;
+      tip = `😴 Descansa bien durante el embarazo. Tu descanso también beneficia el desarrollo de ${selectedChild.name}.`;
     }
   } else if (tipType === 'actividades') {
-    if (!randomChild.isUnborn) {
-      if (randomChild.currentAgeInMonths <= 6) {
-        tip = `🎵 Canta canciones y haz movimientos rítmicos con ${randomChild.name}. Estimula su desarrollo auditivo y motor.`;
-      } else if (randomChild.currentAgeInMonths <= 12) {
-        tip = `🧸 Juega a esconder objetos con ${randomChild.name}. Desarrolla su memoria y comprensión de permanencia.`;
-      } else if (randomChild.currentAgeInMonths <= 24) {
-        tip = `🏗️ Construye torres con bloques junto a ${randomChild.name}. Mejora su coordinación y pensamiento espacial.`;
+    if (!selectedChild.isUnborn) {
+      if (selectedChild.currentAgeInMonths <= 6) {
+        tip = `🎵 Canta canciones y haz movimientos rítmicos con ${selectedChild.name}. Estimula su desarrollo auditivo y motor.`;
+      } else if (selectedChild.currentAgeInMonths <= 12) {
+        tip = `🧸 Juega a esconder objetos con ${selectedChild.name}. Desarrolla su memoria y comprensión de permanencia.`;
+      } else if (selectedChild.currentAgeInMonths <= 24) {
+        tip = `🏗️ Construye torres con bloques junto a ${selectedChild.name}. Mejora su coordinación y pensamiento espacial.`;
       } else {
-        tip = `🎭 Juega a disfrazarse con ${randomChild.name}. Fomenta la imaginación y la expresión creativa.`;
+        tip = `🎭 Juega a disfrazarse con ${selectedChild.name}. Fomenta la imaginación y la expresión creativa.`;
       }
     } else {
-      tip = `💕 Habla, canta y acaricia tu vientre. ${randomChild.name} puede sentir tu amor desde el útero.`;
+      tip = `💕 Habla, canta y acaricia tu vientre. ${selectedChild.name} puede sentir tu amor desde el útero.`;
     }
   }
 
   // Si no hay tip específico, generar uno general personalizado
   if (!tip) {
-    tip = `💕 ${randomChild.name} es único. Confía en tu instinto maternal/paternal para criarlo.`;
+    tip = `💕 ${selectedChild.name} es único. Confía en tu instinto maternal/paternal para criarlo.`;
   }
 
   return [tip]; // Retornar solo 1 tip
