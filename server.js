@@ -3794,10 +3794,20 @@ app.post('/api/communities/upload-photo', authenticateToken, upload.single('phot
 });
 
 // Endpoint para crear una comunidad
-app.post('/api/communities', authenticateToken, upload.single('image'), async (req, res) => {
+app.post('/api/communities', authenticateToken, upload.single('photo'), async (req, res) => {
   try {
     const { uid } = req.user;
     const { name, keywords, description, isPublic = true } = req.body;
+
+    console.log('🏗️ [COMMUNITIES] Datos recibidos:', {
+      name, keywords, description, isPublic,
+      hasImage: !!req.file,
+      imageInfo: req.file ? {
+        originalName: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      } : null
+    });
 
     if (!db) {
       return res.status(500).json({
