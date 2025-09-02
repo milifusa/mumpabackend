@@ -3606,8 +3606,17 @@ Genera el tip ahora:`;
 
     // Almacenar el tip generado para evitar repeticiones futuras
     if (tips.length > 0) {
+      console.log('🔍 [STORAGE] Intentando almacenar tip:', {
+        userId: uid,
+        tipType: tipType,
+        tip: tips[0],
+        childrenContext: childrenContext,
+        isPregnant: isPregnant,
+        currentGestationWeeks: currentGestationWeeks
+      });
+      
       try {
-        await db.collection('userTips').add({
+        const tipData = {
           userId: uid,
           tipType: tipType,
           tip: tips[0],
@@ -3616,12 +3625,20 @@ Genera el tip ahora:`;
           currentGestationWeeks: currentGestationWeeks,
           createdAt: new Date(),
           expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // Expira en 30 días
-        });
-        console.log('✅ Tip almacenado para usuario:', uid, 'tipo:', tipType);
+        };
+        
+        console.log('📝 [STORAGE] Datos del tip a almacenar:', tipData);
+        
+        const docRef = await db.collection('userTips').add(tipData);
+        console.log('✅ [STORAGE] Tip almacenado exitosamente. Document ID:', docRef.id);
+        console.log('✅ [STORAGE] Tip almacenado para usuario:', uid, 'tipo:', tipType);
       } catch (storageError) {
-        console.error('❌ Error almacenando tip:', storageError.message);
+        console.error('❌ [STORAGE] Error almacenando tip:', storageError);
+        console.error('❌ [STORAGE] Error completo:', JSON.stringify(storageError, null, 2));
         // Continuar aunque falle el almacenamiento
       }
+    } else {
+      console.log('⚠️ [STORAGE] No hay tips para almacenar');
     }
 
     res.json({
@@ -3644,6 +3661,73 @@ Genera el tip ahora:`;
     res.status(500).json({
       success: false,
       message: 'Error obteniendo tips',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint de prueba para verificar almacenamiento de tips
+app.post('/api/children/test-storage', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Intentar crear un documento de prueba
+    const testData = {
+      userId: uid,
+      tipType: 'test',
+      tip: 'Este es un tip de prueba para verificar el almacenamiento',
+      childrenContext: 'Test context',
+      isPregnant: false,
+      currentGestationWeeks: 0,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    };
+
+    console.log('🧪 [TEST] Intentando crear documento de prueba:', testData);
+
+    const docRef = await db.collection('userTips').add(testData);
+    
+    console.log('✅ [TEST] Documento de prueba creado exitosamente. ID:', docRef.id);
+
+    // Verificar que se puede leer
+    const readDoc = await db.collection('userTips').doc(docRef.id).get();
+    
+    if (readDoc.exists) {
+      console.log('✅ [TEST] Documento leído exitosamente:', readDoc.data());
+      
+      // Limpiar el documento de prueba
+      await db.collection('userTips').doc(docRef.id).delete();
+      console.log('🧹 [TEST] Documento de prueba eliminado');
+      
+      res.json({
+        success: true,
+        message: 'Prueba de almacenamiento exitosa',
+        data: {
+          created: true,
+          read: true,
+          deleted: true,
+          documentId: docRef.id
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error: El documento no se puede leer después de crearlo'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [TEST] Error en prueba de almacenamiento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en prueba de almacenamiento',
       error: error.message
     });
   }
