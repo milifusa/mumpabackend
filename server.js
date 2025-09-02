@@ -3512,6 +3512,8 @@ app.use((err, req, res, next) => {
   });
 });
 
+
+
 // Middleware para rutas no encontradas
 app.use('*', (req, res) => {
   res.status(404).json({
