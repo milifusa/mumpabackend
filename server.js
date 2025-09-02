@@ -3688,6 +3688,111 @@ Genera el tip ahora:`;
 
 // ===== SISTEMA DE COMUNIDADES =====
 
+// Endpoint para subir foto de comunidad
+app.post('/api/communities/upload-photo', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se ha subido ninguna imagen'
+      });
+    }
+
+    // Validar tipo de archivo
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de archivo no permitido. Solo se permiten: JPEG, JPG, PNG, GIF, WEBP'
+      });
+    }
+
+    // Validar tamaño (máximo 5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB en bytes
+    if (req.file.size > maxSize) {
+      return res.status(400).json({
+        success: false,
+        message: 'La imagen es demasiado grande. Máximo 5MB permitido'
+      });
+    }
+
+    let imageUrl = null;
+    
+    try {
+      const bucket = storage.bucket();
+      const fileName = `communities/photos/${Date.now()}-${req.file.originalname}`;
+      const file = bucket.file(fileName);
+      
+      console.log('📤 [UPLOAD] Subiendo imagen:', {
+        originalName: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        fileName: fileName
+      });
+
+      await file.save(req.file.buffer, {
+        metadata: {
+          contentType: req.file.mimetype
+        }
+      });
+
+      // Hacer la imagen pública
+      await file.makePublic();
+      imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+      
+      console.log('✅ [UPLOAD] Imagen subida exitosamente:', imageUrl);
+
+      // Guardar registro de la imagen en Firestore (opcional, para tracking)
+      await db.collection('communityPhotos').add({
+        userId: uid,
+        fileName: fileName,
+        originalName: req.file.originalname,
+        imageUrl: imageUrl,
+        fileSize: req.file.size,
+        mimetype: req.file.mimetype,
+        uploadedAt: new Date()
+      });
+
+      res.json({
+        success: true,
+        message: 'Imagen subida exitosamente',
+        data: {
+          photoUrl: imageUrl,
+          fileName: fileName,
+          originalName: req.file.originalname,
+          fileSize: req.file.size,
+          mimetype: req.file.mimetype
+        }
+      });
+
+    } catch (uploadError) {
+      console.error('❌ [UPLOAD] Error subiendo imagen:', uploadError);
+      res.status(500).json({
+        success: false,
+        message: 'Error subiendo imagen',
+        error: uploadError.message
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [UPLOAD] Error general:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para crear una comunidad
 app.post('/api/communities', authenticateToken, upload.single('image'), async (req, res) => {
   try {
