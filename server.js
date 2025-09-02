@@ -3794,10 +3794,20 @@ app.get('/api/communities', async (req, res) => {
       });
     }
 
-    const communitiesSnapshot = await db.collection('communities')
-      .where('isPublic', '==', true)
-      .orderBy('createdAt', 'desc')
-      .get();
+    let communitiesSnapshot;
+    try {
+      // Intentar con ordenamiento
+      communitiesSnapshot = await db.collection('communities')
+        .where('isPublic', '==', true)
+        .orderBy('createdAt', 'desc')
+        .get();
+    } catch (indexError) {
+      console.log('⚠️ [COMMUNITIES] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
+      // Fallback: obtener sin ordenamiento
+      communitiesSnapshot = await db.collection('communities')
+        .where('isPublic', '==', true)
+        .get();
+    }
 
     const communities = [];
     communitiesSnapshot.forEach(doc => {
@@ -4091,10 +4101,19 @@ app.get('/api/communities/:communityId/posts', authenticateToken, async (req, re
     }
 
     // Obtener publicaciones ordenadas por fecha
-    const postsSnapshot = await db.collection('posts')
-      .where('communityId', '==', communityId)
-      .orderBy('createdAt', 'desc')
-      .get();
+    let postsSnapshot;
+    try {
+      postsSnapshot = await db.collection('posts')
+        .where('communityId', '==', communityId)
+        .orderBy('createdAt', 'desc')
+        .get();
+    } catch (indexError) {
+      console.log('⚠️ [POSTS] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
+      // Fallback: obtener sin ordenamiento
+      postsSnapshot = await db.collection('posts')
+        .where('communityId', '==', communityId)
+        .get();
+    }
 
     const posts = [];
     for (const doc of postsSnapshot.docs) {
@@ -4294,10 +4313,19 @@ app.get('/api/posts/:postId/comments', authenticateToken, async (req, res) => {
     }
 
     // Obtener comentarios ordenados por fecha
-    const commentsSnapshot = await db.collection('comments')
-      .where('postId', '==', postId)
-      .orderBy('createdAt', 'asc')
-      .get();
+    let commentsSnapshot;
+    try {
+      commentsSnapshot = await db.collection('comments')
+        .where('postId', '==', postId)
+        .orderBy('createdAt', 'asc')
+        .get();
+    } catch (indexError) {
+      console.log('⚠️ [COMMENTS] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
+      // Fallback: obtener sin ordenamiento
+      commentsSnapshot = await db.collection('comments')
+        .where('postId', '==', postId)
+        .get();
+    }
 
     const comments = [];
     for (const doc of commentsSnapshot.docs) {
