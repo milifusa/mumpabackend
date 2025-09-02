@@ -3689,7 +3689,7 @@ Genera el tip ahora:`;
 // ===== SISTEMA DE COMUNIDADES =====
 
 // Endpoint para subir foto de comunidad
-app.post('/api/communities/upload-photo', authenticateToken, upload.single('image'), async (req, res) => {
+app.post('/api/communities/upload-photo', authenticateToken, upload.single('photo'), async (req, res) => {
   try {
     const { uid } = req.user;
 
@@ -3703,7 +3703,7 @@ app.post('/api/communities/upload-photo', authenticateToken, upload.single('imag
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'No se ha subido ninguna imagen'
+        message: 'No se ha subido ninguna imagen. Asegúrate de usar el campo "photo"'
       });
     }
 
