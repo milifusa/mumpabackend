@@ -3448,268 +3448,6 @@ app.delete('/api/children/development-history', authenticateToken, async (req, r
     });
   }
 });
-
-// Endpoint para actualizar el nombre del usuario
-app.put('/api/auth/update-name', authenticateToken, async (req, res) => {
-  try {
-    const { uid } = req.user;
-    const { displayName } = req.body;
-
-    if (!displayName || displayName.trim() === '') {
-      return res.status(400).json({
-        success: false,
-        message: 'El nombre es requerido'
-      });
-    }
-
-    if (!auth || !db) {
-      return res.status(500).json({
-        success: false,
-        message: 'Servicios no disponibles'
-      });
-    }
-
-    console.log('📝 Actualizando nombre del usuario:', uid, 'Nuevo nombre:', displayName);
-
-    // Actualizar en Firebase Auth
-    await auth.updateUser(uid, {
-      displayName: displayName.trim()
-    });
-
-    // Actualizar en Firestore
-    await db.collection('users').doc(uid).update({
-      displayName: displayName.trim(),
-      updatedAt: new Date()
-    });
-
-    console.log('✅ Nombre actualizado correctamente');
-
-    res.json({
-      success: true,
-      message: 'Nombre actualizado correctamente',
-      data: {
-        displayName: displayName.trim()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error actualizando nombre:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al actualizar el nombre',
-      error: error.message
-    });
-  }
-});
-
-// Middleware de manejo de errores
-app.use((err, req, res, next) => {
-  console.error('Error no manejado:', err);
-  res.status(500).json({
-    success: false,
-    message: 'Error interno del servidor',
-    error: process.env.NODE_ENV === 'development' ? err.message : 'Algo salió mal'
-  });
-});
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Middleware para rutas no encontradas
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Ruta no encontrada',
-    path: req.originalUrl
-  });
-});
-
-// Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📱 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 URL: http://localhost:${PORT}`);
-  console.log(`🔥 Firebase: ${firebaseStatus}`);
-});
-
-// Manejo de señales para cierre graceful
-process.on('SIGTERM', () => {
-  console.log('SIGTERM recibido, cerrando servidor...');
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT recibido, cerrando servidor...');
-  process.exit(0);
-});
-
-module.exports = app;
-
-// ===== SISTEMA DE APRENDIZAJE CONTINUO (RAG) =====
-
-// Función para guardar conocimiento en el vector store (simulado en Firestore)
-const saveKnowledge = async (text, metadata = {}) => {
-  try {
-    if (!db) return false;
-    
-    const knowledgeDoc = {
-      text: text,
-      metadata: {
-        source: metadata.source || 'manual',
-        topic: metadata.topic || 'general',
-        stage: metadata.stage || 'general', // embarazo|posparto|lactancia|general
-        version: metadata.version || '1.0',
-        language: metadata.language || 'es',
-        createdBy: metadata.createdBy || 'system',
-        createdAt: new Date(),
-        qualityScore: metadata.qualityScore || 1.0
-      },
-      // Simulación de embedding (en producción usarías un servicio real)
-      embedding: [0.1, 0.2, 0.3], // Placeholder
-      isActive: true
-    };
-    
-    await db.collection('knowledge_base').add(knowledgeDoc);
-    console.log('💾 [RAG] Conocimiento guardado:', metadata.topic);
-    return true;
-  } catch (error) {
-    console.error('❌ [RAG] Error guardando conocimiento:', error);
-    return false;
-  }
-};
-
-// Función para recuperar conocimiento relevante
-const retrieveKnowledge = async (query, filters = {}) => {
-  try {
-    if (!db) return [];
-    
-    let queryRef = db.collection('knowledge_base').where('isActive', '==', true);
-    
-    // Aplicar filtros
-    if (filters.stage) {
-      queryRef = queryRef.where('metadata.stage', '==', filters.stage);
-    }
-    if (filters.topic) {
-      queryRef = queryRef.where('metadata.topic', '==', filters.topic);
-    }
-    if (filters.language) {
-      queryRef = queryRef.where('metadata.language', '==', filters.language);
-    }
-    
-    const snapshot = await queryRef.orderBy('metadata.qualityScore', 'desc').limit(5).get();
-    
-    const knowledge = [];
-    snapshot.forEach(doc => {
-      knowledge.push({
-        id: doc.id,
-        ...doc.data()
-      });
-    });
-    
-    console.log('🔍 [RAG] Conocimiento recuperado:', knowledge.length, 'fragmentos');
-    return knowledge;
-  } catch (error) {
-    console.error('❌ [RAG] Error recuperando conocimiento:', error);
-    return [];
-  }
-};
-
-// Función para guardar memoria del usuario
-const saveUserMemory = async (userId, memoryData) => {
-  try {
-    if (!db) return false;
-    
-    const memoryDoc = {
-      userId: userId,
-      profile: memoryData.profile || {},
-      notes: memoryData.notes || [],
-      preferences: memoryData.preferences || {},
-      lastUpdated: new Date()
-    };
-    
-    await db.collection('user_memory').doc(userId).set(memoryDoc, { merge: true });
-    console.log('💾 [MEMORY] Memoria guardada para usuario:', userId);
-    return true;
-  } catch (error) {
-    console.error('❌ [MEMORY] Error guardando memoria:', error);
-    return false;
-  }
-};
-
-// Función para obtener memoria del usuario
-const getUserMemory = async (userId) => {
-  try {
-    if (!db) return null;
-    
-    const memoryDoc = await db.collection('user_memory').doc(userId).get();
-    
-    if (memoryDoc.exists) {
-      console.log('🔍 [MEMORY] Memoria recuperada para usuario:', userId);
-      return memoryDoc.data();
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('❌ [MEMORY] Error obteniendo memoria:', error);
-    return null;
-  }
-};
-
-// Función para guardar Q&A validado
-const saveValidatedQA = async (question, answer, tags = [], qualityScore = 1.0) => {
-  try {
-    if (!db) return false;
-    
-    const qaDoc = {
-      question: question,
-      answer: answer,
-      tags: tags,
-      qualityScore: qualityScore,
-      createdAt: new Date(),
-      isActive: true,
-      usageCount: 0
-    };
-    
-    await db.collection('validated_qa').add(qaDoc);
-    console.log('💾 [QA] Q&A validado guardado');
-    return true;
-  } catch (error) {
-    console.error('❌ [QA] Error guardando Q&A:', error);
-    return false;
-  }
-};
-
-// Función para guardar feedback del usuario
-const saveFeedback = async (userId, conversationId, feedback) => {
-  try {
-    if (!db) return false;
-    
-    const feedbackDoc = {
-      userId: userId,
-      conversationId: conversationId,
-      feedback: feedback, // 'positive' | 'negative'
-      timestamp: new Date(),
-      processed: false
-    };
-    
-    await db.collection('user_feedback').add(feedbackDoc);
-    console.log('💾 [FEEDBACK] Feedback guardado:', feedback);
-    return true;
-  } catch (error) {
-    console.error('❌ [FEEDBACK] Error guardando feedback:', error);
-    return false;
-  }
-};
-
 // Endpoint para obtener tips personalizados de los hijos
 app.post('/api/children/tips', authenticateToken, async (req, res) => {
   try {
@@ -3934,3 +3672,256 @@ function generateFallbackTips(children, tipType) {
 
   return tips.slice(0, 5); // Máximo 5 tips
 }
+
+// Endpoint para actualizar el nombre del usuario
+app.put('/api/auth/update-name', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { displayName } = req.body;
+
+    if (!displayName || displayName.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido'
+      });
+    }
+
+    if (!auth || !db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Servicios no disponibles'
+      });
+    }
+
+    console.log('📝 Actualizando nombre del usuario:', uid, 'Nuevo nombre:', displayName);
+
+    // Actualizar en Firebase Auth
+    await auth.updateUser(uid, {
+      displayName: displayName.trim()
+    });
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(uid).update({
+      displayName: displayName.trim(),
+      updatedAt: new Date()
+    });
+
+    console.log('✅ Nombre actualizado correctamente');
+
+    res.json({
+      success: true,
+      message: 'Nombre actualizado correctamente',
+      data: {
+        displayName: displayName.trim()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error actualizando nombre:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar el nombre',
+      error: error.message
+    });
+  }
+});
+
+// Middleware de manejo de errores
+app.use((err, req, res, next) => {
+  console.error('Error no manejado:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Error interno del servidor',
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Algo salió mal'
+  });
+});
+
+
+
+// Middleware para rutas no encontradas
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Ruta no encontrada',
+    path: req.originalUrl
+  });
+});
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  console.log(`📱 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔗 URL: http://localhost:${PORT}`);
+  console.log(`🔥 Firebase: ${firebaseStatus}`);
+});
+
+// Manejo de señales para cierre graceful
+process.on('SIGTERM', () => {
+  console.log('SIGTERM recibido, cerrando servidor...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT recibido, cerrando servidor...');
+  process.exit(0);
+});
+
+module.exports = app;
+
+// ===== SISTEMA DE APRENDIZAJE CONTINUO (RAG) =====
+
+// Función para guardar conocimiento en el vector store (simulado en Firestore)
+const saveKnowledge = async (text, metadata = {}) => {
+  try {
+    if (!db) return false;
+    
+    const knowledgeDoc = {
+      text: text,
+      metadata: {
+        source: metadata.source || 'manual',
+        topic: metadata.topic || 'general',
+        stage: metadata.stage || 'general', // embarazo|posparto|lactancia|general
+        version: metadata.version || '1.0',
+        language: metadata.language || 'es',
+        createdBy: metadata.createdBy || 'system',
+        createdAt: new Date(),
+        qualityScore: metadata.qualityScore || 1.0
+      },
+      // Simulación de embedding (en producción usarías un servicio real)
+      embedding: [0.1, 0.2, 0.3], // Placeholder
+      isActive: true
+    };
+    
+    await db.collection('knowledge_base').add(knowledgeDoc);
+    console.log('💾 [RAG] Conocimiento guardado:', metadata.topic);
+    return true;
+  } catch (error) {
+    console.error('❌ [RAG] Error guardando conocimiento:', error);
+    return false;
+  }
+};
+
+// Función para recuperar conocimiento relevante
+const retrieveKnowledge = async (query, filters = {}) => {
+  try {
+    if (!db) return [];
+    
+    let queryRef = db.collection('knowledge_base').where('isActive', '==', true);
+    
+    // Aplicar filtros
+    if (filters.stage) {
+      queryRef = queryRef.where('metadata.stage', '==', filters.stage);
+    }
+    if (filters.topic) {
+      queryRef = queryRef.where('metadata.topic', '==', filters.topic);
+    }
+    if (filters.language) {
+      queryRef = queryRef.where('metadata.language', '==', filters.language);
+    }
+    
+    const snapshot = await queryRef.orderBy('metadata.qualityScore', 'desc').limit(5).get();
+    
+    const knowledge = [];
+    snapshot.forEach(doc => {
+      knowledge.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    console.log('🔍 [RAG] Conocimiento recuperado:', knowledge.length, 'fragmentos');
+    return knowledge;
+  } catch (error) {
+    console.error('❌ [RAG] Error recuperando conocimiento:', error);
+    return [];
+  }
+};
+
+// Función para guardar memoria del usuario
+const saveUserMemory = async (userId, memoryData) => {
+  try {
+    if (!db) return false;
+    
+    const memoryDoc = {
+      userId: userId,
+      profile: memoryData.profile || {},
+      notes: memoryData.notes || [],
+      preferences: memoryData.preferences || {},
+      lastUpdated: new Date()
+    };
+    
+    await db.collection('user_memory').doc(userId).set(memoryDoc, { merge: true });
+    console.log('💾 [MEMORY] Memoria guardada para usuario:', userId);
+    return true;
+  } catch (error) {
+    console.error('❌ [MEMORY] Error guardando memoria:', error);
+    return false;
+  }
+};
+
+// Función para obtener memoria del usuario
+const getUserMemory = async (userId) => {
+  try {
+    if (!db) return null;
+    
+    const memoryDoc = await db.collection('user_memory').doc(userId).get();
+    
+    if (memoryDoc.exists) {
+      console.log('🔍 [MEMORY] Memoria recuperada para usuario:', userId);
+      return memoryDoc.data();
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('❌ [MEMORY] Error obteniendo memoria:', error);
+    return null;
+  }
+};
+
+// Función para guardar Q&A validado
+const saveValidatedQA = async (question, answer, tags = [], qualityScore = 1.0) => {
+  try {
+    if (!db) return false;
+    
+    const qaDoc = {
+      question: question,
+      answer: answer,
+      tags: tags,
+      qualityScore: qualityScore,
+      createdAt: new Date(),
+      isActive: true,
+      usageCount: 0
+    };
+    
+    await db.collection('validated_qa').add(qaDoc);
+    console.log('💾 [QA] Q&A validado guardado');
+    return true;
+  } catch (error) {
+    console.error('❌ [QA] Error guardando Q&A:', error);
+    return false;
+  }
+};
+
+// Función para guardar feedback del usuario
+const saveFeedback = async (userId, conversationId, feedback) => {
+  try {
+    if (!db) return false;
+    
+    const feedbackDoc = {
+      userId: userId,
+      conversationId: conversationId,
+      feedback: feedback, // 'positive' | 'negative'
+      timestamp: new Date(),
+      processed: false
+    };
+    
+    await db.collection('user_feedback').add(feedbackDoc);
+    console.log('💾 [FEEDBACK] Feedback guardado:', feedback);
+    return true;
+  } catch (error) {
+    console.error('❌ [FEEDBACK] Error guardando feedback:', error);
+    return false;
+  }
+};
+
+
