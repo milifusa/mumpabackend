@@ -3870,7 +3870,7 @@ app.post('/api/communities', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint para obtener todas las comunidades públicas
+// Endpoint para obtener todas las comunidades (públicas y privadas)
 app.get('/api/communities', async (req, res) => {
   try {
     if (!db) {
@@ -3882,16 +3882,14 @@ app.get('/api/communities', async (req, res) => {
 
     let communitiesSnapshot;
     try {
-      // Intentar con ordenamiento
+      // Intentar con ordenamiento - obtener TODAS las comunidades
       communitiesSnapshot = await db.collection('communities')
-        .where('isPublic', '==', true)
         .orderBy('createdAt', 'desc')
         .get();
     } catch (indexError) {
       console.log('⚠️ [COMMUNITIES] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
       // Fallback: obtener sin ordenamiento
       communitiesSnapshot = await db.collection('communities')
-        .where('isPublic', '==', true)
         .get();
     }
 
@@ -3906,6 +3904,8 @@ app.get('/api/communities', async (req, res) => {
         imageUrl: data.imageUrl,
         isPublic: data.isPublic,
         memberCount: data.memberCount || 0,
+        canJoin: data.isPublic, // Solo las públicas permiten unirse directamente
+        joinType: data.isPublic ? 'direct' : 'request', // Tipo de unión permitida
         createdAt: data.createdAt,
         updatedAt: data.updatedAt
       });
