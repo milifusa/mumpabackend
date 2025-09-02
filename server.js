@@ -3508,7 +3508,7 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     let tips = [];
     if (openai) {
       try {
-        const prompt = `Eres una doula experta llamada "Douli". Necesito que generes 3-5 tips cortos y útiles para una madre/padre basándote en la información de sus hijos.
+        const prompt = `Eres una doula experta llamada "Douli". Necesito que generes SOLO 1 tip corto y útil para una madre/padre basándote en la información de UN SOLO HIJO.
 
 INFORMACIÓN DE LOS HIJOS:
 ${childrenContext}
@@ -3516,12 +3516,12 @@ ${childrenContext}
 TIPO DE TIP SOLICITADO: ${tipType}
 
 REQUISITOS:
-- Tips cortos (máximo 2 líneas cada uno)
-- Específicos para la edad/gestación de los hijos
-- Prácticos y accionables
+- SOLO 1 tip (no más)
+- Específico para UN SOLO HIJO (elige el más relevante para el tipo de tip)
+- Práctico y accionable
 - En español
 - Formato: emoji + texto corto
-- Relacionados con el tipo solicitado
+- Relacionado con el tipo solicitado
 
 Ejemplos de tipos:
 - general: consejos generales de crianza
@@ -3531,7 +3531,7 @@ Ejemplos de tipos:
 - sueño: consejos de sueño
 - actividades: actividades recomendadas
 
-Genera solo los tips, sin explicaciones adicionales.`;
+Genera SOLO 1 tip, sin explicaciones adicionales.`;
 
         const completion = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
@@ -3565,7 +3565,7 @@ Genera solo los tips, sin explicaciones adicionales.`;
     res.json({
       success: true,
       data: {
-        tips: tips,
+        tips: tips.slice(0, 1), // Solo 1 tip
         children: children.map(child => ({
           id: child.id,
           name: child.name,
@@ -3589,88 +3589,96 @@ Genera solo los tips, sin explicaciones adicionales.`;
 
 // Función para generar tips de fallback
 function generateFallbackTips(children, tipType) {
-  const tips = [];
+  // Seleccionar un hijo aleatorio para dar variedad
+  const randomChild = children[Math.floor(Math.random() * children.length)];
+  let tip = '';
   
-  children.forEach(child => {
-    if (tipType === 'general' || tipType === 'desarrollo') {
-      if (child.isUnborn) {
-        if (child.currentGestationWeeks >= 40) {
-          tips.push('🤰 ¡Tu bebé está listo para nacer! Mantén la calma y confía en tu cuerpo.');
-        } else if (child.currentGestationWeeks >= 37) {
-          tips.push('👶 A partir de las 37 semanas tu bebé ya no es prematuro. ¡Estás en la recta final!');
-        } else if (child.currentGestationWeeks >= 28) {
-          tips.push('💕 Tu bebé ya puede soñar y reconocer tu voz. Habla con él/ella todos los días.');
-        }
+  if (tipType === 'general' || tipType === 'desarrollo') {
+    if (randomChild.isUnborn) {
+      if (randomChild.currentGestationWeeks >= 40) {
+        tip = `🤰 ¡${randomChild.name} está listo para nacer! Mantén la calma y confía en tu cuerpo.`;
+      } else if (randomChild.currentGestationWeeks >= 37) {
+        tip = `👶 ${randomChild.name} ya no es prematuro desde las 37 semanas. ¡Estás en la recta final!`;
+      } else if (randomChild.currentGestationWeeks >= 28) {
+        tip = `💕 ${randomChild.name} ya puede soñar y reconocer tu voz. Habla con él/ella todos los días.`;
       } else {
-        if (child.currentAgeInMonths <= 6) {
-          tips.push('🍼 La leche materna es el mejor alimento para tu bebé. Amamanta a demanda.');
-        } else if (child.currentAgeInMonths <= 12) {
-          tips.push('🥄 Introduce alimentos sólidos gradualmente. Un alimento nuevo cada 3-4 días.');
-        } else if (child.currentAgeInMonths <= 24) {
-          tips.push('🚶 Tu pequeño está explorando el mundo. Mantén tu casa segura para niños.');
-        } else if (child.currentAgeInMonths <= 36) {
-          tips.push('🎨 Fomenta la creatividad con dibujos, manualidades y juegos imaginativos.');
-        } else {
-          tips.push('📚 Lee cuentos juntos. Es una excelente manera de fortalecer el vínculo.');
-        }
+        tip = `🌟 ${randomChild.name} está creciendo bien en tu vientre. Mantén una alimentación saludable.`;
       }
-    } else if (tipType === 'alimentacion') {
-      if (!child.isUnborn) {
-        if (child.currentAgeInMonths <= 6) {
-          tips.push('🤱 Amamanta exclusivamente hasta los 6 meses. No necesita agua ni otros alimentos.');
-        } else if (child.currentAgeInMonths <= 12) {
-          tips.push('🥑 Introduce frutas y verduras de colores variados para una nutrición completa.');
-        } else if (child.currentAgeInMonths <= 24) {
-          tips.push('🥛 Ofrece 3 comidas principales y 2-3 refrigerios saludables al día.');
-        } else {
-          tips.push('🍎 Incluye proteínas magras, granos enteros y muchas frutas y verduras.');
-        }
-      }
-    } else if (tipType === 'salud') {
-      if (!child.isUnborn) {
-        if (child.currentAgeInMonths <= 12) {
-          tips.push('💉 Mantén al día el calendario de vacunación. Es fundamental para su salud.');
-        } else if (child.currentAgeInMonths <= 24) {
-          tips.push('🦷 Cepilla sus dientes 2 veces al día con pasta dental con flúor.');
-        } else {
-          tips.push('🏃 Fomenta al menos 1 hora de actividad física diaria para un desarrollo saludable.');
-        }
-      }
-    } else if (tipType === 'sueño') {
-      if (!child.isUnborn) {
-        if (child.currentAgeInMonths <= 6) {
-          tips.push('😴 Los bebés necesitan 14-17 horas de sueño total al día. Respeta sus ritmos.');
-        } else if (child.currentAgeInMonths <= 12) {
-          tips.push('🌙 Establece una rutina de sueño consistente: baño, cuento y cuna a la misma hora.');
-        } else if (child.currentAgeInMonths <= 24) {
-          tips.push('🛏️ Los niños de 1-2 años necesitan 11-14 horas de sueño, incluyendo 1-2 siestas.');
-        } else {
-          tips.push('💤 Los niños de 3-5 años necesitan 10-13 horas de sueño. Mantén horarios regulares.');
-        }
-      }
-    } else if (tipType === 'actividades') {
-      if (!child.isUnborn) {
-        if (child.currentAgeInMonths <= 6) {
-          tips.push('🎵 Canta canciones y haz movimientos rítmicos. Estimula su desarrollo auditivo y motor.');
-        } else if (child.currentAgeInMonths <= 12) {
-          tips.push('🧸 Juega a esconder objetos. Desarrolla su memoria y comprensión de permanencia.');
-        } else if (child.currentAgeInMonths <= 24) {
-          tips.push('🏗️ Construye torres con bloques. Mejora su coordinación y pensamiento espacial.');
-        } else {
-          tips.push('🎭 Juega a disfrazarse. Fomenta la imaginación y la expresión creativa.');
-        }
+    } else {
+      if (randomChild.currentAgeInMonths <= 6) {
+        tip = `🍼 La leche materna es el mejor alimento para ${randomChild.name}. Amamanta a demanda.`;
+      } else if (randomChild.currentAgeInMonths <= 12) {
+        tip = `🥄 Introduce alimentos sólidos gradualmente a ${randomChild.name}. Un alimento nuevo cada 3-4 días.`;
+      } else if (randomChild.currentAgeInMonths <= 24) {
+        tip = `🚶 ${randomChild.name} está explorando el mundo. Mantén tu casa segura para niños.`;
+      } else if (randomChild.currentAgeInMonths <= 36) {
+        tip = `🎨 Fomenta la creatividad de ${randomChild.name} con dibujos, manualidades y juegos imaginativos.`;
+      } else {
+        tip = `📚 Lee cuentos con ${randomChild.name}. Es una excelente manera de fortalecer el vínculo.`;
       }
     }
-  });
-
-  // Si no hay tips específicos, agregar tips generales
-  if (tips.length === 0) {
-    tips.push('💕 Cada hijo es único. Confía en tu instinto maternal/paternal.');
-    tips.push('🤗 El amor y la paciencia son los mejores ingredientes para criar niños felices.');
-    tips.push('📱 Limita el tiempo de pantalla y prioriza el juego activo y la interacción.');
+  } else if (tipType === 'alimentacion') {
+    if (!randomChild.isUnborn) {
+      if (randomChild.currentAgeInMonths <= 6) {
+        tip = `🤱 Amamanta exclusivamente a ${randomChild.name} hasta los 6 meses. No necesita agua ni otros alimentos.`;
+      } else if (randomChild.currentAgeInMonths <= 12) {
+        tip = `🥑 Introduce frutas y verduras de colores variados a ${randomChild.name} para una nutrición completa.`;
+      } else if (randomChild.currentAgeInMonths <= 24) {
+        tip = `🥛 Ofrece a ${randomChild.name} 3 comidas principales y 2-3 refrigerios saludables al día.`;
+      } else {
+        tip = `🍎 Incluye en la dieta de ${randomChild.name} proteínas magras, granos enteros y muchas frutas y verduras.`;
+      }
+    } else {
+      tip = `🤰 Para ${randomChild.name}, mantén una alimentación rica en ácido fólico, hierro y calcio durante el embarazo.`;
+    }
+  } else if (tipType === 'salud') {
+    if (!randomChild.isUnborn) {
+      if (randomChild.currentAgeInMonths <= 12) {
+        tip = `💉 Mantén al día el calendario de vacunación de ${randomChild.name}. Es fundamental para su salud.`;
+      } else if (randomChild.currentAgeInMonths <= 24) {
+        tip = `🦷 Cepilla los dientes de ${randomChild.name} 2 veces al día con pasta dental con flúor.`;
+      } else {
+        tip = `🏃 Fomenta en ${randomChild.name} al menos 1 hora de actividad física diaria para un desarrollo saludable.`;
+      }
+    } else {
+      tip = `🏥 Asiste a todas las citas prenatales para monitorear el desarrollo saludable de ${randomChild.name}.`;
+    }
+  } else if (tipType === 'sueño') {
+    if (!randomChild.isUnborn) {
+      if (randomChild.currentAgeInMonths <= 6) {
+        tip = `😴 ${randomChild.name} necesita 14-17 horas de sueño total al día. Respeta sus ritmos naturales.`;
+      } else if (randomChild.currentAgeInMonths <= 12) {
+        tip = `🌙 Establece una rutina de sueño consistente para ${randomChild.name}: baño, cuento y cuna a la misma hora.`;
+      } else if (randomChild.currentAgeInMonths <= 24) {
+        tip = `🛏️ ${randomChild.name} necesita 11-14 horas de sueño, incluyendo 1-2 siestas durante el día.`;
+      } else {
+        tip = `💤 ${randomChild.name} necesita 10-13 horas de sueño. Mantén horarios regulares para un descanso óptimo.`;
+      }
+    } else {
+      tip = `😴 Descansa bien durante el embarazo. Tu descanso también beneficia el desarrollo de ${randomChild.name}.`;
+    }
+  } else if (tipType === 'actividades') {
+    if (!randomChild.isUnborn) {
+      if (randomChild.currentAgeInMonths <= 6) {
+        tip = `🎵 Canta canciones y haz movimientos rítmicos con ${randomChild.name}. Estimula su desarrollo auditivo y motor.`;
+      } else if (randomChild.currentAgeInMonths <= 12) {
+        tip = `🧸 Juega a esconder objetos con ${randomChild.name}. Desarrolla su memoria y comprensión de permanencia.`;
+      } else if (randomChild.currentAgeInMonths <= 24) {
+        tip = `🏗️ Construye torres con bloques junto a ${randomChild.name}. Mejora su coordinación y pensamiento espacial.`;
+      } else {
+        tip = `🎭 Juega a disfrazarse con ${randomChild.name}. Fomenta la imaginación y la expresión creativa.`;
+      }
+    } else {
+      tip = `💕 Habla, canta y acaricia tu vientre. ${randomChild.name} puede sentir tu amor desde el útero.`;
+    }
   }
 
-  return tips.slice(0, 5); // Máximo 5 tips
+  // Si no hay tip específico, generar uno general personalizado
+  if (!tip) {
+    tip = `💕 ${randomChild.name} es único. Confía en tu instinto maternal/paternal para criarlo.`;
+  }
+
+  return [tip]; // Retornar solo 1 tip
 }
 
 // Endpoint para actualizar el nombre del usuario
