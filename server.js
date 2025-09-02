@@ -3689,7 +3689,7 @@ Genera el tip ahora:`;
 // ===== SISTEMA DE COMUNIDADES =====
 
 // Endpoint para subir foto de comunidad
-app.post('/api/communities/upload-photo', authenticateToken, upload.single('photo'), async (req, res) => {
+app.post('/api/communities/upload-photo', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     const { uid } = req.user;
 
@@ -3703,7 +3703,7 @@ app.post('/api/communities/upload-photo', authenticateToken, upload.single('phot
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'No se ha subido ninguna imagen. Asegúrate de usar el campo "photo"'
+        message: 'No se ha subido ninguna imagen. Asegúrate de usar el campo "image"'
       });
     }
 
@@ -3838,7 +3838,7 @@ app.post('/api/communities', authenticateToken, async (req, res) => {
       name: name.trim(),
       keywords: keywords.split(',').map(k => k.trim()).filter(k => k),
       description: description.trim(),
-      imageUrl: imageUrl,
+      imageUrl: imageUrl || null, // Asegurar que no sea undefined
       isPublic: isPublic === 'true' || isPublic === true,
       creatorId: uid,
       members: [uid], // El creador es el primer miembro
