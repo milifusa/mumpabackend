@@ -3728,7 +3728,7 @@ app.post('/api/communities/upload-photo', authenticateToken, upload.single('phot
     let imageUrl = null;
     
     try {
-      const bucket = storage.bucket();
+      const bucket = admin.storage().bucket();
       const fileName = `communities/photos/${Date.now()}-${req.file.originalname}`;
       const file = bucket.file(fileName);
       
