@@ -3508,30 +3508,47 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     let tips = [];
     if (openai) {
       try {
-        const prompt = `Eres una doula experta llamada "Douli". Necesito que generes SOLO 1 tip corto y útil para una madre/padre basándote en la información de UN SOLO HIJO.
+        const prompt = `Eres una doula experta llamada "Douli". Necesito que generes SOLO 1 tip corto, útil y personalizado para una madre/padre.
 
 INFORMACIÓN DE LOS HIJOS:
 ${childrenContext}
+
+ESTADO DE EMBARAZO:
+${isPregnant ? `Actualmente embarazada de ${currentGestationWeeks} semanas` : 'No está embarazada actualmente'}
 
 TIPO DE TIP SOLICITADO: ${tipType}
 
 REQUISITOS:
 - SOLO 1 tip (no más)
-- Específico para UN SOLO HIJO (elige el más relevante para el tipo de tip)
 - Práctico y accionable
 - En español
 - Formato: emoji + texto corto
 - Relacionado con el tipo solicitado
+- Diferente cada vez (evita repetir información)
 
-Ejemplos de tipos:
-- general: consejos generales de crianza
-- alimentacion: consejos de alimentación
-- desarrollo: hitos de desarrollo
-- salud: consejos de salud
-- sueño: consejos de sueño
-- actividades: actividades recomendadas
+TIPOS DE TIPS:
+- general: consejos generales de crianza para UN SOLO HIJO específico
+- alimentacion: consejos de alimentación para UN SOLO HIJO específico
+- desarrollo: hitos de desarrollo para UN SOLO HIJO específico
+- salud: consejos de salud para UN SOLO HIJO específico
+- sueño: consejos de sueño para UN SOLO HIJO específico
+- actividades: actividades recomendadas para UN SOLO HIJO específico
+- maternidad: consejos generales de maternidad/paternidad (no específico de un hijo)
+- crianza: consejos generales de crianza y educación (no específico de un hijo)
+- embarazo: consejos específicos para el embarazo actual de ${isPregnant ? `${currentGestationWeeks} semanas` : 'no aplica'}
 
-Genera SOLO 1 tip, sin explicaciones adicionales.`;
+INSTRUCCIONES ESPECÍFICAS:
+${tipType === 'embarazo' && isPregnant ? `Como estás embarazada de ${currentGestationWeeks} semanas, genera un tip específico para esta etapa del embarazo. Incluye información relevante para las ${currentGestationWeeks} semanas.` : ''}
+${tipType === 'maternidad' || tipType === 'crianza' ? 'Genera un tip general de maternidad/crianza que sea útil para cualquier padre/madre, no específico de un hijo en particular.' : 'Genera un tip específico para UN SOLO HIJO (elige el más relevante para el tipo de tip solicitado). Incluye el nombre del hijo en el tip.'}
+
+IMPORTANTE: 
+- Genera SOLO 1 tip
+- Sé específico y personalizado
+- Evita respuestas genéricas
+- Incluye emoji relevante
+- No incluyas explicaciones adicionales
+
+Genera el tip ahora:`;
 
         const completion = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
@@ -3587,11 +3604,14 @@ Genera SOLO 1 tip, sin explicaciones adicionales.`;
   }
 });
 
-// Función para generar tips de fallback
+
+
+// Función para generar tips de fallback (solo para hijos)
 function generateFallbackTips(children, tipType) {
   // Rotar entre los hijos para dar variedad - usar timestamp + tipType para más variedad
   const now = Date.now();
   const timeAndType = now + tipType.length + tipType.charCodeAt(0);
+  
   const childIndex = Math.floor((timeAndType / 30000) % children.length); // Cambia cada 30 segundos + variación por tipo
   const selectedChild = children[childIndex];
   let tip = '';
