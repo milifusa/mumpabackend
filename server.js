@@ -3794,19 +3794,13 @@ app.post('/api/communities/upload-photo', authenticateToken, upload.single('phot
 });
 
 // Endpoint para crear una comunidad
-app.post('/api/communities', authenticateToken, upload.single('photo'), async (req, res) => {
+app.post('/api/communities', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { name, keywords, description, isPublic = true } = req.body;
+    const { name, keywords, description, imageUrl, isPublic = true } = req.body;
 
     console.log('🏗️ [COMMUNITIES] Datos recibidos:', {
-      name, keywords, description, isPublic,
-      hasImage: !!req.file,
-      imageInfo: req.file ? {
-        originalName: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size
-      } : null
+      name, keywords, description, imageUrl, isPublic
     });
 
     if (!db) {
@@ -3836,31 +3830,8 @@ app.post('/api/communities', authenticateToken, upload.single('photo'), async (r
       });
     }
 
-    let imageUrl = null;
-    
-    // Procesar imagen si se subió
-    if (req.file) {
-      try {
-        const bucket = storage.bucket();
-        const fileName = `communities/${Date.now()}-${req.file.originalname}`;
-        const file = bucket.file(fileName);
-        
-        await file.save(req.file.buffer, {
-          metadata: {
-            contentType: req.file.mimetype
-          }
-        });
-
-        // Hacer la imagen pública
-        await file.makePublic();
-        imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-        
-        console.log('✅ [COMMUNITY] Imagen subida exitosamente:', imageUrl);
-      } catch (imageError) {
-        console.error('❌ [COMMUNITY] Error subiendo imagen:', imageError);
-        // Continuar sin imagen si falla
-      }
-    }
+    // Usar la URL de imagen recibida directamente
+    console.log('🖼️ [COMMUNITIES] URL de imagen recibida:', imageUrl);
 
     // Crear la comunidad
     const communityData = {
