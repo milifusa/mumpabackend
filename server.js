@@ -3686,6 +3686,729 @@ Genera el tip ahora:`;
   }
 });
 
+// ===== SISTEMA DE COMUNIDADES =====
+
+// Endpoint para crear una comunidad
+app.post('/api/communities', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { name, keywords, description, isPublic = true } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Validar campos obligatorios
+    if (!name || !keywords || !description) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre, palabras clave y descripción son obligatorios'
+      });
+    }
+
+    // Verificar si ya existe una comunidad con ese nombre
+    const existingCommunity = await db.collection('communities')
+      .where('name', '==', name.trim())
+      .get();
+
+    if (!existingCommunity.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya existe una comunidad con ese nombre'
+      });
+    }
+
+    let imageUrl = null;
+    
+    // Procesar imagen si se subió
+    if (req.file) {
+      try {
+        const bucket = storage.bucket();
+        const fileName = `communities/${Date.now()}-${req.file.originalname}`;
+        const file = bucket.file(fileName);
+        
+        await file.save(req.file.buffer, {
+          metadata: {
+            contentType: req.file.mimetype
+          }
+        });
+
+        // Hacer la imagen pública
+        await file.makePublic();
+        imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        
+        console.log('✅ [COMMUNITY] Imagen subida exitosamente:', imageUrl);
+      } catch (imageError) {
+        console.error('❌ [COMMUNITY] Error subiendo imagen:', imageError);
+        // Continuar sin imagen si falla
+      }
+    }
+
+    // Crear la comunidad
+    const communityData = {
+      name: name.trim(),
+      keywords: keywords.split(',').map(k => k.trim()).filter(k => k),
+      description: description.trim(),
+      imageUrl: imageUrl,
+      isPublic: isPublic === 'true' || isPublic === true,
+      creatorId: uid,
+      members: [uid], // El creador es el primer miembro
+      memberCount: 1,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const communityRef = await db.collection('communities').add(communityData);
+    
+    console.log('✅ [COMMUNITY] Comunidad creada exitosamente:', communityRef.id);
+
+    res.json({
+      success: true,
+      message: 'Comunidad creada exitosamente',
+      data: {
+        id: communityRef.id,
+        ...communityData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error creando comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando comunidad',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener todas las comunidades públicas
+app.get('/api/communities', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const communitiesSnapshot = await db.collection('communities')
+      .where('isPublic', '==', true)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const communities = [];
+    communitiesSnapshot.forEach(doc => {
+      const data = doc.data();
+      communities.push({
+        id: doc.id,
+        name: data.name,
+        keywords: data.keywords,
+        description: data.description,
+        imageUrl: data.imageUrl,
+        isPublic: data.isPublic,
+        memberCount: data.memberCount || 0,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
+      });
+    });
+
+    res.json({
+      success: true,
+      data: communities
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error obteniendo comunidades:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comunidades',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para unirse a una comunidad
+app.post('/api/communities/:communityId/join', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la comunidad existe
+    const communityRef = db.collection('communities').doc(communityId);
+    const communityDoc = await communityRef.get();
+
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+
+    // Verificar si ya es miembro
+    if (communityData.members && communityData.members.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya eres miembro de esta comunidad'
+      });
+    }
+
+    // Si es pública, unirse directamente
+    if (communityData.isPublic) {
+      await communityRef.update({
+        members: admin.firestore.FieldValue.arrayUnion(uid),
+        memberCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: new Date()
+      });
+
+      console.log('✅ [COMMUNITY] Usuario se unió directamente a comunidad pública:', uid, communityId);
+
+      res.json({
+        success: true,
+        message: 'Te has unido a la comunidad exitosamente'
+      });
+    } else {
+      // Si es privada, crear solicitud de unión
+      const requestData = {
+        userId: uid,
+        communityId: communityId,
+        status: 'pending', // pending, approved, rejected
+        createdAt: new Date()
+      };
+
+      await db.collection('joinRequests').add(requestData);
+      
+      console.log('✅ [COMMUNITY] Solicitud de unión creada:', uid, communityId);
+
+      res.json({
+        success: true,
+        message: 'Solicitud de unión enviada. Espera la aprobación del administrador.'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error uniéndose a comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error uniéndose a comunidad',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener comunidades del usuario
+app.get('/api/user/communities', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener comunidades donde el usuario es miembro
+    const communitiesSnapshot = await db.collection('communities')
+      .where('members', 'array-contains', uid)
+      .get();
+
+    const communities = [];
+    communitiesSnapshot.forEach(doc => {
+      const data = doc.data();
+      communities.push({
+        id: doc.id,
+        name: data.name,
+        keywords: data.keywords,
+        description: data.description,
+        imageUrl: data.imageUrl,
+        isPublic: data.isPublic,
+        memberCount: data.memberCount || 0,
+        isCreator: data.creatorId === uid,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
+      });
+    });
+
+    res.json({
+      success: true,
+      data: communities
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error obteniendo comunidades del usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comunidades del usuario',
+      error: error.message
+    });
+  }
+});
+
+// ===== SISTEMA DE PUBLICACIONES EN COMUNIDADES =====
+
+// Endpoint para crear una publicación en una comunidad
+app.post('/api/communities/:communityId/posts', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId } = req.params;
+    const { content } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityRef = db.collection('communities').doc(communityId);
+    const communityDoc = await communityRef.get();
+
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para publicar'
+      });
+    }
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El contenido de la publicación es obligatorio'
+      });
+    }
+
+    let imageUrl = null;
+    
+    // Procesar imagen si se subió
+    if (req.file) {
+      try {
+        const bucket = storage.bucket();
+        const fileName = `posts/${communityId}/${Date.now()}-${req.file.originalname}`;
+        const file = bucket.file(fileName);
+        
+        await file.save(req.file.buffer, {
+          metadata: {
+            contentType: req.file.mimetype
+          }
+        });
+
+        await file.makePublic();
+        imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        
+        console.log('✅ [POST] Imagen subida exitosamente:', imageUrl);
+      } catch (imageError) {
+        console.error('❌ [POST] Error subiendo imagen:', imageError);
+      }
+    }
+
+    // Crear la publicación
+    const postData = {
+      communityId: communityId,
+      authorId: uid,
+      content: content.trim(),
+      imageUrl: imageUrl,
+      likes: [],
+      likeCount: 0,
+      commentCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const postRef = await db.collection('posts').add(postData);
+    
+    console.log('✅ [POST] Publicación creada exitosamente:', postRef.id);
+
+    res.json({
+      success: true,
+      message: 'Publicación creada exitosamente',
+      data: {
+        id: postRef.id,
+        ...postData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [POST] Error creando publicación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando publicación',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener publicaciones de una comunidad
+app.get('/api/communities/:communityId/posts', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityRef = db.collection('communities').doc(communityId);
+    const communityDoc = await communityRef.get();
+
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para ver las publicaciones'
+      });
+    }
+
+    // Obtener publicaciones ordenadas por fecha
+    const postsSnapshot = await db.collection('posts')
+      .where('communityId', '==', communityId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const posts = [];
+    for (const doc of postsSnapshot.docs) {
+      const postData = doc.data();
+      
+      // Obtener información del autor
+      let authorName = 'Usuario';
+      try {
+        const authorDoc = await db.collection('users').doc(postData.authorId).get();
+        if (authorDoc.exists) {
+          authorName = authorDoc.data().displayName || 'Usuario';
+        }
+      } catch (error) {
+        console.log('⚠️ [POST] Error obteniendo nombre del autor:', error.message);
+      }
+
+      posts.push({
+        id: doc.id,
+        content: postData.content,
+        imageUrl: postData.imageUrl,
+        authorId: postData.authorId,
+        authorName: authorName,
+        likes: postData.likes || [],
+        likeCount: postData.likeCount || 0,
+        commentCount: postData.commentCount || 0,
+        isLiked: postData.likes && postData.likes.includes(uid),
+        createdAt: postData.createdAt,
+        updatedAt: postData.updatedAt
+      });
+    }
+
+    res.json({
+      success: true,
+      data: posts
+    });
+
+  } catch (error) {
+    console.error('❌ [POST] Error obteniendo publicaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo publicaciones',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para dar like a una publicación
+app.post('/api/posts/:postId/like', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const postRef = db.collection('posts').doc(postId);
+    const postDoc = await postRef.get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+    const isLiked = postData.likes && postData.likes.includes(uid);
+
+    if (isLiked) {
+      // Quitar like
+      await postRef.update({
+        likes: admin.firestore.FieldValue.arrayRemove(uid),
+        likeCount: admin.firestore.FieldValue.increment(-1),
+        updatedAt: new Date()
+      });
+      
+      console.log('✅ [POST] Like removido:', uid, postId);
+      
+      res.json({
+        success: true,
+        message: 'Like removido',
+        data: { liked: false }
+      });
+    } else {
+      // Agregar like
+      await postRef.update({
+        likes: admin.firestore.FieldValue.arrayUnion(uid),
+        likeCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: new Date()
+      });
+      
+      console.log('✅ [POST] Like agregado:', uid, postId);
+      
+      res.json({
+        success: true,
+        message: 'Like agregado',
+        data: { liked: true }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [POST] Error manejando like:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error manejando like',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para comentar en una publicación
+app.post('/api/posts/:postId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+    const { content } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El contenido del comentario es obligatorio'
+      });
+    }
+
+    // Verificar que la publicación existe
+    const postRef = db.collection('posts').doc(postId);
+    const postDoc = await postRef.get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    // Crear el comentario
+    const commentData = {
+      postId: postId,
+      authorId: uid,
+      content: content.trim(),
+      likes: [],
+      likeCount: 0,
+      createdAt: new Date()
+    };
+
+    const commentRef = await db.collection('comments').add(commentData);
+
+    // Incrementar contador de comentarios en la publicación
+    await postRef.update({
+      commentCount: admin.firestore.FieldValue.increment(1),
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [COMMENT] Comentario creado exitosamente:', commentRef.id);
+
+    res.json({
+      success: true,
+      message: 'Comentario creado exitosamente',
+      data: {
+        id: commentRef.id,
+        ...commentData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMENT] Error creando comentario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando comentario',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener comentarios de una publicación
+app.get('/api/posts/:postId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener comentarios ordenados por fecha
+    const commentsSnapshot = await db.collection('comments')
+      .where('postId', '==', postId)
+      .orderBy('createdAt', 'asc')
+      .get();
+
+    const comments = [];
+    for (const doc of commentsSnapshot.docs) {
+      const commentData = doc.data();
+      
+      // Obtener nombre del autor
+      let authorName = 'Usuario';
+      try {
+        const authorDoc = await db.collection('users').doc(commentData.authorId).get();
+        if (authorDoc.exists) {
+          authorName = authorDoc.data().displayName || 'Usuario';
+        }
+      } catch (error) {
+        console.log('⚠️ [COMMENT] Error obteniendo nombre del autor:', error.message);
+      }
+
+      comments.push({
+        id: doc.id,
+        content: commentData.content,
+        authorId: commentData.authorId,
+        authorName: authorName,
+        likes: commentData.likes || [],
+        likeCount: commentData.likeCount || 0,
+        isLiked: commentData.likes && commentData.likes.includes(uid),
+        createdAt: commentData.createdAt
+      });
+    }
+
+    res.json({
+      success: true,
+      data: comments
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMENT] Error obteniendo comentarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comentarios',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para dar like a un comentario
+app.post('/api/comments/:commentId/like', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { commentId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const commentRef = db.collection('comments').doc(commentId);
+    const commentDoc = await commentRef.get();
+
+    if (!commentDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comentario no encontrado'
+      });
+    }
+
+    const commentData = commentDoc.data();
+    const isLiked = commentData.likes && commentData.likes.includes(uid);
+
+    if (isLiked) {
+      // Quitar like
+      await commentRef.update({
+        likes: admin.firestore.FieldValue.arrayRemove(uid),
+        likeCount: admin.firestore.FieldValue.increment(-1),
+        updatedAt: new Date()
+      });
+      
+      console.log('✅ [COMMENT] Like removido del comentario:', uid, commentId);
+      
+      res.json({
+        success: true,
+        message: 'Like removido del comentario',
+        data: { liked: false }
+      });
+    } else {
+      // Agregar like
+      await commentRef.update({
+        likes: admin.firestore.FieldValue.arrayUnion(uid),
+        likeCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: new Date()
+      });
+      
+      console.log('✅ [COMMENT] Like agregado al comentario:', uid, commentId);
+      
+      res.json({
+        success: true,
+        message: 'Like agregado al comentario',
+        data: { liked: true }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [COMMENT] Error manejando like del comentario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error manejando like del comentario',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint de prueba para verificar almacenamiento de tips
 app.post('/api/children/test-storage', authenticateToken, async (req, res) => {
   try {
