@@ -3509,6 +3509,23 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
       });
     });
 
+    // Obtener perfil del usuario para verificar si está embarazada
+    let isPregnant = false;
+    let currentGestationWeeks = 0;
+    
+    try {
+      const userProfileSnapshot = await db.collection('users').doc(uid).get();
+      if (userProfileSnapshot.exists) {
+        const userProfile = userProfileSnapshot.data();
+        isPregnant = userProfile.isPregnant || false;
+        currentGestationWeeks = userProfile.gestationWeeks || 0;
+        console.log('👤 [PROFILE] Perfil del usuario:', { isPregnant, currentGestationWeeks });
+      }
+    } catch (profileError) {
+      console.log('⚠️ [PROFILE] Error obteniendo perfil del usuario:', profileError.message);
+      // Continuar con valores por defecto
+    }
+
     // Crear contexto para OpenAI
     const childrenContext = children.map(child => {
       if (child.isUnborn) {
@@ -3522,6 +3539,9 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
         return `${child.name}: ${ageText} de edad`;
       }
     }).join(', ');
+
+    console.log('👶 [CHILDREN] Contexto de hijos:', childrenContext);
+    console.log('🤰 [PREGNANCY] Estado de embarazo:', { isPregnant, currentGestationWeeks });
 
     // Generar tips usando OpenAI
     let tips = [];
