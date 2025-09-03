@@ -3985,20 +3985,41 @@ app.post('/api/communities/:communityId/join', authenticateToken, async (req, re
       });
     } else {
       // Si es privada, crear solicitud de unión
+      // Verificar que no haya una solicitud pendiente
+      const existingRequest = await db.collection('joinRequests')
+        .where('communityId', '==', communityId)
+        .where('userId', '==', uid)
+        .where('status', '==', 'pending')
+        .get();
+
+      if (!existingRequest.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ya tienes una solicitud pendiente para esta comunidad'
+        });
+      }
+
       const requestData = {
         userId: uid,
         communityId: communityId,
+        userName: req.user.displayName || 'Usuario',
         status: 'pending', // pending, approved, rejected
-        createdAt: new Date()
+        createdAt: new Date(),
+        updatedAt: new Date()
       };
 
-      await db.collection('joinRequests').add(requestData);
+      const joinRequestRef = await db.collection('joinRequests').add(requestData);
       
       console.log('✅ [COMMUNITY] Solicitud de unión creada:', uid, communityId);
 
       res.json({
         success: true,
-        message: 'Solicitud de unión enviada. Espera la aprobación del administrador.'
+        message: 'Solicitud de unión enviada. Espera la aprobación del administrador.',
+        data: {
+          communityId,
+          requestId: joinRequestRef.id,
+          status: 'pending'
+        }
       });
     }
 
@@ -4007,6 +4028,253 @@ app.post('/api/communities/:communityId/join', authenticateToken, async (req, re
     res.status(500).json({
       success: false,
       message: 'Error uniéndose a comunidad',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener solicitudes pendientes de una comunidad (solo para el owner)
+app.get('/api/communities/:communityId/join-requests', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la comunidad existe y el usuario es el owner
+    const communityDoc = await db.collection('communities').doc(communityId).get();
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (communityData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el creador de la comunidad puede ver las solicitudes'
+      });
+    }
+
+    // Obtener solicitudes pendientes
+    const requestsSnapshot = await db.collection('joinRequests')
+      .where('communityId', '==', communityId)
+      .where('status', '==', 'pending')
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const requests = [];
+    requestsSnapshot.forEach(doc => {
+      const data = doc.data();
+      requests.push({
+        id: doc.id,
+        userId: data.userId,
+        userName: data.userName,
+        communityId: data.communityId,
+        status: data.status,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
+      });
+    });
+
+    res.json({
+      success: true,
+      message: 'Solicitudes obtenidas exitosamente',
+      data: requests
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error obteniendo solicitudes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo solicitudes',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para aprobar/rechazar solicitudes de unión (solo para el owner)
+app.put('/api/communities/:communityId/join-requests/:requestId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId, requestId } = req.params;
+    const { action } = req.body; // 'approve' o 'reject'
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Acción debe ser "approve" o "reject"'
+      });
+    }
+
+    // Verificar que la comunidad existe y el usuario es el owner
+    const communityDoc = await db.collection('communities').doc(communityId).get();
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (communityData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el creador de la comunidad puede aprobar/rechazar solicitudes'
+      });
+    }
+
+    // Obtener la solicitud
+    const requestDoc = await db.collection('joinRequests').doc(requestId).get();
+    if (!requestDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Solicitud no encontrada'
+      });
+    }
+
+    const requestData = requestDoc.data();
+    if (requestData.communityId !== communityId) {
+      return res.status(400).json({
+        success: false,
+        message: 'La solicitud no pertenece a esta comunidad'
+      });
+    }
+
+    if (requestData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'La solicitud ya no está pendiente'
+      });
+    }
+
+    const batch = db.batch();
+
+    if (action === 'approve') {
+      // Aprobar solicitud: agregar usuario a la comunidad
+      const communityRef = db.collection('communities').doc(communityId);
+      batch.update(communityRef, {
+        members: admin.firestore.FieldValue.arrayUnion(requestData.userId),
+        memberCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: new Date()
+      });
+
+      // Actualizar estado de la solicitud
+      const requestRef = db.collection('joinRequests').doc(requestId);
+      batch.update(requestRef, {
+        status: 'approved',
+        updatedAt: new Date()
+      });
+
+      await batch.commit();
+
+      console.log('✅ [COMMUNITY] Solicitud aprobada:', requestId, communityId);
+
+      res.json({
+        success: true,
+        message: 'Solicitud aprobada. El usuario se ha unido a la comunidad.',
+        data: {
+          requestId,
+          status: 'approved',
+          userId: requestData.userId
+        }
+      });
+    } else {
+      // Rechazar solicitud
+      const requestRef = db.collection('joinRequests').doc(requestId);
+      batch.update(requestRef, {
+        status: 'rejected',
+        updatedAt: new Date()
+      });
+
+      await batch.commit();
+
+      console.log('✅ [COMMUNITY] Solicitud rechazada:', requestId, communityId);
+
+      res.json({
+        success: true,
+        message: 'Solicitud rechazada',
+        data: {
+          requestId,
+          status: 'rejected',
+          userId: requestData.userId
+        }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error procesando solicitud:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error procesando solicitud',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener solicitudes del usuario
+app.get('/api/user/join-requests', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener todas las solicitudes del usuario
+    const requestsSnapshot = await db.collection('joinRequests')
+      .where('userId', '==', uid)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const requests = [];
+    for (const doc of requestsSnapshot.docs) {
+      const data = doc.data();
+      
+      // Obtener información de la comunidad
+      const communityDoc = await db.collection('communities').doc(data.communityId).get();
+      if (communityDoc.exists) {
+        const communityData = communityDoc.data();
+        requests.push({
+          id: doc.id,
+          communityId: data.communityId,
+          communityName: communityData.name,
+          communityImage: communityData.imageUrl,
+          status: data.status,
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Solicitudes obtenidas exitosamente',
+      data: requests
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error obteniendo solicitudes del usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo solicitudes',
       error: error.message
     });
   }
