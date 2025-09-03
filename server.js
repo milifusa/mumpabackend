@@ -4094,18 +4094,33 @@ app.get('/api/communities/:communityId/join-requests', authenticateToken, async 
     }
 
     const requests = [];
-    requestsSnapshot.forEach(doc => {
+    for (const doc of requestsSnapshot.docs) {
       const data = doc.data();
+      
+      // Obtener información completa del usuario
+      let userProfile = null;
+      try {
+        const userDoc = await db.collection('users').doc(data.userId).get();
+        if (userDoc.exists) {
+          userProfile = userDoc.data();
+        }
+      } catch (userError) {
+        console.log('⚠️ [JOIN REQUESTS] Error obteniendo perfil de usuario:', data.userId, userError.message);
+      }
+      
       requests.push({
         id: doc.id,
         userId: data.userId,
-        userName: data.userName,
+        userName: userProfile?.displayName || data.userName || 'Usuario',
+        userPhoto: userProfile?.photoURL || null,
+        userEmail: userProfile?.email || null,
         communityId: data.communityId,
         status: data.status,
         createdAt: data.createdAt,
-        updatedAt: data.updatedAt
+        updatedAt: data.updatedAt,
+        requestDate: data.createdAt // Fecha de la solicitud
       });
-    });
+    }
 
     res.json({
       success: true,
