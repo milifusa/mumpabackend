@@ -4379,12 +4379,12 @@ app.get('/api/user/communities', authenticateToken, async (req, res) => {
 
 // ===== SISTEMA DE PUBLICACIONES EN COMUNIDADES =====
 
-// Endpoint para crear una publicación en una comunidad
-app.post('/api/communities/:communityId/posts', authenticateToken, upload.single('image'), async (req, res) => {
+// Endpoint para crear una publicación en una comunidad (recibe URL de imagen)
+app.post('/api/communities/:communityId/posts', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
     const { communityId } = req.params;
-    const { content } = req.body;
+    const { content, imageUrl } = req.body;
 
     if (!db) {
       return res.status(500).json({
@@ -4419,28 +4419,12 @@ app.post('/api/communities/:communityId/posts', authenticateToken, upload.single
       });
     }
 
-    let imageUrl = null;
-    
-    // Procesar imagen si se subió
-    if (req.file) {
-      try {
-        const bucket = storage.bucket();
-        const fileName = `posts/${communityId}/${Date.now()}-${req.file.originalname}`;
-        const file = bucket.file(fileName);
-        
-        await file.save(req.file.buffer, {
-          metadata: {
-            contentType: req.file.mimetype
-          }
-        });
-
-        await file.makePublic();
-        imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-        
-        console.log('✅ [POST] Imagen subida exitosamente:', imageUrl);
-      } catch (imageError) {
-        console.error('❌ [POST] Error subiendo imagen:', imageError);
-      }
+    // Validar que la URL de imagen sea válida si se proporciona
+    if (imageUrl && !imageUrl.startsWith('http')) {
+      return res.status(400).json({
+        success: false,
+        message: 'La URL de la imagen debe ser válida'
+      });
     }
 
     // Crear la publicación
