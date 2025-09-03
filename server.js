@@ -3986,11 +3986,23 @@ app.post('/api/communities/:communityId/join', authenticateToken, async (req, re
     } else {
       // Si es privada, crear solicitud de unión
       // Verificar que no haya una solicitud pendiente
-      const existingRequest = await db.collection('joinRequests')
-        .where('communityId', '==', communityId)
-        .where('userId', '==', uid)
-        .where('status', '==', 'pending')
-        .get();
+      let existingRequest;
+      try {
+        // Intentar con ordenamiento - requiere índice compuesto
+        existingRequest = await db.collection('joinRequests')
+          .where('communityId', '==', communityId)
+          .where('userId', '==', uid)
+          .where('status', '==', 'pending')
+          .get();
+      } catch (indexError) {
+        console.log('⚠️ [JOIN CHECK] Índice no disponible, verificando sin ordenamiento:', indexError.message);
+        // Fallback: verificar sin ordenamiento
+        existingRequest = await db.collection('joinRequests')
+          .where('communityId', '==', communityId)
+          .where('userId', '==', uid)
+          .where('status', '==', 'pending')
+          .get();
+      }
 
       if (!existingRequest.empty) {
         return res.status(400).json({
@@ -4064,11 +4076,22 @@ app.get('/api/communities/:communityId/join-requests', authenticateToken, async 
     }
 
     // Obtener solicitudes pendientes
-    const requestsSnapshot = await db.collection('joinRequests')
-      .where('communityId', '==', communityId)
-      .where('status', '==', 'pending')
-      .orderBy('createdAt', 'desc')
-      .get();
+    let requestsSnapshot;
+    try {
+      // Intentar con ordenamiento - requiere índice compuesto
+      requestsSnapshot = await db.collection('joinRequests')
+        .where('communityId', '==', communityId)
+        .where('status', '==', 'pending')
+        .orderBy('createdAt', 'desc')
+        .get();
+    } catch (indexError) {
+      console.log('⚠️ [JOIN REQUESTS] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
+      // Fallback: obtener sin ordenamiento
+      requestsSnapshot = await db.collection('joinRequests')
+        .where('communityId', '==', communityId)
+        .where('status', '==', 'pending')
+        .get();
+    }
 
     const requests = [];
     requestsSnapshot.forEach(doc => {
@@ -4239,10 +4262,20 @@ app.get('/api/user/join-requests', authenticateToken, async (req, res) => {
     }
 
     // Obtener todas las solicitudes del usuario
-    const requestsSnapshot = await db.collection('joinRequests')
-      .where('userId', '==', uid)
-      .orderBy('createdAt', 'desc')
-      .get();
+    let requestsSnapshot;
+    try {
+      // Intentar con ordenamiento - requiere índice compuesto
+      requestsSnapshot = await db.collection('joinRequests')
+        .where('userId', '==', uid)
+        .orderBy('createdAt', 'desc')
+        .get();
+    } catch (indexError) {
+      console.log('⚠️ [USER REQUESTS] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
+      // Fallback: obtener sin ordenamiento
+      requestsSnapshot = await db.collection('joinRequests')
+        .where('userId', '==', uid)
+        .get();
+    }
 
     const requests = [];
     for (const doc of requestsSnapshot.docs) {
