@@ -4328,6 +4328,129 @@ app.get('/api/user/join-requests', authenticateToken, async (req, res) => {
   }
 });
 
+// Endpoint para buscar en las comunidades del usuario
+app.get('/api/user/communities/search', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { query, limit = 20 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!query || query.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El término de búsqueda es obligatorio'
+      });
+    }
+
+    const searchTerm = query.trim().toLowerCase();
+    const searchLimit = Math.min(parseInt(limit), 50); // Máximo 50 resultados
+
+    // Obtener todas las comunidades del usuario
+    const communitiesSnapshot = await db.collection('communities')
+      .where('members', 'array-contains', uid)
+      .get();
+
+    const communities = [];
+    communitiesSnapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Buscar en nombre, palabras clave y descripción
+      const nameMatch = data.name.toLowerCase().includes(searchTerm);
+      const keywordsMatch = data.keywords && data.keywords.some(keyword => 
+        keyword.toLowerCase().includes(searchTerm)
+      );
+      const descriptionMatch = data.description.toLowerCase().includes(searchTerm);
+      
+      if (nameMatch || keywordsMatch || descriptionMatch) {
+        communities.push({
+          id: doc.id,
+          name: data.name,
+          keywords: data.keywords,
+          description: data.description,
+          imageUrl: data.imageUrl,
+          isPublic: data.isPublic,
+          memberCount: data.memberCount || 0,
+          isCreator: data.creatorId === uid,
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt,
+          // Campos de relevancia para el ranking
+          relevanceScore: calculateRelevanceScore(data, searchTerm)
+        });
+      }
+    });
+
+    // Ordenar por relevancia (exacto > parcial > fecha)
+    communities.sort((a, b) => {
+      if (a.relevanceScore !== b.relevanceScore) {
+        return b.relevanceScore - a.relevanceScore;
+      }
+      // Si tienen la misma relevancia, ordenar por fecha de creación
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    // Limitar resultados
+    const limitedResults = communities.slice(0, searchLimit);
+
+    res.json({
+      success: true,
+      message: 'Búsqueda completada exitosamente',
+      data: {
+        results: limitedResults,
+        totalFound: communities.length,
+        searchTerm: searchTerm,
+        limit: searchLimit
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITIES] Error en búsqueda:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en la búsqueda',
+      error: error.message
+    });
+  }
+});
+
+// Función para calcular puntuación de relevancia
+function calculateRelevanceScore(community, searchTerm) {
+  let score = 0;
+  const term = searchTerm.toLowerCase();
+  
+  // Búsqueda exacta en nombre (máxima puntuación)
+  if (community.name.toLowerCase() === term) {
+    score += 100;
+  }
+  // Búsqueda parcial en nombre
+  else if (community.name.toLowerCase().includes(term)) {
+    score += 50;
+  }
+  
+  // Búsqueda en palabras clave
+  if (community.keywords) {
+    community.keywords.forEach(keyword => {
+      if (keyword.toLowerCase() === term) {
+        score += 30;
+      } else if (keyword.toLowerCase().includes(term)) {
+        score += 15;
+      }
+    });
+  }
+  
+  // Búsqueda en descripción
+  if (community.description.toLowerCase().includes(term)) {
+    score += 10;
+  }
+  
+  return score;
+}
+
 // Endpoint para obtener comunidades del usuario
 app.get('/api/user/communities', authenticateToken, async (req, res) => {
   try {
