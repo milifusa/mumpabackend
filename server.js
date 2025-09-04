@@ -5554,6 +5554,43 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
       hasStarred = !userStar.empty;
     }
 
+    // Obtener calificaciones y comentarios para cada item
+    let itemsWithStats = [];
+    if (listData.items && listData.items.length > 0) {
+      itemsWithStats = await Promise.all(
+        listData.items.map(async (item) => {
+          // Obtener calificaciones del item
+          const ratingsSnapshot = await db.collection('itemRatings')
+            .where('listId', '==', listId)
+            .where('itemId', '==', item.id)
+            .get();
+
+          let totalRating = 0;
+          let ratingCount = 0;
+          ratingsSnapshot.forEach(doc => {
+            totalRating += doc.data().rating;
+            ratingCount++;
+          });
+          const averageRating = ratingCount > 0 ? (totalRating / ratingCount).toFixed(1) : 0;
+
+          // Obtener comentarios del item
+          const commentsSnapshot = await db.collection('listComments')
+            .where('listId', '==', listId)
+            .where('itemId', '==', item.id)
+            .get();
+
+          const commentCount = commentsSnapshot.size;
+
+          return {
+            ...item,
+            averageRating: parseFloat(averageRating),
+            totalRatings: ratingCount,
+            commentCount: commentCount
+          };
+        })
+      );
+    }
+
     res.json({
       success: true,
       message: 'Lista obtenida exitosamente',
@@ -5565,7 +5602,7 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
         isPublic: listData.isPublic,
         creatorId: listData.creatorId,
         isOwner: listData.creatorId === uid, // ← NUEVO: indicar si es el propietario
-        items: listData.items || [],
+        items: itemsWithStats, // ← NUEVO: items con estadísticas
         completedItems: listData.completedItems || 0,
         totalItems: listData.totalItems || 0,
         stars: listData.stars || 0,
