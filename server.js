@@ -4710,6 +4710,7 @@ app.get('/api/user/lists', authenticateToken, async (req, res) => {
         description: data.description,
         imageUrl: data.imageUrl || null,
         isPublic: data.isPublic,
+        isOwner: data.creatorId === uid, // ← NUEVO: indicar si es el propietario
         items: data.items || [],
         completedItems: data.completedItems || 0,
         totalItems: data.totalItems || 0,
@@ -4737,8 +4738,9 @@ app.get('/api/user/lists', authenticateToken, async (req, res) => {
 });
 
 // Endpoint para obtener listas públicas
-app.get('/api/lists/public', async (req, res) => {
+app.get('/api/lists/public', authenticateToken, async (req, res) => {
   try {
+    const { uid } = req.user;
     const { limit = 20, offset = 0 } = req.query;
 
     if (!db) {
@@ -4765,6 +4767,7 @@ app.get('/api/lists/public', async (req, res) => {
         description: data.description,
         imageUrl: data.imageUrl || null,
         creatorId: data.creatorId,
+        isOwner: data.creatorId === uid, // ← NUEVO: indicar si es el propietario
         items: data.items || [],
         completedItems: data.completedItems || 0,
         totalItems: data.totalItems || 0,
@@ -5366,13 +5369,14 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
         imageUrl: listData.imageUrl || null,
         isPublic: listData.isPublic,
         creatorId: listData.creatorId,
+        isOwner: listData.creatorId === uid, // ← NUEVO: indicar si es el propietario
         items: listData.items || [],
         completedItems: listData.completedItems || 0,
         totalItems: listData.totalItems || 0,
         stars: listData.stars || 0,
         comments: listData.comments || 0,
         hasStarred: hasStarred,
-        isCreator: listData.creatorId === uid,
+        isCreator: listData.creatorId === uid, // Mantener por compatibilidad
         createdAt: listData.createdAt,
         updatedAt: listData.updatedAt
       }
