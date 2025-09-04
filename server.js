@@ -4604,6 +4604,849 @@ app.get('/api/user/communities', authenticateToken, async (req, res) => {
   }
 });
 
+// ===== SISTEMA DE LISTAS =====
+
+// Endpoint para crear una lista
+app.post('/api/lists', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { title, description, isPublic = false, items = [] } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Validar campos obligatorios
+    if (!title || title.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El título de la lista es obligatorio'
+      });
+    }
+
+    // Crear la lista
+    const listData = {
+      title: title.trim(),
+      description: description ? description.trim() : '',
+      isPublic: isPublic === 'true' || isPublic === true,
+      creatorId: uid,
+      items: items.map((item, index) => ({
+        id: `item_${Date.now()}_${index}`,
+        text: item.text ? item.text.trim() : '',
+        completed: false,
+        createdAt: new Date()
+      })),
+      completedItems: 0,
+      totalItems: items.length,
+      stars: 0,
+      comments: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const listRef = await db.collection('lists').add(listData);
+    
+    console.log('✅ [LISTS] Lista creada exitosamente:', listRef.id);
+
+    res.json({
+      success: true,
+      message: 'Lista creada exitosamente',
+      data: {
+        id: listRef.id,
+        ...listData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error creando lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando lista',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener las listas del usuario
+app.get('/api/user/lists', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { type = 'all' } = req.query; // 'all', 'public', 'private'
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('lists').where('creatorId', '==', uid);
+    
+    // Filtrar por tipo si se especifica
+    if (type === 'public') {
+      query = query.where('isPublic', '==', true);
+    } else if (type === 'private') {
+      query = query.where('isPublic', '==', false);
+    }
+
+    const listsSnapshot = await query.orderBy('updatedAt', 'desc').get();
+
+    const lists = [];
+    listsSnapshot.forEach(doc => {
+      const data = doc.data();
+      lists.push({
+        id: doc.id,
+        title: data.title,
+        description: data.description,
+        isPublic: data.isPublic,
+        items: data.items || [],
+        completedItems: data.completedItems || 0,
+        totalItems: data.totalItems || 0,
+        stars: data.stars || 0,
+        comments: data.comments || 0,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
+      });
+    });
+
+    res.json({
+      success: true,
+      message: 'Listas obtenidas exitosamente',
+      data: lists
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error obteniendo listas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo listas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener listas públicas
+app.get('/api/lists/public', async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const listsSnapshot = await db.collection('lists')
+      .where('isPublic', '==', true)
+      .orderBy('stars', 'desc')
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit))
+      .offset(parseInt(offset))
+      .get();
+
+    const lists = [];
+    listsSnapshot.forEach(doc => {
+      const data = doc.data();
+      lists.push({
+        id: doc.id,
+        title: data.title,
+        description: data.description,
+        creatorId: data.creatorId,
+        items: data.items || [],
+        completedItems: data.completedItems || 0,
+        totalItems: data.totalItems || 0,
+        stars: data.stars || 0,
+        comments: data.comments || 0,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
+      });
+    });
+
+    res.json({
+      success: true,
+      message: 'Listas públicas obtenidas exitosamente',
+      data: lists
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error obteniendo listas públicas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo listas públicas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para actualizar una lista
+app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId } = req.params;
+    const { title, description, isPublic } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la lista existe y el usuario es el creador
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (listData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el creador puede editar la lista'
+      });
+    }
+
+    // Actualizar la lista
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (title !== undefined) updateData.title = title.trim();
+    if (description !== undefined) updateData.description = description.trim();
+    if (isPublic !== undefined) updateData.isPublic = isPublic === 'true' || isPublic === true;
+
+    await db.collection('lists').doc(listId).update(updateData);
+
+    console.log('✅ [LISTS] Lista actualizada exitosamente:', listId);
+
+    res.json({
+      success: true,
+      message: 'Lista actualizada exitosamente',
+      data: { listId, ...updateData }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error actualizando lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando lista',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para agregar un item a una lista
+app.post('/api/lists/:listId/items', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId } = req.params;
+    const { text } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El texto del item es obligatorio'
+      });
+    }
+
+    // Verificar que la lista existe y el usuario es el creador
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (listData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el creador puede agregar items a la lista'
+      });
+    }
+
+    // Crear el nuevo item
+    const newItem = {
+      id: `item_${Date.now()}_${Math.random()}`,
+      text: text.trim(),
+      completed: false,
+      createdAt: new Date()
+    };
+
+    // Actualizar la lista
+    const updatedItems = [...(listData.items || []), newItem];
+    
+    await db.collection('lists').doc(listId).update({
+      items: updatedItems,
+      totalItems: updatedItems.length,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [LISTS] Item agregado exitosamente:', newItem.id);
+
+    res.json({
+      success: true,
+      message: 'Item agregado exitosamente',
+      data: newItem
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error agregando item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error agregando item',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para marcar/desmarcar un item como completado
+app.put('/api/lists/:listId/items/:itemId/toggle', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId, itemId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la lista existe y el usuario es el creador
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (listData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el creador puede modificar items de la lista'
+      });
+    }
+
+    // Encontrar y actualizar el item
+    const items = listData.items || [];
+    const itemIndex = items.findIndex(item => item.id === itemId);
+    
+    if (itemIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item no encontrado'
+      });
+    }
+
+    // Toggle del estado completado
+    items[itemIndex].completed = !items[itemIndex].completed;
+    
+    // Contar items completados
+    const completedItems = items.filter(item => item.completed).length;
+
+    // Actualizar la lista
+    await db.collection('lists').doc(listId).update({
+      items: items,
+      completedItems: completedItems,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [LISTS] Item actualizado exitosamente:', itemId);
+
+    res.json({
+      success: true,
+      message: 'Item actualizado exitosamente',
+      data: {
+        itemId: itemId,
+        completed: items[itemIndex].completed,
+        completedItems: completedItems
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error actualizando item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando item',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para eliminar un item de una lista
+app.delete('/api/lists/:listId/items/:itemId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId, itemId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la lista existe y el usuario es el creador
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (listData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el creador puede eliminar items de la lista'
+      });
+    }
+
+    // Encontrar y eliminar el item
+    const items = listData.items || [];
+    const filteredItems = items.filter(item => item.id !== itemId);
+    
+    if (filteredItems.length === items.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item no encontrado'
+      });
+    }
+
+    // Contar items completados
+    const completedItems = filteredItems.filter(item => item.completed).length;
+
+    // Actualizar la lista
+    await db.collection('lists').doc(listId).update({
+      items: filteredItems,
+      totalItems: filteredItems.length,
+      completedItems: completedItems,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [LISTS] Item eliminado exitosamente:', itemId);
+
+    res.json({
+      success: true,
+      message: 'Item eliminado exitosamente',
+      data: { itemId }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error eliminando item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando item',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para dar/quitar estrella a una lista pública
+app.post('/api/lists/:listId/star', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la lista existe y es pública
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (!listData.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo se pueden calificar listas públicas'
+      });
+    }
+
+    // Verificar si el usuario ya dio estrella
+    const existingStar = await db.collection('listStars')
+      .where('listId', '==', listId)
+      .where('userId', '==', uid)
+      .get();
+
+    let newStarsCount = listData.stars || 0;
+
+    if (existingStar.empty) {
+      // Agregar estrella
+      await db.collection('listStars').add({
+        listId: listId,
+        userId: uid,
+        createdAt: new Date()
+      });
+      newStarsCount += 1;
+    } else {
+      // Quitar estrella
+      await db.collection('listStars').doc(existingStar.docs[0].id).delete();
+      newStarsCount = Math.max(0, newStarsCount - 1);
+    }
+
+    // Actualizar contador de estrellas en la lista
+    await db.collection('lists').doc(listId).update({
+      stars: newStarsCount,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [LISTS] Estrella actualizada:', listId, newStarsCount);
+
+    res.json({
+      success: true,
+      message: 'Estrella actualizada exitosamente',
+      data: {
+        listId: listId,
+        stars: newStarsCount,
+        hasStarred: existingStar.empty
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error actualizando estrella:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando estrella',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para comentar en un item de lista pública
+app.post('/api/lists/:listId/items/:itemId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId, itemId } = req.params;
+    const { content } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El contenido del comentario es obligatorio'
+      });
+    }
+
+    // Verificar que la lista existe y es pública
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (!listData.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo se pueden comentar listas públicas'
+      });
+    }
+
+    // Verificar que el item existe
+    const item = listData.items.find(item => item.id === itemId);
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item no encontrado'
+      });
+    }
+
+    // Crear el comentario
+    const commentData = {
+      listId: listId,
+      itemId: itemId,
+      userId: uid,
+      userName: req.user.displayName || 'Usuario',
+      content: content.trim(),
+      createdAt: new Date()
+    };
+
+    const commentRef = await db.collection('listComments').add(commentData);
+
+    // Actualizar contador de comentarios en la lista
+    const newCommentsCount = (listData.comments || 0) + 1;
+    await db.collection('lists').doc(listId).update({
+      comments: newCommentsCount,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [LISTS] Comentario agregado exitosamente:', commentRef.id);
+
+    res.json({
+      success: true,
+      message: 'Comentario agregado exitosamente',
+      data: {
+        id: commentRef.id,
+        ...commentData,
+        commentsCount: newCommentsCount
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error agregando comentario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error agregando comentario',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener comentarios de un item de lista pública
+app.get('/api/lists/:listId/items/:itemId/comments', async (req, res) => {
+  try {
+    const { listId, itemId } = req.params;
+    const { limit = 20, offset = 0 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la lista existe y es pública
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (!listData.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo se pueden ver comentarios de listas públicas'
+      });
+    }
+
+    // Obtener comentarios del item
+    const commentsSnapshot = await db.collection('listComments')
+      .where('listId', '==', listId)
+      .where('itemId', '==', itemId)
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit))
+      .offset(parseInt(offset))
+      .get();
+
+    const comments = [];
+    commentsSnapshot.forEach(doc => {
+      const data = doc.data();
+      comments.push({
+        id: doc.id,
+        listId: data.listId,
+        itemId: data.itemId,
+        userId: data.userId,
+        userName: data.userName,
+        content: data.content,
+        createdAt: data.createdAt
+      });
+    });
+
+    res.json({
+      success: true,
+      message: 'Comentarios obtenidos exitosamente',
+      data: comments
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error obteniendo comentarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comentarios',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener detalles de una lista pública con información de interacción del usuario
+app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener la lista
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+
+    // Verificar si el usuario puede ver la lista
+    if (!listData.isPublic && listData.creatorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para ver esta lista'
+      });
+    }
+
+    // Obtener información de interacción del usuario (solo para listas públicas)
+    let hasStarred = false;
+    if (listData.isPublic) {
+      const userStar = await db.collection('listStars')
+        .where('listId', '==', listId)
+        .where('userId', '==', uid)
+        .get();
+      hasStarred = !userStar.empty;
+    }
+
+    res.json({
+      success: true,
+      message: 'Lista obtenida exitosamente',
+      data: {
+        id: listDoc.id,
+        title: listData.title,
+        description: listData.description,
+        isPublic: listData.isPublic,
+        creatorId: listData.creatorId,
+        items: listData.items || [],
+        completedItems: listData.completedItems || 0,
+        totalItems: listData.totalItems || 0,
+        stars: listData.stars || 0,
+        comments: listData.comments || 0,
+        hasStarred: hasStarred,
+        isCreator: listData.creatorId === uid,
+        createdAt: listData.createdAt,
+        updatedAt: listData.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error obteniendo lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo lista',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para copiar una lista pública
+app.post('/api/lists/:listId/copy', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener la lista original
+    const originalListDoc = await db.collection('lists').doc(listId).get();
+    if (!originalListDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const originalData = originalListDoc.data();
+    
+    // Verificar que la lista sea pública
+    if (!originalData.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo se pueden copiar listas públicas'
+      });
+    }
+
+    // Crear la copia
+    const copiedListData = {
+      title: `${originalData.title} (Copia)`,
+      description: originalData.description,
+      isPublic: false, // La copia es privada por defecto
+      creatorId: uid,
+      originalListId: listId, // Referencia a la lista original
+      items: originalData.items.map(item => ({
+        ...item,
+        id: `item_${Date.now()}_${Math.random()}`,
+        completed: false, // Resetear estado de completado
+        createdAt: new Date()
+      })),
+      completedItems: 0,
+      totalItems: originalData.items.length,
+      stars: 0,
+      comments: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const copiedListRef = await db.collection('lists').add(copiedListData);
+    
+    console.log('✅ [LISTS] Lista copiada exitosamente:', copiedListRef.id);
+
+    res.json({
+      success: true,
+      message: 'Lista copiada exitosamente',
+      data: {
+        id: copiedListRef.id,
+        ...copiedListData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error copiando lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error copiando lista',
+      error: error.message
+    });
+  }
+});
+
 // ===== SISTEMA DE PUBLICACIONES EN COMUNIDADES =====
 
 // Endpoint para crear una publicación en una comunidad (recibe URL de imagen)
