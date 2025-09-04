@@ -5483,18 +5483,42 @@ app.get('/api/lists/:listId/items/:itemId/comments', async (req, res) => {
       .get();
 
     const comments = [];
-    commentsSnapshot.forEach(doc => {
+    
+    // Obtener información de perfil para cada comentario
+    for (const doc of commentsSnapshot.docs) {
       const data = doc.data();
+      
+      // Obtener información del perfil del usuario
+      let userProfile = null;
+      try {
+        const userDoc = await db.collection('users').doc(data.userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          userProfile = {
+            displayName: userData.displayName || data.userName || 'Usuario',
+            photoURL: userData.photoURL || null
+          };
+        }
+      } catch (error) {
+        console.log('⚠️ [LISTS] Error obteniendo perfil del usuario:', data.userId, error.message);
+        // Usar datos del comentario como fallback
+        userProfile = {
+          displayName: data.userName || 'Usuario',
+          photoURL: null
+        };
+      }
+
       comments.push({
         id: doc.id,
         listId: data.listId,
         itemId: data.itemId,
         userId: data.userId,
-        userName: data.userName,
+        userName: userProfile.displayName,
+        userPhoto: userProfile.photoURL,
         content: data.content,
         createdAt: data.createdAt
       });
-    });
+    }
 
     res.json({
       success: true,
