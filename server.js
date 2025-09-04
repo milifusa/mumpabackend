@@ -5080,6 +5080,201 @@ app.delete('/api/lists/:listId/items/:itemId', authenticateToken, async (req, re
   }
 });
 
+// Endpoint para calificar un item de lista pública
+app.post('/api/lists/:listId/items/:itemId/rate', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { listId, itemId } = req.params;
+    const { rating } = req.body; // rating del 1 al 5
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Validar rating
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'El rating debe ser un número del 1 al 5'
+      });
+    }
+
+    // Verificar que la lista existe y es pública
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (!listData.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo se pueden calificar items de listas públicas'
+      });
+    }
+
+    // Verificar que el item existe
+    const item = listData.items.find(item => item.id === itemId);
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item no encontrado'
+      });
+    }
+
+    // Verificar si el usuario ya calificó este item
+    const existingRating = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .where('itemId', '==', itemId)
+      .where('userId', '==', uid)
+      .get();
+
+    let ratingData;
+    if (existingRating.empty) {
+      // Crear nueva calificación
+      ratingData = {
+        listId: listId,
+        itemId: itemId,
+        userId: uid,
+        rating: parseInt(rating),
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      await db.collection('itemRatings').add(ratingData);
+    } else {
+      // Actualizar calificación existente
+      const ratingDoc = existingRating.docs[0];
+      ratingData = {
+        ...ratingDoc.data(),
+        rating: parseInt(rating),
+        updatedAt: new Date()
+      };
+      await db.collection('itemRatings').doc(ratingDoc.id).update({
+        rating: parseInt(rating),
+        updatedAt: new Date()
+      });
+    }
+
+    // Calcular promedio de calificaciones para este item
+    const allRatings = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .where('itemId', '==', itemId)
+      .get();
+
+    let totalRating = 0;
+    let ratingCount = 0;
+    allRatings.forEach(doc => {
+      totalRating += doc.data().rating;
+      ratingCount++;
+    });
+
+    const averageRating = ratingCount > 0 ? (totalRating / ratingCount).toFixed(1) : 0;
+
+    console.log('✅ [LISTS] Item calificado exitosamente:', itemId, 'Rating:', rating);
+
+    res.json({
+      success: true,
+      message: 'Item calificado exitosamente',
+      data: {
+        listId: listId,
+        itemId: itemId,
+        rating: parseInt(rating),
+        averageRating: parseFloat(averageRating),
+        totalRatings: ratingCount,
+        isNewRating: existingRating.empty
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error calificando item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error calificando item',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener calificaciones de un item
+app.get('/api/lists/:listId/items/:itemId/ratings', async (req, res) => {
+  try {
+    const { listId, itemId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la lista existe y es pública
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    if (!listData.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo se pueden ver calificaciones de items de listas públicas'
+      });
+    }
+
+    // Obtener todas las calificaciones del item
+    const ratingsSnapshot = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .where('itemId', '==', itemId)
+      .get();
+
+    let totalRating = 0;
+    let ratingCount = 0;
+    const ratings = [];
+
+    ratingsSnapshot.forEach(doc => {
+      const data = doc.data();
+      totalRating += data.rating;
+      ratingCount++;
+      ratings.push({
+        id: doc.id,
+        userId: data.userId,
+        rating: data.rating,
+        createdAt: data.createdAt
+      });
+    });
+
+    const averageRating = ratingCount > 0 ? (totalRating / ratingCount).toFixed(1) : 0;
+
+    res.json({
+      success: true,
+      message: 'Calificaciones obtenidas exitosamente',
+      data: {
+        itemId: itemId,
+        averageRating: parseFloat(averageRating),
+        totalRatings: ratingCount,
+        ratings: ratings
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LISTS] Error obteniendo calificaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo calificaciones',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para dar/quitar estrella a una lista pública
 app.post('/api/lists/:listId/star', authenticateToken, async (req, res) => {
   try {
