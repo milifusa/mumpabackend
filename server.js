@@ -3870,7 +3870,7 @@ app.post('/api/communities', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint para buscar en todas las comunidades (públicas y privadas) excepto las del usuario
+// Endpoint para buscar en todas las comunidades (públicas y privadas) incluyendo las del usuario
 app.get('/api/communities/search', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -3893,29 +3893,22 @@ app.get('/api/communities/search', authenticateToken, async (req, res) => {
     const searchTerm = query.trim().toLowerCase();
     const searchLimit = Math.min(parseInt(limit), 50); // Máximo 50 resultados
 
-    // Obtener todas las comunidades excepto las del usuario
+    // Obtener TODAS las comunidades (incluyendo las del usuario)
     let communitiesSnapshot;
     try {
-      // Intentar con ordenamiento - obtener TODAS las comunidades excepto las del usuario
+      // Intentar con ordenamiento - obtener TODAS las comunidades
       communitiesSnapshot = await db.collection('communities')
-        .where('creatorId', '!=', uid) // Excluir comunidades del usuario actual
-        .orderBy('creatorId') // Necesario para la consulta !=
         .orderBy('createdAt', 'desc')
         .get();
     } catch (indexError) {
       console.log('⚠️ [COMMUNITIES SEARCH] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
-      // Fallback: obtener sin ordenamiento y filtrar en memoria
+      // Fallback: obtener sin ordenamiento
       communitiesSnapshot = await db.collection('communities').get();
     }
 
     const communities = [];
     communitiesSnapshot.forEach(doc => {
       const data = doc.data();
-      
-      // Filtrar en memoria si no se pudo usar el índice
-      if (data.creatorId === uid) {
-        return; // Saltar comunidades del usuario actual
-      }
       
       // Buscar en nombre, palabras clave y descripción
       const nameMatch = data.name.toLowerCase().includes(searchTerm);
@@ -3925,6 +3918,9 @@ app.get('/api/communities/search', authenticateToken, async (req, res) => {
       const descriptionMatch = data.description.toLowerCase().includes(searchTerm);
       
       if (nameMatch || keywordsMatch || descriptionMatch) {
+        const isCreator = data.creatorId === uid;
+        const isMember = data.members && data.members.includes(uid);
+        
         communities.push({
           id: doc.id,
           name: data.name,
@@ -3933,8 +3929,10 @@ app.get('/api/communities/search', authenticateToken, async (req, res) => {
           imageUrl: data.imageUrl,
           isPublic: data.isPublic,
           memberCount: data.memberCount || 0,
-          canJoin: data.isPublic, // Solo las públicas permiten unirse directamente
-          joinType: data.isPublic ? 'direct' : 'request', // Tipo de unión permitida
+          isCreator: isCreator,
+          isMember: isMember,
+          canJoin: !isMember && data.isPublic, // Solo si no es miembro y es pública
+          joinType: !isMember ? (data.isPublic ? 'direct' : 'request') : null, // Tipo de unión si no es miembro
           createdAt: data.createdAt,
           updatedAt: data.updatedAt,
           // Campos de relevancia para el ranking
