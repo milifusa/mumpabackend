@@ -4631,11 +4631,18 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
     const listData = {
       title: title.trim(),
       description: description ? description.trim() : '',
+      imageUrl: req.body.imageUrl || null, // URL de imagen de la lista
       isPublic: isPublic === 'true' || isPublic === true,
       creatorId: uid,
       items: items.map((item, index) => ({
         id: `item_${Date.now()}_${index}`,
         text: item.text ? item.text.trim() : '',
+        imageUrl: item.imageUrl || null, // URL de imagen del item
+        priority: item.priority || 'medium', // low, medium, high
+        details: item.details || '', // Detalles adicionales
+        brand: item.brand || '', // Marca
+        store: item.store || '', // Tienda
+        approximatePrice: item.approximatePrice || null, // Precio aproximado
         completed: false,
         createdAt: new Date()
       })),
@@ -4701,6 +4708,7 @@ app.get('/api/user/lists', authenticateToken, async (req, res) => {
         id: doc.id,
         title: data.title,
         description: data.description,
+        imageUrl: data.imageUrl || null,
         isPublic: data.isPublic,
         items: data.items || [],
         completedItems: data.completedItems || 0,
@@ -4755,6 +4763,7 @@ app.get('/api/lists/public', async (req, res) => {
         id: doc.id,
         title: data.title,
         description: data.description,
+        imageUrl: data.imageUrl || null,
         creatorId: data.creatorId,
         items: data.items || [],
         completedItems: data.completedItems || 0,
@@ -4820,6 +4829,7 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
 
     if (title !== undefined) updateData.title = title.trim();
     if (description !== undefined) updateData.description = description.trim();
+    if (req.body.imageUrl !== undefined) updateData.imageUrl = req.body.imageUrl || null;
     if (isPublic !== undefined) updateData.isPublic = isPublic === 'true' || isPublic === true;
 
     await db.collection('lists').doc(listId).update(updateData);
@@ -4884,6 +4894,12 @@ app.post('/api/lists/:listId/items', authenticateToken, async (req, res) => {
     const newItem = {
       id: `item_${Date.now()}_${Math.random()}`,
       text: text.trim(),
+      imageUrl: req.body.imageUrl || null,
+      priority: req.body.priority || 'medium',
+      details: req.body.details || '',
+      brand: req.body.brand || '',
+      store: req.body.store || '',
+      approximatePrice: req.body.approximatePrice || null,
       completed: false,
       createdAt: new Date()
     };
@@ -5347,6 +5363,7 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
         id: listDoc.id,
         title: listData.title,
         description: listData.description,
+        imageUrl: listData.imageUrl || null,
         isPublic: listData.isPublic,
         creatorId: listData.creatorId,
         items: listData.items || [],
@@ -5407,6 +5424,7 @@ app.post('/api/lists/:listId/copy', authenticateToken, async (req, res) => {
     const copiedListData = {
       title: `${originalData.title} (Copia)`,
       description: originalData.description,
+      imageUrl: originalData.imageUrl, // Copiar imagen de la lista original
       isPublic: false, // La copia es privada por defecto
       creatorId: uid,
       originalListId: listId, // Referencia a la lista original
