@@ -216,24 +216,63 @@ const setupFirebase = () => {
   }
 };
 
+// Función para validar si un mensaje es relevante al tema de doula
+const isRelevantToDoulaScope = (message) => {
+  const lowerMessage = message.toLowerCase();
+  
+  // Palabras clave relacionadas con el ámbito de doula (embarazo, parto, crianza)
+  const onTopicKeywords = [
+    'embarazo', 'embarazada', 'gestación', 'bebé', 'bebe', 'hijo', 'hija', 'niño', 'niña',
+    'parto', 'dar a luz', 'contracciones', 'posparto', 'postparto', 'recuperación',
+    'lactancia', 'amamantar', 'leche materna', 'pecho', 'teta',
+    'recién nacido', 'recien nacido', 'neonato', 'cuidados',
+    'trimestre', 'semana', 'mes', 'desarrollo', 'crecimiento',
+    'pañal', 'panal', 'baño', 'sueño', 'dormir', 'alimentación', 'alimentacion',
+    'maternidad', 'paternidad', 'crianza', 'familia',
+    'síntoma', 'sintoma', 'dolor', 'malestar', 'náusea', 'nausea', 'vómito', 'vomito',
+    'vitamina', 'ácido fólico', 'acido folico', 'hierro', 'calcio',
+    'ecografía', 'ecografia', 'ultrasonido', 'ginecólogo', 'ginecologo', 'obstetra', 'matrona',
+    'cesárea', 'cesarea', 'parto natural', 'epidural',
+    'depresión posparto', 'depresion posparto', 'ansiedad', 'estrés', 'estres',
+    'cordón umbilical', 'cordon umbilical', 'placenta', 'útero', 'utero',
+    'movimientos fetales', 'patadas', 'feto', 'embrión', 'embrion'
+  ];
+  
+  // Palabras clave fuera del ámbito de doula
+  const offTopicKeywords = [
+    'taco', 'tacos', 'pizza', 'hamburguesa', 'burrito', 'torta', 'pastel', 'postre',
+    'programación', 'programacion', 'código', 'codigo', 'javascript', 'python', 'html', 'css', 'desarrollo web', 'app', 'software',
+    'finanzas', 'dinero', 'inversión', 'inversion', 'banco', 'crédito', 'credito', 'préstamo', 'prestamo', 'economía', 'economia',
+    'derecho', 'ley', 'legal', 'abogado', 'contrato', 'trámite', 'tramite', 'notario',
+    'tecnología', 'tecnologia', 'computadora', 'celular', 'smartphone', 'internet', 'redes sociales', 'facebook', 'instagram',
+    'cocina', 'cocinar', 'chef', 'restaurante', 'menú', 'menu',
+    'deportes', 'fútbol', 'futbol', 'basketball', 'basquetbol', 'gimnasio', 'musculación', 'musculacion',
+    'política', 'politica', 'elecciones', 'gobierno', 'presidente', 'partido político', 'partido politico',
+    'viajes', 'turismo', 'hotel', 'avión', 'avion', 'vacaciones', 'playa', 'crucero',
+    'automóvil', 'automovil', 'carro', 'coche', 'auto', 'mecánico', 'mecanico',
+    'música', 'musica', 'canción', 'cancion', 'concierto', 'festival',
+    'película', 'pelicula', 'serie', 'netflix', 'cine', 'actor', 'actriz',
+    'videojuegos', 'gaming', 'consola', 'playstation', 'xbox', 'nintendo'
+  ];
+  
+  // Verificar si contiene palabras claramente fuera de tema
+  const hasOffTopicKeyword = offTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Verificar si contiene palabras relacionadas con el tema
+  const hasOnTopicKeyword = onTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Es relevante si:
+  // 1. NO tiene palabras fuera de tema, O
+  // 2. Tiene palabras relacionadas con el tema (prioridad)
+  return !hasOffTopicKeyword || hasOnTopicKeyword;
+};
+
 // Función para generar respuestas de doula predefinidas
 const generateDoulaResponse = (message, userContext, childrenInfo, userName = 'Mamá') => {
   const lowerMessage = message.toLowerCase();
   
-  // Detectar temas fuera del ámbito de doula
-  const offTopicKeywords = [
-    'programación', 'código', 'javascript', 'python', 'html', 'css', 'desarrollo', 'app', 'software',
-    'finanzas', 'dinero', 'inversión', 'banco', 'crédito', 'préstamo', 'economía',
-    'derecho', 'ley', 'legal', 'abogado', 'contrato', 'trámite',
-    'medicina', 'diagnóstico', 'radiología', 'rayos x', 'análisis', 'medicamento', 'receta',
-    'tecnología', 'computadora', 'celular', 'internet', 'redes sociales',
-    'cocina', 'receta', 'comida', 'restaurante', 'cocinar',
-    'deportes', 'fútbol', 'basketball', 'gimnasio', 'ejercicio físico',
-    'política', 'elecciones', 'gobierno', 'presidente',
-    'viajes', 'turismo', 'hotel', 'avión', 'vacaciones'
-  ];
-  
-  const isOffTopic = offTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+  // Verificar si el tema es relevante
+  const isOffTopic = !isRelevantToDoulaScope(message);
   
   if (isOffTopic) {
     return `Soy Douli, tu asistente de Munpa especializada en acompañamiento durante el embarazo, parto y crianza temprana.
@@ -716,6 +755,59 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
       });
     }
 
+    // ⚠️ VALIDACIÓN DE TEMA: Verificar si el mensaje es relevante al ámbito de doula
+    if (!isRelevantToDoulaScope(message)) {
+      console.log('⚠️ [DOULA] Mensaje fuera del ámbito detectado:', message.substring(0, 50));
+      
+      // Obtener nombre del usuario para personalizar la respuesta
+      let userName = 'Mamá';
+      if (db) {
+        try {
+          const userDoc = await db.collection('users').doc(uid).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            userName = userData.displayName || userData.name || 'Mamá';
+            
+            if (!userName || userName === 'Mamá') {
+              try {
+                const authUser = await auth.getUser(uid);
+                userName = authUser.displayName || authUser.email?.split('@')[0] || 'Mamá';
+              } catch (authError) {
+                console.log('⚠️ [DOULA] No se pudo obtener nombre de Firebase Auth');
+              }
+            }
+          }
+        } catch (error) {
+          console.log('⚠️ [DOULA] Error obteniendo nombre de usuario:', error.message);
+        }
+      }
+      
+      const offTopicResponse = `¡Hola ${userName}! 👋 Soy Douli, tu asistente de Munpa especializada en acompañamiento durante el embarazo, parto y crianza temprana.
+
+🤱 **Mi especialidad es ayudarte con:**
+• Embarazo y preparación al parto
+• Lactancia y cuidados del bebé
+• Apoyo emocional para familias
+• Desarrollo infantil y crianza
+• Señales de alarma y cuándo consultar al médico
+
+💬 **Tu pregunta parece estar fuera de mi área de especialidad.** Estoy aquí exclusivamente para acompañarte en temas relacionados con el embarazo, parto y crianza.
+
+¿Hay algo relacionado con tu embarazo, tu bebé o tu experiencia como madre/padre en lo que pueda ayudarte? 💝`;
+
+      return res.json({
+        success: true,
+        message: 'Respuesta de la doula virtual',
+        data: {
+          response: offTopicResponse,
+          timestamp: new Date().toISOString(),
+          usedFallback: true,
+          source: 'off-topic-filter',
+          filtered: true
+        }
+      });
+    }
+
     // Verificar que OpenAI esté configurado
     if (!openai) {
       return res.status(500).json({
@@ -929,29 +1021,35 @@ ${userMemory.preferences ? `Preferencias: ${JSON.stringify(userMemory.preference
 - Embarazo y parto (acompañamiento, recuperación, adaptación)
 - Señales de alarma para derivar a profesionales de salud
 
-🚫 **POLÍTICA DE ALCANCE - SI TE PREGUNTAN SOBRE:**
+🚫 **POLÍTICA DE ALCANCE ESTRICTA - NUNCA RESPONDAS SOBRE:**
+- Comida general (tacos, pizza, recetas de cocina, restaurantes)
 - Finanzas, programación, tecnología
 - Diagnóstico médico detallado
 - Radiología, interpretación de estudios
-- Recetas de medicamentos
+- Recetas de medicamentos específicos
 - Derecho, trámites legales
+- Deportes, entretenimiento, viajes
+- Política, automóviles, música
 - Cualquier tema fuera del ámbito de doula
 
-**RESPUESTA OBLIGATORIA:**
-"¡Hola ${userName}! Soy Douli, tu asistente de Munpa especializada en acompañamiento durante el embarazo, parto y crianza temprana.
+⚠️ **SI LA PREGUNTA NO ESTÁ RELACIONADA CON EMBARAZO, PARTO O CRIANZA:**
 
-🤱 **Mi especialidad es:**
+**DEBES RESPONDER EXACTAMENTE ASÍ (NO RESPONDAS LA PREGUNTA ORIGINAL):**
+
+"¡Hola ${userName}! 👋 Soy Douli, tu asistente de Munpa especializada en acompañamiento durante el embarazo, parto y crianza temprana.
+
+🤱 **Mi especialidad es ayudarte con:**
 • Embarazo y preparación al parto
 • Lactancia y cuidados del bebé
 • Apoyo emocional para familias
-• Señales de alarma y cuándo consultar
+• Desarrollo infantil y crianza
+• Señales de alarma y cuándo consultar al médico
 
-📞 **Para tu consulta sobre [tema fuera del ámbito], te recomiendo:**
-• Consultar con un profesional especializado
-• Buscar información en fuentes oficiales
-• Contactar servicios específicos para ese tema
+💬 **Tu pregunta parece estar fuera de mi área de especialidad.** Estoy aquí exclusivamente para acompañarte en temas relacionados con el embarazo, parto y crianza.
 
-¿Hay algo relacionado con tu embarazo, parto o crianza en lo que pueda ayudarte? 💝"
+¿Hay algo relacionado con tu embarazo, tu bebé o tu experiencia como madre/padre en lo que pueda ayudarte? 💝"
+
+**IMPORTANTE:** NO respondas preguntas sobre comida, tacos, cocina, tecnología, deportes, o cualquier tema no relacionado con embarazo/parto/crianza. Si la pregunta no está relacionada, usa la respuesta anterior SIN EXCEPCIÓN.
 
 ⚠️ **LIMITACIONES MÉDICAS:**
 - NO haces diagnóstico médico
