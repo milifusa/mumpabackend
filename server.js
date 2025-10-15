@@ -238,33 +238,68 @@ const isRelevantToDoulaScope = (message) => {
     'movimientos fetales', 'patadas', 'feto', 'embrión', 'embrion'
   ];
   
-  // Palabras clave fuera del ámbito de doula
-  const offTopicKeywords = [
-    'taco', 'tacos', 'pizza', 'hamburguesa', 'burrito', 'torta', 'pastel', 'postre',
-    'programación', 'programacion', 'código', 'codigo', 'javascript', 'python', 'html', 'css', 'desarrollo web', 'app', 'software',
-    'finanzas', 'dinero', 'inversión', 'inversion', 'banco', 'crédito', 'credito', 'préstamo', 'prestamo', 'economía', 'economia',
-    'derecho', 'ley', 'legal', 'abogado', 'contrato', 'trámite', 'tramite', 'notario',
-    'tecnología', 'tecnologia', 'computadora', 'celular', 'smartphone', 'internet', 'redes sociales', 'facebook', 'instagram',
-    'cocina', 'cocinar', 'chef', 'restaurante', 'menú', 'menu',
-    'deportes', 'fútbol', 'futbol', 'basketball', 'basquetbol', 'gimnasio', 'musculación', 'musculacion',
-    'política', 'politica', 'elecciones', 'gobierno', 'presidente', 'partido político', 'partido politico',
-    'viajes', 'turismo', 'hotel', 'avión', 'avion', 'vacaciones', 'playa', 'crucero',
-    'automóvil', 'automovil', 'carro', 'coche', 'auto', 'mecánico', 'mecanico',
-    'música', 'musica', 'canción', 'cancion', 'concierto', 'festival',
+  // Palabras clave ALTAMENTE prohibidas (siempre rechazar, incluso si menciona embarazo)
+  const strictlyOffTopicKeywords = [
+    'taco', 'tacos', 'pizza', 'hamburguesa', 'burrito', 'enchilada', 'quesadilla',
+    'programación', 'programacion', 'código', 'codigo', 'javascript', 'python', 'html', 'css', 'desarrollo web', 'software',
+    'fútbol', 'futbol', 'basketball', 'basquetbol', 'partido de', 'equipo deportivo',
     'película', 'pelicula', 'serie', 'netflix', 'cine', 'actor', 'actriz',
-    'videojuegos', 'gaming', 'consola', 'playstation', 'xbox', 'nintendo'
+    'videojuegos', 'gaming', 'consola', 'playstation', 'xbox', 'nintendo',
+    'automóvil', 'automovil', 'carro', 'coche', 'auto mecánica', 'mecánico automotriz', 'arreglo carro'
   ];
   
-  // Verificar si contiene palabras claramente fuera de tema
-  const hasOffTopicKeyword = offTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+  // Palabras clave fuera del ámbito (rechazar solo si NO hay palabras de embarazo)
+  const generalOffTopicKeywords = [
+    'finanzas', 'dinero', 'inversión', 'inversion', 'banco', 'crédito', 'credito', 'préstamo', 'prestamo', 'economía', 'economia',
+    'derecho', 'ley', 'legal', 'abogado', 'contrato', 'trámite', 'tramite', 'notario',
+    'tecnología', 'tecnologia', 'computadora', 'smartphone', 'internet', 'redes sociales', 'facebook', 'instagram',
+    'cocina general', 'cocinar', 'chef', 'restaurante', 'menú restaurante', 'menu restaurante',
+    'gimnasio', 'musculación', 'musculacion', 'pesas', 'entrenamiento deportivo',
+    'política', 'politica', 'elecciones', 'gobierno', 'presidente', 'partido político', 'partido politico',
+    'viajes', 'turismo', 'hotel', 'avión', 'avion', 'crucero',
+    'música concierto', 'musica concierto', 'festival musical'
+  ];
+  
+  // Patrones de preguntas claramente sobre comida no relacionada con embarazo
+  const foodPatterns = [
+    /receta de (taco|pizza|hamburguesa|pasta|postre|pastel|torta)/i,
+    /cómo (hacer|preparar|cocinar) (taco|pizza|hamburguesa|pasta)/i,
+    /como (hacer|preparar|cocinar) (taco|pizza|hamburguesa|pasta)/i,
+    /ingredientes (para|de) (taco|pizza|hamburguesa|pasta)/i,
+    /(dónde|donde) (comprar|comer|encontrar) (taco|pizza|hamburguesa)/i
+  ];
+  
+  // Verificar patrones de comida prohibidos
+  const matchesFoodPattern = foodPatterns.some(pattern => pattern.test(message));
+  
+  // Verificar palabras estrictamente prohibidas
+  const hasStrictlyOffTopicKeyword = strictlyOffTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+  
+  // Verificar palabras generalmente fuera de tema
+  const hasGeneralOffTopicKeyword = generalOffTopicKeywords.some(keyword => lowerMessage.includes(keyword));
   
   // Verificar si contiene palabras relacionadas con el tema
   const hasOnTopicKeyword = onTopicKeywords.some(keyword => lowerMessage.includes(keyword));
   
-  // Es relevante si:
-  // 1. NO tiene palabras fuera de tema, O
-  // 2. Tiene palabras relacionadas con el tema (prioridad)
-  return !hasOffTopicKeyword || hasOnTopicKeyword;
+  // Lógica de validación:
+  // 1. Si coincide con patrones de comida prohibidos -> RECHAZAR
+  // 2. Si tiene palabras estrictamente prohibidas -> RECHAZAR siempre
+  // 3. Si tiene palabras generalmente fuera de tema Y NO tiene palabras de embarazo -> RECHAZAR
+  // 4. De lo contrario -> PERMITIR
+  
+  if (matchesFoodPattern) {
+    return false; // Rechazar recetas de comida
+  }
+  
+  if (hasStrictlyOffTopicKeyword) {
+    return false; // Rechazar temas estrictamente prohibidos
+  }
+  
+  if (hasGeneralOffTopicKeyword && !hasOnTopicKeyword) {
+    return false; // Rechazar temas generales fuera del ámbito si no menciona embarazo
+  }
+  
+  return true; // Permitir el resto
 };
 
 // Función para generar respuestas de doula predefinidas
