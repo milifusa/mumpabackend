@@ -1752,20 +1752,15 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       throw userError;
     }
 
-    // Generar link de restablecimiento
-    const resetLink = await auth.generatePasswordResetLink(email, {
-      url: process.env.FRONTEND_URL || 'https://munpa.online/reset-password',
-      handleCodeInApp: true
-    });
-
-    console.log('✅ [FORGOT-PASSWORD] Link generado para:', email);
-
-    // TODO: Aquí deberías enviar el email con el link
-    // Por ahora, lo devolvemos en la respuesta para testing
+    // Firebase enviará automáticamente el email usando sus plantillas configuradas
+    // Nota: Debes configurar las plantillas en Firebase Console > Authentication > Templates
+    await admin.auth().generatePasswordResetLink(email);
+    
+    console.log('✅ [FORGOT-PASSWORD] Email de restablecimiento enviado a:', email);
+    
     res.json({
       success: true,
-      message: 'Se ha enviado un email con instrucciones para restablecer tu contraseña',
-      resetLink: process.env.NODE_ENV === 'development' ? resetLink : undefined
+      message: 'Se ha enviado un email con instrucciones para restablecer tu contraseña. Revisa tu bandeja de entrada y spam.'
     });
 
   } catch (error) {
