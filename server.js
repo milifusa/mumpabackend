@@ -1609,12 +1609,33 @@ app.post('/api/auth/google-login', async (req, res) => {
         await db.collection('users').doc(uid).set(newUserData);
         console.log('✅ [GOOGLE-LOGIN] Nuevo usuario creado en Firestore:', uid);
       } else {
-        // Actualizar última conexión
-        await db.collection('users').doc(uid).update({
+        // Actualizar última conexión y datos de Google
+        const updateData = {
           updatedAt: new Date(),
           lastLoginAt: new Date()
-        });
-        console.log('✅ [GOOGLE-LOGIN] Usuario existente actualizado:', uid);
+        };
+        
+        // Actualizar displayName y photoURL desde Firebase Auth si están disponibles
+        if (userRecord.displayName) {
+          updateData.displayName = userRecord.displayName;
+        } else if (displayName) {
+          updateData.displayName = displayName;
+        }
+        
+        if (userRecord.photoURL) {
+          updateData.photoURL = userRecord.photoURL;
+        } else if (photoURL) {
+          updateData.photoURL = photoURL;
+        }
+        
+        // Actualizar provider
+        const existingUserData = userDoc.data();
+        if (!existingUserData.provider || existingUserData.provider !== 'google') {
+          updateData.provider = 'google';
+        }
+        
+        await db.collection('users').doc(uid).update(updateData);
+        console.log('✅ [GOOGLE-LOGIN] Usuario existente actualizado:', updateData);
       }
     }
 
@@ -1692,6 +1713,23 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
       userRecord = await auth.getUserByEmail(email);
       uid = userRecord.uid;
       console.log('✅ [GOOGLE-LOGIN-SIMPLE] Usuario encontrado:', uid);
+      
+      // Actualizar Firebase Auth con los datos más recientes de Google
+      const authUpdateData = {};
+      if (displayName && displayName !== userRecord.displayName) {
+        authUpdateData.displayName = displayName;
+      }
+      if (photoURL && photoURL !== userRecord.photoURL) {
+        authUpdateData.photoURL = photoURL;
+      }
+      
+      // Si hay datos para actualizar en Auth
+      if (Object.keys(authUpdateData).length > 0) {
+        await auth.updateUser(uid, authUpdateData);
+        console.log('✅ [GOOGLE-LOGIN-SIMPLE] Firebase Auth actualizado:', authUpdateData);
+        // Recargar el userRecord para tener los datos actualizados
+        userRecord = await auth.getUser(uid);
+      }
     } catch (error) {
       if (error.code === 'auth/user-not-found') {
         // Crear nuevo usuario en Firebase Auth
@@ -1747,14 +1785,35 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
       isNewUser = true;
       console.log('✅ [GOOGLE-LOGIN-SIMPLE] Usuario creado en Firestore');
     } else {
-      // Actualizar última conexión
-      await userDocRef.update({
+      // Actualizar última conexión y datos de Google (siempre sobrescribir con datos actuales)
+      const updateData = {
         updatedAt: new Date(),
-        lastLoginAt: new Date(),
-        displayName: displayName || userDoc.data().displayName || '',
-        photoURL: photoURL || userDoc.data().photoURL || ''
-      });
-      console.log('✅ [GOOGLE-LOGIN-SIMPLE] Usuario actualizado en Firestore');
+        lastLoginAt: new Date()
+      };
+      
+      // Actualizar displayName si viene de Google
+      if (displayName) {
+        updateData.displayName = displayName;
+      }
+      
+      // Actualizar photoURL si viene de Google
+      if (photoURL) {
+        updateData.photoURL = photoURL;
+      }
+      
+      // Actualizar provider si no está establecido
+      const currentData = userDoc.data();
+      if (!currentData.provider || currentData.provider !== 'google') {
+        updateData.provider = 'google';
+      }
+      
+      // Actualizar googleId si viene
+      if (googleId && (!currentData.googleId || currentData.googleId !== googleId)) {
+        updateData.googleId = googleId;
+      }
+      
+      await userDocRef.update(updateData);
+      console.log('✅ [GOOGLE-LOGIN-SIMPLE] Usuario actualizado en Firestore:', updateData);
     }
 
     // Generar token personalizado
