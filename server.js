@@ -1505,7 +1505,119 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🔐 LOGIN CON GOOGLE
+// ==========================================
 
+// Endpoint para login/registro con Google
+app.post('/api/auth/google-login', async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!idToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token de Google es requerido'
+      });
+    }
+
+    if (!auth) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase no está configurado'
+      });
+    }
+
+    console.log('🔐 [GOOGLE-LOGIN] Verificando token de Google...');
+
+    // Verificar el token de Google
+    const decodedToken = await auth.verifyIdToken(idToken);
+    const uid = decodedToken.uid;
+    
+    console.log('✅ [GOOGLE-LOGIN] Token verificado para UID:', uid);
+
+    // Obtener información del usuario de Firebase Auth
+    const userRecord = await auth.getUser(uid);
+
+    // Verificar si el usuario existe en Firestore
+    let userDoc = null;
+    let isNewUser = false;
+
+    if (db) {
+      userDoc = await db.collection('users').doc(uid).get();
+      
+      if (!userDoc.exists) {
+        // Crear nuevo usuario en Firestore
+        isNewUser = true;
+        const newUserData = {
+          uid: uid,
+          email: userRecord.email,
+          displayName: userRecord.displayName || '',
+          photoURL: userRecord.photoURL || '',
+          emailVerified: userRecord.emailVerified,
+          provider: 'google',
+          gender: null,
+          childrenCount: 0,
+          isPregnant: false,
+          gestationWeeks: null,
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+
+        await db.collection('users').doc(uid).set(newUserData);
+        console.log('✅ [GOOGLE-LOGIN] Nuevo usuario creado en Firestore:', uid);
+      } else {
+        // Actualizar última conexión
+        await db.collection('users').doc(uid).update({
+          updatedAt: new Date(),
+          lastLoginAt: new Date()
+        });
+        console.log('✅ [GOOGLE-LOGIN] Usuario existente actualizado:', uid);
+      }
+    }
+
+    // Generar token personalizado para el cliente
+    const customToken = await auth.createCustomToken(uid);
+
+    res.json({
+      success: true,
+      message: isNewUser ? 'Cuenta creada exitosamente' : 'Login exitoso',
+      isNewUser: isNewUser,
+      data: {
+        uid: userRecord.uid,
+        email: userRecord.email,
+        displayName: userRecord.displayName,
+        photoURL: userRecord.photoURL,
+        emailVerified: userRecord.emailVerified,
+        customToken: customToken
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [GOOGLE-LOGIN] Error:', error);
+    
+    if (error.code === 'auth/id-token-expired') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token de Google expirado. Por favor, inicia sesión nuevamente.'
+      });
+    }
+
+    if (error.code === 'auth/argument-error') {
+      return res.status(400).json({
+        success: false,
+        message: 'Token de Google inválido'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error en autenticación con Google',
+      error: error.message
+    });
+  }
+});
 
 // Endpoint protegido - Perfil del usuario
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
