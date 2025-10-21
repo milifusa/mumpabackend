@@ -1843,6 +1843,203 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🍎 LOGIN CON APPLE
+// ==========================================
+
+// Endpoint para login/registro con Apple
+app.post('/api/auth/apple-login', async (req, res) => {
+  try {
+    const { identityToken, user, email, fullName } = req.body;
+
+    if (!identityToken && !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token de Apple o email es requerido'
+      });
+    }
+
+    if (!auth || !db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase no está configurado'
+      });
+    }
+
+    console.log('🍎 [APPLE-LOGIN] Iniciando login con Apple...');
+    console.log('🍎 [APPLE-LOGIN] Email:', email);
+    console.log('🍎 [APPLE-LOGIN] Full Name:', fullName);
+
+    let uid, userRecord, isNewUser = false;
+
+    // Intentar verificar el identity token de Apple
+    try {
+      if (identityToken) {
+        console.log('🔐 [APPLE-LOGIN] Verificando identity token...');
+        const decodedToken = await auth.verifyIdToken(identityToken);
+        uid = decodedToken.uid;
+        userRecord = await auth.getUser(uid);
+        console.log('✅ [APPLE-LOGIN] Token verificado, UID:', uid);
+      } else {
+        throw new Error('No identity token provided, will use email');
+      }
+    } catch (verifyError) {
+      console.log('⚠️ [APPLE-LOGIN] Token no válido o no proporcionado, usando email...');
+      
+      if (!email) {
+        throw new Error('Email es requerido cuando no se puede verificar el token');
+      }
+
+      try {
+        // Intentar obtener usuario por email
+        userRecord = await auth.getUserByEmail(email);
+        uid = userRecord.uid;
+        console.log('✅ [APPLE-LOGIN] Usuario encontrado por email:', uid);
+        
+        // Actualizar Firebase Auth con los datos de Apple si están disponibles
+        const authUpdateData = {};
+        
+        if (fullName) {
+          const displayName = fullName.givenName && fullName.familyName
+            ? `${fullName.givenName} ${fullName.familyName}`
+            : fullName.givenName || fullName.familyName || '';
+          
+          if (displayName && displayName !== userRecord.displayName) {
+            authUpdateData.displayName = displayName;
+          }
+        }
+        
+        // Actualizar Auth si hay cambios
+        if (Object.keys(authUpdateData).length > 0) {
+          await auth.updateUser(uid, authUpdateData);
+          console.log('✅ [APPLE-LOGIN] Firebase Auth actualizado:', authUpdateData);
+          userRecord = await auth.getUser(uid);
+        }
+      } catch (getUserError) {
+        if (getUserError.code === 'auth/user-not-found') {
+          // Crear nuevo usuario
+          console.log('📝 [APPLE-LOGIN] Creando nuevo usuario...');
+          
+          const displayName = fullName 
+            ? (fullName.givenName && fullName.familyName
+              ? `${fullName.givenName} ${fullName.familyName}`
+              : fullName.givenName || fullName.familyName || '')
+            : '';
+          
+          userRecord = await auth.createUser({
+            email: email,
+            displayName: displayName,
+            emailVerified: true, // Apple verifica los emails
+            disabled: false,
+            providerData: [{
+              providerId: 'apple.com',
+              uid: user || email,
+              displayName: displayName,
+              email: email
+            }]
+          });
+          
+          uid = userRecord.uid;
+          isNewUser = true;
+          console.log('✅ [APPLE-LOGIN] Usuario creado en Firebase Auth:', uid);
+        } else {
+          throw getUserError;
+        }
+      }
+    }
+
+    // Verificar/crear en Firestore
+    const userDocRef = db.collection('users').doc(uid);
+    const userDoc = await userDocRef.get();
+
+    if (!userDoc.exists) {
+      // Crear en Firestore
+      const displayName = fullName 
+        ? (fullName.givenName && fullName.familyName
+          ? `${fullName.givenName} ${fullName.familyName}`
+          : fullName.givenName || fullName.familyName || '')
+        : userRecord.displayName || '';
+
+      const newUserData = {
+        uid: uid,
+        email: email || userRecord.email,
+        displayName: displayName,
+        photoURL: null, // Apple no proporciona foto
+        emailVerified: true,
+        provider: 'apple',
+        appleUserId: user || '',
+        gender: null,
+        childrenCount: 0,
+        isPregnant: false,
+        gestationWeeks: null,
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      await userDocRef.set(newUserData);
+      isNewUser = true;
+      console.log('✅ [APPLE-LOGIN] Usuario creado en Firestore');
+    } else {
+      // Actualizar última conexión y datos de Apple
+      const updateData = {
+        updatedAt: new Date(),
+        lastLoginAt: new Date()
+      };
+      
+      // Actualizar displayName si viene de Apple (solo primera vez, Apple solo lo envía una vez)
+      if (fullName) {
+        const displayName = fullName.givenName && fullName.familyName
+          ? `${fullName.givenName} ${fullName.familyName}`
+          : fullName.givenName || fullName.familyName || '';
+        
+        if (displayName) {
+          updateData.displayName = displayName;
+        }
+      }
+      
+      // Actualizar provider si no está establecido
+      const currentData = userDoc.data();
+      if (!currentData.provider || currentData.provider !== 'apple') {
+        updateData.provider = 'apple';
+      }
+      
+      // Actualizar appleUserId si viene
+      if (user && (!currentData.appleUserId || currentData.appleUserId !== user)) {
+        updateData.appleUserId = user;
+      }
+      
+      await userDocRef.update(updateData);
+      console.log('✅ [APPLE-LOGIN] Usuario actualizado en Firestore:', updateData);
+    }
+
+    // Generar token personalizado
+    const customToken = await auth.createCustomToken(uid);
+
+    res.json({
+      success: true,
+      message: isNewUser ? 'Cuenta creada exitosamente' : 'Login exitoso',
+      isNewUser: isNewUser,
+      data: {
+        uid: uid,
+        email: email || userRecord.email,
+        displayName: userRecord.displayName || '',
+        photoURL: null,
+        emailVerified: true,
+        customToken: customToken
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APPLE-LOGIN] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en autenticación con Apple',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint protegido - Perfil del usuario
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
