@@ -4447,23 +4447,28 @@ TIPO DE TIP SOLICITADO: ${tipType}
 TIPS RECIENTES (NO REPITAS ESTOS):
 ${recentTips.length > 0 ? recentTips.map(tip => `- ${tip}`).join('\n') : 'Ninguno'}
 
-INSTRUCCIONES:
-- Genera EXACTAMENTE ${children.length} tip${children.length > 1 ? 's' : ''} (uno para cada hijo)
-- Cada tip debe ser ESPECÍFICO para ese hijo en particular
-- Menciona el NOMBRE del hijo en cada tip
-- Formato: emoji + nombre del hijo + consejo corto
+INSTRUCCIONES ESTRICTAS:
+- Genera EXACTAMENTE ${children.length} tip${children.length > 1 ? 's' : ''} (uno para cada hijo listado arriba)
+- USA EXACTAMENTE el nombre que aparece arriba (NO inventes nombres)
+- DEBES mencionar el nombre EXACTO del hijo en cada tip
+- Formato OBLIGATORIO: emoji + NOMBRE EXACTO DEL HIJO + consejo
 - En español
 - Relacionado con el tipo "${tipType}"
 - NO REPITAS ningún tip de la lista de "TIPS RECIENTES"
 - Cada tip en una línea separada
 
-IMPORTANTE:
-- Si el hijo es bebé (0-12 meses), enfócate en desarrollo temprano
-- Si el hijo es niño pequeño (1-3 años), enfócate en autonomía y lenguaje
-- Si el hijo es por nacer, enfócate en preparación
-- Cada tip debe ser único y personalizado para la edad de ese hijo
+⚠️ MUY IMPORTANTE - USAR NOMBRES EXACTOS:
+${children.map((child, index) => `- Hijo ${index + 1}: DEBES usar "${child.name}" (NO uses otro nombre)`).join('\n')}
 
-Genera ${children.length} tip${children.length > 1 ? 's' : ''} ahora (uno por línea):`
+CONTEXTO POR EDAD:
+- Si el hijo es bebé (0-12 meses), enfócate en desarrollo temprano
+- Si el hijo es niño pequeño (1-3 años), enfócate en autonomía y lenguaje  
+- Si el hijo es por nacer, enfócate en preparación
+
+EJEMPLO CORRECTO de formato:
+${children.length > 0 ? `🎨 ${children[0].name}: [consejo personalizado para ${children[0].name}]` : ''}
+
+Genera ${children.length} tip${children.length > 1 ? 's' : ''} ahora usando los NOMBRES EXACTOS listados arriba:`
           : `Eres una doula experta llamada "Douli". Necesito que generes SOLO 1 tip general de ${tipType}.
 
 ESTADO DE EMBARAZO:
