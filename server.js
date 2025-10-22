@@ -4281,7 +4281,9 @@ app.delete('/api/children/development-history', authenticateToken, async (req, r
 app.post('/api/children/tips', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { tipType = 'general' } = req.body; // general, alimentacion, desarrollo, salud, etc.
+    const { tipType = 'general', childId } = req.body; // general, alimentacion, desarrollo, salud, etc.
+    
+    console.log('💡 [TIPS] Solicitud de tip:', { tipType, childId, userId: uid });
 
     // Verificar si ya se dio un tip recientemente para evitar repetición
     let recentTips = [];
@@ -4310,24 +4312,34 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     }
 
     // Obtener información actualizada de los hijos
-    const childrenSnapshot = await db.collection('children')
-      .where('parentId', '==', uid)
-      .orderBy('createdAt', 'desc')
-      .get();
-
-    if (childrenSnapshot.empty) {
-      return res.status(404).json({
-        success: false,
-        message: 'No tienes hijos registrados'
-      });
-    }
-
-    const children = [];
-    childrenSnapshot.forEach(doc => {
-      const childData = doc.data();
+    let children = [];
+    
+    if (childId) {
+      // Si se proporciona childId, solo obtener ese hijo específico
+      console.log('🔍 [TIPS] Obteniendo información del hijo específico:', childId);
+      
+      const childDoc = await db.collection('children').doc(childId).get();
+      
+      if (!childDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Hijo no encontrado'
+        });
+      }
+      
+      const childData = childDoc.data();
+      
+      // Verificar que el hijo pertenece al usuario
+      if (childData.parentId !== uid) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes permiso para acceder a este hijo'
+        });
+      }
+      
       const currentInfo = getChildCurrentInfo(childData);
       children.push({
-        id: doc.id,
+        id: childDoc.id,
         name: childData.name,
         ageInMonths: childData.ageInMonths,
         currentAgeInMonths: currentInfo.currentAgeInMonths,
@@ -4336,7 +4348,41 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
         currentGestationWeeks: currentInfo.currentGestationWeeks,
         daysSinceCreation: currentInfo.daysSinceCreation
       });
-    });
+      
+      console.log('✅ [TIPS] Hijo específico obtenido:', children[0]);
+    } else {
+      // Si no se proporciona childId, obtener todos los hijos
+      console.log('🔍 [TIPS] Obteniendo todos los hijos del usuario');
+      
+      const childrenSnapshot = await db.collection('children')
+        .where('parentId', '==', uid)
+        .orderBy('createdAt', 'desc')
+        .get();
+
+      if (childrenSnapshot.empty) {
+        return res.status(404).json({
+          success: false,
+          message: 'No tienes hijos registrados'
+        });
+      }
+
+      childrenSnapshot.forEach(doc => {
+        const childData = doc.data();
+        const currentInfo = getChildCurrentInfo(childData);
+        children.push({
+          id: doc.id,
+          name: childData.name,
+          ageInMonths: childData.ageInMonths,
+          currentAgeInMonths: currentInfo.currentAgeInMonths,
+          isUnborn: childData.isUnborn,
+          gestationWeeks: childData.gestationWeeks,
+          currentGestationWeeks: currentInfo.currentGestationWeeks,
+          daysSinceCreation: currentInfo.daysSinceCreation
+        });
+      });
+      
+      console.log('✅ [TIPS] Todos los hijos obtenidos:', children.length);
+    }
 
     // Obtener perfil del usuario para verificar si está embarazada
     let isPregnant = false;
@@ -4372,55 +4418,67 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     console.log('👶 [CHILDREN] Contexto de hijos:', childrenContext);
     console.log('🤰 [PREGNANCY] Estado de embarazo:', { isPregnant, currentGestationWeeks });
 
-    // Generar tips usando OpenAI
+    // Generar tips usando OpenAI - UN TIP POR CADA HIJO
     let tips = [];
     if (openai) {
       try {
-        const prompt = `Eres una doula experta llamada "Douli". Necesito que generes SOLO 1 tip corto, útil y personalizado para una madre/padre.
+        // Si hay tips específicos de hijos, generar uno por cada hijo
+        const shouldGeneratePerChild = !['maternidad', 'crianza', 'embarazo'].includes(tipType);
+        
+        const prompt = shouldGeneratePerChild 
+          ? `Eres una doula experta llamada "Douli". Necesito que generes tips personalizados para cada hijo.
 
 INFORMACIÓN DE LOS HIJOS:
-${childrenContext}
-
-ESTADO DE EMBARAZO:
-${isPregnant ? `Actualmente embarazada de ${currentGestationWeeks} semanas` : 'No está embarazada actualmente'}
+${children.map((child, index) => {
+  if (child.isUnborn) {
+    return `${index + 1}. ${child.name}: Por nacer, ${child.currentGestationWeeks} semanas de gestación`;
+  } else {
+    const years = Math.floor(child.currentAgeInMonths / 12);
+    const months = child.currentAgeInMonths % 12;
+    const ageText = years > 0 
+      ? `${years} año${years > 1 ? 's' : ''}${months > 0 ? ` y ${months} mes${months > 1 ? 'es' : ''}` : ''}`
+      : `${months} mes${months > 1 ? 'es' : ''}`;
+    return `${index + 1}. ${child.name}: ${ageText} de edad`;
+  }
+}).join('\n')}
 
 TIPO DE TIP SOLICITADO: ${tipType}
 
 TIPS RECIENTES (NO REPITAS ESTOS):
 ${recentTips.length > 0 ? recentTips.map(tip => `- ${tip}`).join('\n') : 'Ninguno'}
 
-REQUISITOS:
-- SOLO 1 tip (no más)
-- Práctico y accionable
+INSTRUCCIONES:
+- Genera EXACTAMENTE ${children.length} tip${children.length > 1 ? 's' : ''} (uno para cada hijo)
+- Cada tip debe ser ESPECÍFICO para ese hijo en particular
+- Menciona el NOMBRE del hijo en cada tip
+- Formato: emoji + nombre del hijo + consejo corto
 - En español
-- Formato: emoji + texto corto
-- Relacionado con el tipo solicitado
-- COMPLETAMENTE DIFERENTE a los tips recientes mostrados arriba
-- ÚNICO y ORIGINAL
-
-TIPOS DE TIPS:
-- general: consejos generales de crianza para UN SOLO HIJO específico
-- alimentacion: consejos de alimentación para UN SOLO HIJO específico
-- desarrollo: hitos de desarrollo para UN SOLO HIJO específico
-- salud: consejos de salud para UN SOLO HIJO específico
-- sueño: consejos de sueño para UN SOLO HIJO específico
-- actividades: actividades recomendadas para UN SOLO HIJO específico
-- maternidad: consejos generales de maternidad/paternidad (no específico de un hijo)
-- crianza: consejos generales de crianza y educación (no específico de un hijo)
-- embarazo: consejos específicos para el embarazo actual de ${isPregnant ? `${currentGestationWeeks} semanas` : 'no aplica'}
-
-INSTRUCCIONES ESPECÍFICAS:
-${tipType === 'embarazo' && isPregnant ? `Como estás embarazada de ${currentGestationWeeks} semanas, genera un tip específico para esta etapa del embarazo. Incluye información relevante para las ${currentGestationWeeks} semanas.` : ''}
-${tipType === 'maternidad' || tipType === 'crianza' ? 'Genera un tip general de maternidad/crianza que sea útil para cualquier padre/madre, no específico de un hijo en particular.' : 'Genera un tip específico para UN SOLO HIJO (elige el más relevante para el tipo de tip solicitado). Incluye el nombre del hijo en el tip.'}
-
-IMPORTANTE: 
-- Genera SOLO 1 tip
-- Sé específico y personalizado
-- Evita respuestas genéricas
-- Incluye emoji relevante
+- Relacionado con el tipo "${tipType}"
 - NO REPITAS ningún tip de la lista de "TIPS RECIENTES"
-- Crea algo completamente nuevo y original
-- No incluyas explicaciones adicionales
+- Cada tip en una línea separada
+
+IMPORTANTE:
+- Si el hijo es bebé (0-12 meses), enfócate en desarrollo temprano
+- Si el hijo es niño pequeño (1-3 años), enfócate en autonomía y lenguaje
+- Si el hijo es por nacer, enfócate en preparación
+- Cada tip debe ser único y personalizado para la edad de ese hijo
+
+Genera ${children.length} tip${children.length > 1 ? 's' : ''} ahora (uno por línea):`
+          : `Eres una doula experta llamada "Douli". Necesito que generes SOLO 1 tip general de ${tipType}.
+
+ESTADO DE EMBARAZO:
+${isPregnant ? `Actualmente embarazada de ${currentGestationWeeks} semanas` : 'No está embarazada actualmente'}
+
+TIPS RECIENTES (NO REPITAS ESTOS):
+${recentTips.length > 0 ? recentTips.map(tip => `- ${tip}`).join('\n') : 'Ninguno'}
+
+INSTRUCCIONES:
+- Genera SOLO 1 tip general de ${tipType}
+- Formato: emoji + texto corto
+- En español
+- NO específico de ningún hijo en particular
+- NO REPITAS ningún tip de la lista de "TIPS RECIENTES"
+${tipType === 'embarazo' && isPregnant ? `\n- Específico para ${currentGestationWeeks} semanas de embarazo` : ''}
 
 Genera el tip ahora:`;
 
@@ -4436,7 +4494,7 @@ Genera el tip ahora:`;
               content: prompt
             }
           ],
-          max_tokens: 300,
+          max_tokens: shouldGeneratePerChild ? 150 * children.length : 300, // Más tokens si hay múltiples hijos
           temperature: 0.7
         });
 
