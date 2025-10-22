@@ -2034,6 +2034,180 @@ app.post('/api/auth/apple-login', async (req, res) => {
   }
 });
 
+// ==========================================
+// 📸 FOTO DE PERFIL DEL USUARIO
+// ==========================================
+
+// Endpoint para subir/actualizar foto de perfil del usuario
+app.post('/api/auth/profile/photo', authenticateToken, upload.single('photo'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ninguna foto'
+      });
+    }
+
+    console.log('📸 [PROFILE-PHOTO] Subiendo foto de perfil para usuario:', uid);
+    console.log('📸 [PROFILE-PHOTO] Archivo:', req.file.originalname, req.file.size, 'bytes');
+
+    // Subir a Firebase Storage
+    const bucket = admin.storage().bucket();
+    const fileName = `profile-photos/${uid}/${Date.now()}_${req.file.originalname}`;
+    const file = bucket.file(fileName);
+
+    await file.save(req.file.buffer, {
+      metadata: {
+        contentType: req.file.mimetype,
+        metadata: {
+          firebaseStorageDownloadTokens: uid
+        }
+      }
+    });
+
+    // Hacer el archivo público y obtener la URL
+    await file.makePublic();
+    const photoURL = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+    console.log('✅ [PROFILE-PHOTO] Foto subida:', photoURL);
+
+    // Actualizar en Firebase Auth
+    await auth.updateUser(uid, {
+      photoURL: photoURL
+    });
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(uid).update({
+      photoURL: photoURL,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [PROFILE-PHOTO] Perfil actualizado en Auth y Firestore');
+
+    res.json({
+      success: true,
+      message: 'Foto de perfil actualizada exitosamente',
+      data: {
+        photoURL: photoURL
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [PROFILE-PHOTO] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al subir la foto de perfil',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para actualizar foto de perfil con URL externa (Google, Apple, etc.)
+app.put('/api/auth/profile/photo', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { photoURL } = req.body;
+
+    if (!photoURL) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL de la foto es requerida'
+      });
+    }
+
+    console.log('📸 [PROFILE-PHOTO] Actualizando foto de perfil para usuario:', uid);
+    console.log('📸 [PROFILE-PHOTO] Nueva URL:', photoURL);
+
+    // Actualizar en Firebase Auth
+    await auth.updateUser(uid, {
+      photoURL: photoURL
+    });
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(uid).update({
+      photoURL: photoURL,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [PROFILE-PHOTO] Foto de perfil actualizada');
+
+    res.json({
+      success: true,
+      message: 'Foto de perfil actualizada exitosamente',
+      data: {
+        photoURL: photoURL
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [PROFILE-PHOTO] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al actualizar la foto de perfil',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para eliminar foto de perfil
+app.delete('/api/auth/profile/photo', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    console.log('🗑️ [PROFILE-PHOTO] Eliminando foto de perfil para usuario:', uid);
+
+    // Obtener la foto actual
+    const userDoc = await db.collection('users').doc(uid).get();
+    const userData = userDoc.data();
+    const currentPhotoURL = userData?.photoURL;
+
+    // Si la foto está en Firebase Storage, eliminarla
+    if (currentPhotoURL && currentPhotoURL.includes('storage.googleapis.com')) {
+      try {
+        const bucket = admin.storage().bucket();
+        // Extraer el nombre del archivo de la URL
+        const filePathMatch = currentPhotoURL.match(/profile-photos\/.+/);
+        if (filePathMatch) {
+          const filePath = decodeURIComponent(filePathMatch[0]);
+          const file = bucket.file(filePath);
+          await file.delete();
+          console.log('✅ [PROFILE-PHOTO] Archivo eliminado de Storage:', filePath);
+        }
+      } catch (storageError) {
+        console.log('⚠️ [PROFILE-PHOTO] Error al eliminar de Storage (continuando):', storageError.message);
+      }
+    }
+
+    // Actualizar en Firebase Auth
+    await auth.updateUser(uid, {
+      photoURL: null
+    });
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(uid).update({
+      photoURL: null,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [PROFILE-PHOTO] Foto de perfil eliminada');
+
+    res.json({
+      success: true,
+      message: 'Foto de perfil eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [PROFILE-PHOTO] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al eliminar la foto de perfil',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint protegido - Perfil del usuario
 app.get('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
