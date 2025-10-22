@@ -6609,13 +6609,17 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
       communityId: communityId,
       authorId: uid,
       content: content.trim(),
-      imageUrl: imageUrl,
       likes: [],
       likeCount: 0,
       commentCount: 0,
       createdAt: new Date(),
       updatedAt: new Date()
     };
+
+    // Solo agregar imageUrl si existe y no es undefined
+    if (imageUrl) {
+      postData.imageUrl = imageUrl;
+    }
 
     const postRef = await db.collection('posts').add(postData);
     
