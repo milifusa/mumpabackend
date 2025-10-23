@@ -2035,6 +2035,614 @@ app.post('/api/auth/apple-login', async (req, res) => {
 });
 
 // ==========================================
+// 👑 ADMIN DASHBOARD - ENDPOINTS DE ADMINISTRACIÓN
+// ==========================================
+
+// Middleware para verificar que el usuario es admin
+const isAdmin = async (req, res, next) => {
+  try {
+    const { uid } = req.user;
+    
+    // Obtener usuario de Firestore
+    const userDoc = await db.collection('users').doc(uid).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    const userData = userDoc.data();
+    
+    // Verificar si es admin
+    if (userData.role !== 'admin' && userData.isAdmin !== true) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos de administrador'
+      });
+    }
+    
+    next();
+  } catch (error) {
+    console.error('❌ [ADMIN] Error verificando permisos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando permisos de administrador'
+    });
+  }
+};
+
+// ========== ESTADÍSTICAS GENERALES ==========
+
+// Obtener estadísticas del dashboard
+app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('📊 [ADMIN] Obteniendo estadísticas...');
+
+    // Contar usuarios
+    const usersSnapshot = await db.collection('users').get();
+    const totalUsers = usersSnapshot.size;
+    
+    // Usuarios activos (últimos 30 días)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const activeUsers = usersSnapshot.docs.filter(doc => {
+      const data = doc.data();
+      return data.lastLoginAt && data.lastLoginAt.toDate() > thirtyDaysAgo;
+    }).length;
+
+    // Contar hijos
+    const childrenSnapshot = await db.collection('children').get();
+    const totalChildren = childrenSnapshot.size;
+
+    // Contar comunidades
+    const communitiesSnapshot = await db.collection('communities').get();
+    const totalCommunities = communitiesSnapshot.size;
+
+    // Contar posts
+    const postsSnapshot = await db.collection('posts').get();
+    const totalPosts = postsSnapshot.size;
+
+    // Contar listas
+    const listsSnapshot = await db.collection('lists').get();
+    const totalLists = listsSnapshot.size;
+
+    // Posts de últimos 7 días
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const recentPosts = postsSnapshot.docs.filter(doc => {
+      const data = doc.data();
+      return data.createdAt && data.createdAt.toDate() > sevenDaysAgo;
+    }).length;
+
+    res.json({
+      success: true,
+      data: {
+        users: {
+          total: totalUsers,
+          active: activeUsers,
+          inactive: totalUsers - activeUsers
+        },
+        children: {
+          total: totalChildren
+        },
+        communities: {
+          total: totalCommunities
+        },
+        posts: {
+          total: totalPosts,
+          lastWeek: recentPosts
+        },
+        lists: {
+          total: totalLists
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// ========== GESTIÓN DE USUARIOS ==========
+
+// Obtener todos los usuarios (con paginación)
+app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '', orderBy = 'createdAt', order = 'desc' } = req.query;
+    
+    console.log('👥 [ADMIN] Obteniendo usuarios:', { page, limit, search, orderBy, order });
+
+    let query = db.collection('users');
+
+    // Aplicar ordenamiento
+    query = query.orderBy(orderBy, order);
+
+    // Obtener todos los documentos
+    const snapshot = await query.get();
+    
+    // Filtrar por búsqueda si existe
+    let users = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate(),
+      lastLoginAt: doc.data().lastLoginAt?.toDate()
+    }));
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      users = users.filter(user => 
+        user.email?.toLowerCase().includes(searchLower) ||
+        user.displayName?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Aplicar paginación manual
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedUsers = users.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedUsers,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: users.length,
+        totalPages: Math.ceil(users.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo usuarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo usuarios',
+      error: error.message
+    });
+  }
+});
+
+// Obtener detalle de un usuario específico
+app.get('/api/admin/users/:userId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log('👤 [ADMIN] Obteniendo detalle del usuario:', userId);
+
+    // Obtener usuario de Firestore
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    // Obtener hijos del usuario
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', userId)
+      .get();
+    
+    const children = childrenSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Obtener comunidades del usuario
+    const communitiesSnapshot = await db.collection('communities')
+      .where('members', 'array-contains', userId)
+      .get();
+    
+    const communities = communitiesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name
+    }));
+
+    // Obtener posts del usuario
+    const postsSnapshot = await db.collection('posts')
+      .where('authorId', '==', userId)
+      .orderBy('createdAt', 'desc')
+      .limit(10)
+      .get();
+    
+    const posts = postsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          id: userDoc.id,
+          ...userDoc.data(),
+          createdAt: userDoc.data().createdAt?.toDate(),
+          updatedAt: userDoc.data().updatedAt?.toDate(),
+          lastLoginAt: userDoc.data().lastLoginAt?.toDate()
+        },
+        children,
+        communities,
+        posts,
+        stats: {
+          childrenCount: children.length,
+          communitiesCount: communities.length,
+          postsCount: postsSnapshot.size
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo detalle del usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalle del usuario',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar usuario (admin puede modificar cualquier campo)
+app.put('/api/admin/users/:userId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const updates = req.body;
+    
+    console.log('✏️ [ADMIN] Actualizando usuario:', userId, updates);
+
+    // Verificar que el usuario existe
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    // Preparar datos de actualización
+    const updateData = {
+      ...updates,
+      updatedAt: new Date()
+    };
+
+    // No permitir actualizar ciertos campos críticos
+    delete updateData.uid;
+    delete updateData.createdAt;
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(userId).update(updateData);
+
+    // Si se actualiza el email o displayName, también actualizar en Firebase Auth
+    if (updates.email || updates.displayName) {
+      const authUpdates = {};
+      if (updates.email) authUpdates.email = updates.email;
+      if (updates.displayName) authUpdates.displayName = updates.displayName;
+      
+      try {
+        await auth.updateUser(userId, authUpdates);
+      } catch (authError) {
+        console.log('⚠️ [ADMIN] No se pudo actualizar Firebase Auth:', authError.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Usuario actualizado exitosamente',
+      data: {
+        id: userId,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando usuario',
+      error: error.message
+    });
+  }
+});
+
+// Desactivar/activar usuario
+app.patch('/api/admin/users/:userId/toggle-active', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log('🔄 [ADMIN] Cambiando estado del usuario:', userId);
+
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    const currentState = userDoc.data().isActive !== false; // Por defecto true
+    const newState = !currentState;
+
+    // Actualizar en Firestore
+    await db.collection('users').doc(userId).update({
+      isActive: newState,
+      updatedAt: new Date()
+    });
+
+    // Actualizar en Firebase Auth
+    try {
+      await auth.updateUser(userId, {
+        disabled: !newState
+      });
+    } catch (authError) {
+      console.log('⚠️ [ADMIN] No se pudo actualizar Firebase Auth:', authError.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Usuario ${newState ? 'activado' : 'desactivado'} exitosamente`,
+      data: {
+        isActive: newState
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error cambiando estado del usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cambiando estado del usuario',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar usuario (soft delete)
+app.delete('/api/admin/users/:userId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { permanent = false } = req.query;
+    
+    console.log('🗑️ [ADMIN] Eliminando usuario:', userId, 'Permanente:', permanent);
+
+    if (permanent === 'true') {
+      // Eliminación permanente
+      await db.collection('users').doc(userId).delete();
+      
+      try {
+        await auth.deleteUser(userId);
+      } catch (authError) {
+        console.log('⚠️ [ADMIN] No se pudo eliminar de Firebase Auth:', authError.message);
+      }
+      
+      res.json({
+        success: true,
+        message: 'Usuario eliminado permanentemente'
+      });
+    } else {
+      // Soft delete
+      await db.collection('users').doc(userId).update({
+        isActive: false,
+        deletedAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      res.json({
+        success: true,
+        message: 'Usuario desactivado (soft delete)'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando usuario',
+      error: error.message
+    });
+  }
+});
+
+// ========== GESTIÓN DE COMUNIDADES ==========
+
+// Obtener todas las comunidades
+app.get('/api/admin/communities', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '' } = req.query;
+    
+    console.log('🏘️ [ADMIN] Obteniendo comunidades');
+
+    const snapshot = await db.collection('communities')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    let communities = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate()
+    }));
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      communities = communities.filter(comm => 
+        comm.name?.toLowerCase().includes(searchLower) ||
+        comm.description?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedCommunities = communities.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedCommunities,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: communities.length,
+        totalPages: Math.ceil(communities.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo comunidades:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comunidades',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar comunidad
+app.delete('/api/admin/communities/:communityId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { communityId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando comunidad:', communityId);
+
+    await db.collection('communities').doc(communityId).delete();
+
+    res.json({
+      success: true,
+      message: 'Comunidad eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando comunidad',
+      error: error.message
+    });
+  }
+});
+
+// ========== GESTIÓN DE POSTS ==========
+
+// Obtener todos los posts
+app.get('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    
+    console.log('📝 [ADMIN] Obteniendo posts');
+
+    const snapshot = await db.collection('posts')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const posts = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate()
+    }));
+
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedPosts = posts.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedPosts,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: posts.length,
+        totalPages: Math.ceil(posts.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo posts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo posts',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar post
+app.delete('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando post:', postId);
+
+    await db.collection('posts').doc(postId).delete();
+
+    res.json({
+      success: true,
+      message: 'Post eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando post',
+      error: error.message
+    });
+  }
+});
+
+// ========== GESTIÓN DE LISTAS ==========
+
+// Obtener todas las listas
+app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    
+    console.log('📋 [ADMIN] Obteniendo listas');
+
+    const snapshot = await db.collection('lists')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const lists = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate()
+    }));
+
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedLists = lists.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedLists,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: lists.length,
+        totalPages: Math.ceil(lists.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo listas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo listas',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
 // 📸 FOTO DE PERFIL DEL USUARIO
 // ==========================================
 
