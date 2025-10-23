@@ -1,4 +1,4 @@
-# 👑 API del Dashboard de Administración
+# 👑 API del Munpa Dashboard de Administración
 
 ## 📋 Tabla de Contenidos
 
