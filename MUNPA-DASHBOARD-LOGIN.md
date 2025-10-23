@@ -515,7 +515,7 @@ export class AuthService {
   }
 
   login(email: string, password: string): Observable<LoginResponse> {
-    return this.http.post<LoginResponse>(`${this.API_URL}/api/auth/login`, {
+    return this.http.post<LoginResponse>(`${this.API_URL}/api/auth/admin-login`, {
       email,
       password
     }).pipe(

@@ -1506,6 +1506,111 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ==========================================
+// 🔐 LOGIN PARA DASHBOARD ADMIN (retorna JWT)
+// ==========================================
+
+app.post('/api/auth/admin-login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!auth || !db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase no está configurado'
+      });
+    }
+
+    console.log('🔐 [ADMIN-LOGIN] Intentando login para:', email);
+
+    // Buscar usuario por email
+    let userRecord;
+    try {
+      userRecord = await auth.getUserByEmail(email);
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: 'Credenciales inválidas'
+      });
+    }
+
+    console.log('✅ [ADMIN-LOGIN] Usuario encontrado:', userRecord.uid);
+    
+    // Obtener datos del usuario de Firestore
+    const userDoc = await db.collection('users').doc(userRecord.uid).get();
+    
+    if (!userDoc.exists) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no encontrado en la base de datos'
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Verificar que el usuario esté activo
+    if (userData.isActive === false) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario inactivo'
+      });
+    }
+
+    // Verificar que sea admin
+    if (userData.role !== 'admin' && userData.isAdmin !== true) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos de administrador'
+      });
+    }
+
+    console.log('✅ [ADMIN-LOGIN] Usuario verificado como admin');
+
+    // Generar JWT token
+    const token = jwt.sign(
+      { 
+        uid: userRecord.uid,
+        email: userRecord.email,
+        role: userData.role || 'admin'
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' } // Token válido por 7 días
+    );
+
+    // Actualizar última conexión
+    await db.collection('users').doc(userRecord.uid).update({
+      lastLoginAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [ADMIN-LOGIN] Login exitoso, token JWT generado');
+
+    res.json({
+      success: true,
+      message: 'Login exitoso',
+      data: {
+        token: token,
+        user: {
+          uid: userRecord.uid,
+          email: userRecord.email,
+          displayName: userData.displayName || userRecord.displayName,
+          photoURL: userData.photoURL || userRecord.photoURL,
+          role: userData.role || 'admin',
+          isAdmin: true
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN-LOGIN] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en el servidor',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
 // 🔐 LOGIN CON GOOGLE
 // ==========================================
 
