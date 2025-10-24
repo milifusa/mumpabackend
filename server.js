@@ -2904,6 +2904,198 @@ app.delete('/api/admin/communities/:communityId', authenticateToken, isAdmin, as
   }
 });
 
+// ========== GESTIÓN DE HIJOS ==========
+
+// Obtener todos los hijos
+app.get('/api/admin/children', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '' } = req.query;
+    
+    console.log('👶 [ADMIN] Obteniendo hijos');
+
+    const snapshot = await db.collection('children')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    let children = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate(),
+      registeredAt: doc.data().registeredAt?.toDate()
+    }));
+
+    // Filtrar por búsqueda si existe
+    if (search) {
+      const searchLower = search.toLowerCase();
+      children = children.filter(child => 
+        child.name?.toLowerCase().includes(searchLower) ||
+        child.parentId?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedChildren = children.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedChildren,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: children.length,
+        totalPages: Math.ceil(children.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo hijos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo hijos',
+      error: error.message
+    });
+  }
+});
+
+// Editar hijo (admin puede editar cualquier hijo)
+app.put('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    const { name, ageInMonths, isUnborn, gestationWeeks, photoUrl } = req.body;
+    
+    console.log('✏️ [ADMIN] Editando hijo:', childId);
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo existe
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    // Validaciones
+    if (isUnborn && gestationWeeks && (gestationWeeks < 1 || gestationWeeks > 42)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las semanas de gestación deben estar entre 1 y 42'
+      });
+    }
+
+    if (isUnborn === false && ageInMonths !== undefined && ageInMonths < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'La edad en meses debe ser mayor o igual a 0'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (name !== undefined) updateData.name = name.trim();
+    if (ageInMonths !== undefined) updateData.ageInMonths = isUnborn ? null : parseInt(ageInMonths);
+    if (isUnborn !== undefined) updateData.isUnborn = isUnborn;
+    if (gestationWeeks !== undefined) updateData.gestationWeeks = isUnborn ? parseInt(gestationWeeks) : null;
+    if (photoUrl !== undefined) updateData.photoUrl = photoUrl;
+
+    // Limpiar campos según el estado
+    if (isUnborn) {
+      updateData.ageInMonths = null;
+    } else {
+      updateData.gestationWeeks = null;
+    }
+
+    await db.collection('children').doc(childId).update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Hijo actualizado exitosamente',
+      data: {
+        id: childId,
+        ...childDoc.data(),
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error editando hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error editando hijo',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar hijo (admin puede eliminar cualquier hijo)
+app.delete('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando hijo:', childId);
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo existe
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+    const parentId = childData.parentId;
+
+    // Eliminar el hijo
+    await db.collection('children').doc(childId).delete();
+
+    // Actualizar el contador de hijos del padre
+    if (parentId) {
+      const childrenSnapshot = await db.collection('children')
+        .where('parentId', '==', parentId)
+        .get();
+      
+      const actualChildrenCount = childrenSnapshot.size;
+      
+      await db.collection('users').doc(parentId).update({
+        childrenCount: actualChildrenCount,
+        updatedAt: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Hijo eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando hijo',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE POSTS ==========
 
 // Obtener todos los posts
