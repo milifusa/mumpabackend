@@ -30,6 +30,7 @@ app.use(cors({
     ? [
         'https://munpa.online', 
         'https://www.munpa.online',
+        'https://dash.munpa.online',
         'https://dashboardmunpa-ey7a5gscn-mishu-lojans-projects.vercel.app',
         /^https:\/\/dashboardmunpa-[a-z0-9]+-mishu-lojans-projects\.vercel\.app$/
       ]
