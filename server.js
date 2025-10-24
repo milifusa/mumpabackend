@@ -3490,7 +3490,7 @@ app.get('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
 // Crear nueva lista
 app.post('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { title, description, items, isPublic = true } = req.body;
+    const { title, description, items = [], isPublic = true, imageUrl } = req.body;
     
     console.log('➕ [ADMIN] Creando nueva lista:', title);
 
@@ -3501,17 +3501,39 @@ app.post('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
       });
     }
 
+    // Procesar items con estructura completa
+    const processedItems = items.map((item, index) => ({
+      id: item.id || `item_${Date.now()}_${index}`,
+      text: item.text ? item.text.trim() : '',
+      imageUrl: item.imageUrl || null,
+      priority: item.priority || 'medium',
+      details: item.details || '',
+      brand: item.brand || '',
+      store: item.store || '',
+      approximatePrice: item.approximatePrice || null,
+      completed: item.completed || false,
+      createdAt: item.createdAt || new Date()
+    }));
+
     const listData = {
-      title,
-      description: description || '',
-      items: items || [],
+      title: title.trim(),
+      description: description ? description.trim() : '',
+      imageUrl: imageUrl || null,
+      items: processedItems,
       isPublic,
       userId: req.user.uid,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      creatorId: req.user.uid, // Agregar también creatorId para compatibilidad
+      completedItems: processedItems.filter(item => item.completed).length,
+      totalItems: processedItems.length,
+      stars: 0,
+      comments: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
 
     const listRef = await db.collection('lists').add(listData);
+
+    console.log('✅ [ADMIN] Lista creada con', processedItems.length, 'items');
 
     res.json({
       success: true,
@@ -3536,7 +3558,7 @@ app.post('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
 app.put('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { listId } = req.params;
-    const { title, description, items, isPublic } = req.body;
+    const { title, description, items, isPublic, imageUrl } = req.body;
     
     console.log('✏️ [ADMIN] Editando lista:', listId);
 
@@ -3551,13 +3573,35 @@ app.put('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
     }
 
     const updateData = {
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: new Date()
     };
 
-    if (title !== undefined) updateData.title = title;
-    if (description !== undefined) updateData.description = description;
-    if (items !== undefined) updateData.items = items;
+    if (title !== undefined) updateData.title = title.trim();
+    if (description !== undefined) updateData.description = description.trim();
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
     if (isPublic !== undefined) updateData.isPublic = isPublic;
+    
+    // Si se están actualizando los items, procesarlos con estructura completa
+    if (items !== undefined) {
+      const processedItems = items.map((item, index) => ({
+        id: item.id || `item_${Date.now()}_${index}`,
+        text: item.text ? item.text.trim() : '',
+        imageUrl: item.imageUrl || null,
+        priority: item.priority || 'medium',
+        details: item.details || '',
+        brand: item.brand || '',
+        store: item.store || '',
+        approximatePrice: item.approximatePrice || null,
+        completed: item.completed || false,
+        createdAt: item.createdAt || new Date()
+      }));
+      
+      updateData.items = processedItems;
+      updateData.completedItems = processedItems.filter(item => item.completed).length;
+      updateData.totalItems = processedItems.length;
+      
+      console.log('✅ [ADMIN] Items procesados:', processedItems.length);
+    }
 
     await listRef.update(updateData);
 
