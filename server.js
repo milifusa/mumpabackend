@@ -132,7 +132,25 @@ const authenticateToken = async (req, res, next) => {
     console.log('🔑 [AUTH] Token encontrado, longitud:', token.length);
 
     try {
-      // PRIMERO intentar extraer uid del customToken JWT
+      // PRIMERO intentar verificar como JWT del admin dashboard
+      console.log('🔄 [AUTH] Intentando verificar como JWT admin...');
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        console.log('✅ [AUTH] JWT admin verificado exitosamente:', decoded);
+        
+        req.user = { 
+          uid: decoded.uid,
+          email: decoded.email,
+          role: decoded.role
+        };
+        console.log('✅ [AUTH] req.user configurado desde JWT:', req.user);
+        next();
+        return;
+      } catch (jwtError) {
+        console.log('❌ [AUTH] No es un JWT válido:', jwtError.message);
+      }
+
+      // SEGUNDO intentar extraer uid del customToken JWT
       console.log('🔄 [AUTH] Intentando extraer UID del customToken...');
       const tokenParts = token.split('.');
       
@@ -154,7 +172,7 @@ const authenticateToken = async (req, res, next) => {
         }
       }
       
-      // SEGUNDO intentar como idToken
+      // TERCERO intentar como idToken
       console.log('🔄 [AUTH] Intentando verificar como idToken...');
       const decodedIdToken = await auth.verifyIdToken(token);
       console.log('✅ [AUTH] IdToken verificado exitosamente');
