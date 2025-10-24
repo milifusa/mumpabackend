@@ -27,7 +27,12 @@ const JWT_SECRET = process.env.JWT_SECRET || 'munpa-secret-key-2025-change-in-pr
 // Configuración de CORS mejorada
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://munpa.online', 'https://www.munpa.online'] 
+    ? [
+        'https://munpa.online', 
+        'https://www.munpa.online',
+        'https://dashboardmunpa-ey7a5gscn-mishu-lojans-projects.vercel.app',
+        /^https:\/\/dashboardmunpa-[a-z0-9]+-mishu-lojans-projects\.vercel\.app$/
+      ]
     : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:4200', 'http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
