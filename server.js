@@ -3331,7 +3331,7 @@ app.delete('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, r
 // Obtener todas las listas
 app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 20, search = '' } = req.query;
     
     console.log('📋 [ADMIN] Obteniendo listas');
 
@@ -3339,12 +3339,47 @@ app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
       .orderBy('createdAt', 'desc')
       .get();
     
-    const lists = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      createdAt: doc.data().createdAt?.toDate(),
-      updatedAt: doc.data().updatedAt?.toDate()
+    // Obtener información de los usuarios dueños de las listas
+    const listsWithOwners = await Promise.all(snapshot.docs.map(async (doc) => {
+      const listData = doc.data();
+      let ownerInfo = null;
+
+      if (listData.userId) {
+        try {
+          const userDoc = await db.collection('users').doc(listData.userId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            ownerInfo = {
+              id: userDoc.id,
+              displayName: userData.displayName || 'Usuario sin nombre',
+              email: userData.email || null
+            };
+          }
+        } catch (error) {
+          console.error(`Error obteniendo usuario ${listData.userId}:`, error);
+        }
+      }
+
+      return {
+        id: doc.id,
+        ...listData,
+        owner: ownerInfo,
+        createdAt: listData.createdAt?.toDate(),
+        updatedAt: listData.updatedAt?.toDate()
+      };
     }));
+
+    // Filtrar por búsqueda si existe
+    let lists = listsWithOwners;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      lists = listsWithOwners.filter(list => 
+        list.title?.toLowerCase().includes(searchLower) ||
+        list.description?.toLowerCase().includes(searchLower) ||
+        list.owner?.displayName?.toLowerCase().includes(searchLower) ||
+        list.owner?.email?.toLowerCase().includes(searchLower)
+      );
+    }
 
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
@@ -3366,6 +3401,64 @@ app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error obteniendo listas',
+      error: error.message
+    });
+  }
+});
+
+// Obtener detalle de una lista específica
+app.get('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    
+    console.log('📋 [ADMIN] Obteniendo detalle de lista:', listId);
+
+    const listDoc = await db.collection('lists').doc(listId).get();
+    
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    let ownerInfo = null;
+
+    // Obtener información del dueño
+    if (listData.userId) {
+      try {
+        const userDoc = await db.collection('users').doc(listData.userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          ownerInfo = {
+            id: userDoc.id,
+            displayName: userData.displayName || 'Usuario sin nombre',
+            email: userData.email || null,
+            photoURL: userData.photoURL || null
+          };
+        }
+      } catch (error) {
+        console.error(`Error obteniendo usuario ${listData.userId}:`, error);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: listDoc.id,
+        ...listData,
+        owner: ownerInfo,
+        createdAt: listData.createdAt?.toDate(),
+        updatedAt: listData.updatedAt?.toDate()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo detalle de lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalle de lista',
       error: error.message
     });
   }
