@@ -3887,7 +3887,6 @@ app.get('/api/admin/lists/:listId/items/:itemId/ratings', authenticateToken, isA
     const ratingsSnapshot = await db.collection('itemRatings')
       .where('listId', '==', listId)
       .where('itemId', '==', itemId)
-      .orderBy('createdAt', 'desc')
       .get();
 
     const ratings = [];
@@ -3920,6 +3919,13 @@ app.get('/api/admin/lists/:listId/items/:itemId/ratings', authenticateToken, isA
         createdAt: data.createdAt
       });
     }
+
+    // Ordenar por fecha (más recientes primero)
+    ratings.sort((a, b) => {
+      const dateA = a.createdAt?.toDate?.() || new Date(a.createdAt);
+      const dateB = b.createdAt?.toDate?.() || new Date(b.createdAt);
+      return dateB - dateA;
+    });
 
     // Calcular estadísticas
     const totalRatings = ratings.length;
@@ -3976,7 +3982,6 @@ app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, is
     const commentsSnapshot = await db.collection('listComments')
       .where('listId', '==', listId)
       .where('itemId', '==', itemId)
-      .orderBy('createdAt', 'desc')
       .get();
 
     const comments = [];
@@ -4014,6 +4019,13 @@ app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, is
         createdAt: data.createdAt
       });
     }
+
+    // Ordenar por fecha (más recientes primero)
+    comments.sort((a, b) => {
+      const dateA = a.createdAt?.toDate?.() || new Date(a.createdAt);
+      const dateB = b.createdAt?.toDate?.() || new Date(b.createdAt);
+      return dateB - dateA;
+    });
 
     // Paginación
     const startIndex = (page - 1) * limit;
