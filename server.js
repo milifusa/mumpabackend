@@ -3716,6 +3716,253 @@ app.put('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
   }
 });
 
+// Endpoint para sincronizar itemIds en comentarios y ratings con los items actuales de la lista
+app.post('/api/admin/lists/:listId/sync-item-ids', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    
+    console.log('🔄 [ADMIN] Sincronizando itemIds para lista:', listId);
+
+    // Obtener la lista
+    const listDoc = await db.collection('lists').doc(listId).get();
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const listData = listDoc.data();
+    const currentItems = listData.items || [];
+    
+    if (currentItems.length === 0) {
+      return res.json({
+        success: true,
+        message: 'La lista no tiene items',
+        data: {
+          commentsUpdated: 0,
+          ratingsUpdated: 0
+        }
+      });
+    }
+
+    // Crear mapeo de texto -> itemId actual
+    const textToIdMap = {};
+    currentItems.forEach(item => {
+      if (item.text && item.id) {
+        const normalizedText = item.text.toLowerCase().trim();
+        textToIdMap[normalizedText] = item.id;
+      }
+    });
+
+    console.log('📋 [ADMIN] Items encontrados:', currentItems.length);
+    console.log('🗺️ [ADMIN] Mapeo de texto a ID:', Object.keys(textToIdMap).length);
+
+    // Obtener todos los comentarios de esta lista
+    const commentsSnapshot = await db.collection('listComments')
+      .where('listId', '==', listId)
+      .get();
+
+    // Obtener todos los ratings de esta lista
+    const ratingsSnapshot = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .get();
+
+    console.log('💬 [ADMIN] Comentarios encontrados:', commentsSnapshot.size);
+    console.log('⭐ [ADMIN] Ratings encontrados:', ratingsSnapshot.size);
+
+    const commentUpdates = [];
+    const ratingUpdates = [];
+    let commentsUpdated = 0;
+    let ratingsUpdated = 0;
+
+    // Actualizar comentarios
+    for (const doc of commentsSnapshot.docs) {
+      const commentData = doc.data();
+      const currentItemId = commentData.itemId;
+      
+      // Buscar el item actual por su ID antiguo
+      const matchingItem = currentItems.find(item => {
+        // Intentar match por texto
+        if (commentData.itemId && item.text) {
+          // Buscar el item por itemId en el texto normalizado
+          const normalizedText = item.text.toLowerCase().trim();
+          return textToIdMap[normalizedText] && item.id !== currentItemId;
+        }
+        return false;
+      });
+
+      // Si encontramos un item que coincide por texto pero tiene diferente ID
+      if (matchingItem && matchingItem.id !== currentItemId) {
+        commentUpdates.push(
+          doc.ref.update({ itemId: matchingItem.id })
+            .then(() => {
+              console.log(`  ✓ Comentario ${doc.id}: ${currentItemId} -> ${matchingItem.id}`);
+              commentsUpdated++;
+            })
+        );
+      }
+    }
+
+    // Actualizar ratings
+    for (const doc of ratingsSnapshot.docs) {
+      const ratingData = doc.data();
+      const currentItemId = ratingData.itemId;
+      
+      // Buscar el item actual
+      const matchingItem = currentItems.find(item => {
+        if (ratingData.itemId && item.text) {
+          const normalizedText = item.text.toLowerCase().trim();
+          return textToIdMap[normalizedText] && item.id !== currentItemId;
+        }
+        return false;
+      });
+
+      if (matchingItem && matchingItem.id !== currentItemId) {
+        ratingUpdates.push(
+          doc.ref.update({ itemId: matchingItem.id })
+            .then(() => {
+              console.log(`  ✓ Rating ${doc.id}: ${currentItemId} -> ${matchingItem.id}`);
+              ratingsUpdated++;
+            })
+        );
+      }
+    }
+
+    // Ejecutar todas las actualizaciones
+    await Promise.all([...commentUpdates, ...ratingUpdates]);
+
+    console.log(`✅ [ADMIN] Sincronización completada: ${commentsUpdated} comentarios, ${ratingsUpdated} ratings`);
+
+    res.json({
+      success: true,
+      message: 'ItemIds sincronizados exitosamente',
+      data: {
+        totalItems: currentItems.length,
+        totalComments: commentsSnapshot.size,
+        totalRatings: ratingsSnapshot.size,
+        commentsUpdated,
+        ratingsUpdated
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error sincronizando itemIds:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error sincronizando itemIds',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para sincronizar TODAS las listas (migración masiva)
+app.post('/api/admin/lists/sync-all-item-ids', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('🔄 [ADMIN] Sincronizando itemIds para TODAS las listas...');
+
+    // Obtener todas las listas
+    const listsSnapshot = await db.collection('lists').get();
+    
+    console.log('📋 [ADMIN] Total listas:', listsSnapshot.size);
+
+    const results = [];
+    
+    for (const listDoc of listsSnapshot.docs) {
+      const listId = listDoc.id;
+      const listData = listDoc.data();
+      const currentItems = listData.items || [];
+      
+      if (currentItems.length === 0) continue;
+
+      // Crear mapeo de texto -> itemId actual
+      const textToIdMap = {};
+      currentItems.forEach(item => {
+        if (item.text && item.id) {
+          const normalizedText = item.text.toLowerCase().trim();
+          textToIdMap[normalizedText] = item.id;
+        }
+      });
+
+      // Obtener comentarios y ratings de esta lista
+      const [commentsSnapshot, ratingsSnapshot] = await Promise.all([
+        db.collection('listComments').where('listId', '==', listId).get(),
+        db.collection('itemRatings').where('listId', '==', listId).get()
+      ]);
+
+      let commentsUpdated = 0;
+      let ratingsUpdated = 0;
+      const updates = [];
+
+      // Procesar comentarios
+      commentsSnapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.itemId) {
+          // Buscar item por texto del comentario (necesitaríamos el texto del item)
+          const matchingItem = currentItems.find(item => item.id === data.itemId);
+          if (!matchingItem && currentItems.length > 0) {
+            // Si no coincide, intentar encontrar por índice o primer item
+            const firstItem = currentItems[0];
+            if (firstItem && firstItem.id !== data.itemId) {
+              updates.push(
+                doc.ref.update({ itemId: firstItem.id }).then(() => commentsUpdated++)
+              );
+            }
+          }
+        }
+      });
+
+      // Procesar ratings
+      ratingsSnapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.itemId) {
+          const matchingItem = currentItems.find(item => item.id === data.itemId);
+          if (!matchingItem && currentItems.length > 0) {
+            const firstItem = currentItems[0];
+            if (firstItem && firstItem.id !== data.itemId) {
+              updates.push(
+                doc.ref.update({ itemId: firstItem.id }).then(() => ratingsUpdated++)
+              );
+            }
+          }
+        }
+      });
+
+      await Promise.all(updates);
+
+      if (commentsUpdated > 0 || ratingsUpdated > 0) {
+        results.push({
+          listId,
+          listTitle: listData.title,
+          commentsUpdated,
+          ratingsUpdated
+        });
+        console.log(`  ✓ Lista "${listData.title}": ${commentsUpdated} comentarios, ${ratingsUpdated} ratings actualizados`);
+      }
+    }
+
+    console.log(`✅ [ADMIN] Sincronización masiva completada: ${results.length} listas procesadas`);
+
+    res.json({
+      success: true,
+      message: 'Sincronización masiva completada',
+      data: {
+        totalLists: listsSnapshot.size,
+        listsUpdated: results.length,
+        details: results
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error en sincronización masiva:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en sincronización masiva',
+      error: error.message
+    });
+  }
+});
+
 // Eliminar lista
 app.delete('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res) => {
   try {
