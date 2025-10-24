@@ -3875,6 +3875,172 @@ app.delete('/api/admin/lists/:listId/comments/:commentId', authenticateToken, is
   }
 });
 
+// Obtener calificaciones de un item específico
+app.get('/api/admin/lists/:listId/items/:itemId/ratings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId, itemId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    
+    console.log('⭐ [ADMIN] Obteniendo ratings del item:', itemId, 'en lista:', listId);
+
+    // Obtener todas las calificaciones del item
+    const ratingsSnapshot = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .where('itemId', '==', itemId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const ratings = [];
+    for (const doc of ratingsSnapshot.docs) {
+      const data = doc.data();
+      
+      // Obtener información del usuario
+      let userInfo = null;
+      try {
+        const userDoc = await db.collection('users').doc(data.userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          userInfo = {
+            displayName: userData.displayName || 'Usuario',
+            email: userData.email,
+            photoURL: userData.photoURL || null
+          };
+        }
+      } catch (error) {
+        console.log('⚠️ [ADMIN] Error obteniendo info del usuario:', data.userId);
+      }
+
+      ratings.push({
+        id: doc.id,
+        listId: data.listId,
+        itemId: data.itemId,
+        userId: data.userId,
+        user: userInfo,
+        rating: data.rating,
+        createdAt: data.createdAt
+      });
+    }
+
+    // Calcular estadísticas
+    const totalRatings = ratings.length;
+    const averageRating = totalRatings > 0 
+      ? (ratings.reduce((sum, r) => sum + r.rating, 0) / totalRatings).toFixed(2)
+      : 0;
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedRatings = ratings.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedRatings,
+      stats: {
+        totalRatings,
+        averageRating: parseFloat(averageRating),
+        distribution: {
+          5: ratings.filter(r => r.rating === 5).length,
+          4: ratings.filter(r => r.rating === 4).length,
+          3: ratings.filter(r => r.rating === 3).length,
+          2: ratings.filter(r => r.rating === 2).length,
+          1: ratings.filter(r => r.rating === 1).length
+        }
+      },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalRatings,
+        totalPages: Math.ceil(totalRatings / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo ratings del item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo calificaciones del item',
+      error: error.message
+    });
+  }
+});
+
+// Obtener comentarios de un item específico
+app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId, itemId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    
+    console.log('💬 [ADMIN] Obteniendo comentarios del item:', itemId, 'en lista:', listId);
+
+    // Obtener todos los comentarios del item
+    const commentsSnapshot = await db.collection('listComments')
+      .where('listId', '==', listId)
+      .where('itemId', '==', itemId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const comments = [];
+    for (const doc of commentsSnapshot.docs) {
+      const data = doc.data();
+      
+      // Obtener información del usuario con foto
+      let userInfo = null;
+      try {
+        const userDoc = await db.collection('users').doc(data.userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          userInfo = {
+            displayName: userData.displayName || data.userName || 'Usuario',
+            email: userData.email,
+            photoURL: userData.photoURL || null
+          };
+        }
+      } catch (error) {
+        console.log('⚠️ [ADMIN] Error obteniendo info del usuario:', data.userId);
+        userInfo = {
+          displayName: data.userName || 'Usuario',
+          email: null,
+          photoURL: null
+        };
+      }
+
+      comments.push({
+        id: doc.id,
+        listId: data.listId,
+        itemId: data.itemId,
+        userId: data.userId,
+        user: userInfo,
+        content: data.content,
+        createdAt: data.createdAt
+      });
+    }
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedComments = comments.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedComments,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: comments.length,
+        totalPages: Math.ceil(comments.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo comentarios del item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comentarios del item',
+      error: error.message
+    });
+  }
+});
+
 // ==========================================
 // 📸 SUBIDA DE IMÁGENES GENERAL
 // ==========================================
