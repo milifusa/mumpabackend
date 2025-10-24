@@ -3344,6 +3344,205 @@ app.delete('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, r
   }
 });
 
+// Obtener comentarios de un post
+app.get('/api/admin/posts/:postId/comments', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { page = 1, limit = 50 } = req.query;
+    
+    console.log('💬 [ADMIN] Obteniendo comentarios del post:', postId);
+
+    // Obtener todos los comentarios del post
+    const commentsSnapshot = await db.collection('comments')
+      .where('postId', '==', postId)
+      .get();
+
+    const comments = [];
+    for (const doc of commentsSnapshot.docs) {
+      const data = doc.data();
+      
+      // Obtener información del autor del comentario
+      let authorInfo = null;
+      try {
+        const userDoc = await db.collection('users').doc(data.authorId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          authorInfo = {
+            displayName: userData.displayName || 'Usuario',
+            email: userData.email,
+            photoURL: userData.photoURL || null
+          };
+        }
+      } catch (error) {
+        console.log('⚠️ [ADMIN] Error obteniendo info del autor:', data.authorId);
+        authorInfo = {
+          displayName: 'Usuario',
+          email: null,
+          photoURL: null
+        };
+      }
+
+      comments.push({
+        id: doc.id,
+        postId: data.postId,
+        authorId: data.authorId,
+        author: authorInfo,
+        content: data.content,
+        likeCount: data.likeCount || 0,
+        likes: data.likes || [],
+        createdAt: data.createdAt
+      });
+    }
+
+    // Ordenar por fecha (más recientes primero)
+    comments.sort((a, b) => {
+      const dateA = a.createdAt?.toDate?.() || new Date(a.createdAt);
+      const dateB = b.createdAt?.toDate?.() || new Date(b.createdAt);
+      return dateB - dateA;
+    });
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedComments = comments.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedComments,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: comments.length,
+        totalPages: Math.ceil(comments.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo comentarios del post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comentarios',
+      error: error.message
+    });
+  }
+});
+
+// Obtener likes de un post
+app.get('/api/admin/posts/:postId/likes', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { page = 1, limit = 50 } = req.query;
+    
+    console.log('❤️ [ADMIN] Obteniendo likes del post:', postId);
+
+    // Obtener el post
+    const postDoc = await db.collection('posts').doc(postId).get();
+    
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post no encontrado'
+      });
+    }
+
+    const postData = postDoc.data();
+    const likes = postData.likes || [];
+    const likeCount = postData.likeCount || 0;
+
+    console.log('📊 [ADMIN] Total likes:', likeCount);
+
+    // Obtener información de los usuarios que dieron like
+    const likesWithUserInfo = [];
+    for (const userId of likes) {
+      try {
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          likesWithUserInfo.push({
+            userId: userId,
+            displayName: userData.displayName || 'Usuario',
+            email: userData.email,
+            photoURL: userData.photoURL || null
+          });
+        } else {
+          likesWithUserInfo.push({
+            userId: userId,
+            displayName: 'Usuario desconocido',
+            email: null,
+            photoURL: null
+          });
+        }
+      } catch (error) {
+        console.log('⚠️ [ADMIN] Error obteniendo info del usuario:', userId);
+        likesWithUserInfo.push({
+          userId: userId,
+          displayName: 'Usuario',
+          email: null,
+          photoURL: null
+        });
+      }
+    }
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedLikes = likesWithUserInfo.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedLikes,
+      stats: {
+        totalLikes: likeCount
+      },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: likesWithUserInfo.length,
+        totalPages: Math.ceil(likesWithUserInfo.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo likes del post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo likes',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar comentario de un post
+app.delete('/api/admin/posts/:postId/comments/:commentId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando comentario:', commentId, 'del post:', postId);
+
+    // Eliminar el comentario
+    await db.collection('comments').doc(commentId).delete();
+
+    // Decrementar el contador de comentarios en el post
+    const postRef = db.collection('posts').doc(postId);
+    await postRef.update({
+      commentCount: admin.firestore.FieldValue.increment(-1)
+    });
+
+    res.json({
+      success: true,
+      message: 'Comentario eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando comentario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando comentario',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE LISTAS ==========
 
 // Obtener todas las listas
