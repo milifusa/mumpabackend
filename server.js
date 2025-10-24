@@ -25,16 +25,39 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'munpa-secret-key-2025-change-in-production';
 
 // Configuración de CORS mejorada
+const allowedOrigins = [
+  // Producción
+  'https://munpa.online', 
+  'https://www.munpa.online',
+  'https://dash.munpa.online',
+  'https://dashboardmunpa-ey7a5gscn-mishu-lojans-projects.vercel.app',
+  // Desarrollo
+  'http://localhost:3000', 
+  'http://localhost:3001', 
+  'http://localhost:4200', 
+  'http://localhost:5173', 
+  'http://localhost:8081', 
+  'http://localhost:19006'
+];
+
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? [
-        'https://munpa.online', 
-        'https://www.munpa.online',
-        'https://dash.munpa.online',
-        'https://dashboardmunpa-ey7a5gscn-mishu-lojans-projects.vercel.app',
-        /^https:\/\/dashboardmunpa-[a-z0-9]+-mishu-lojans-projects\.vercel\.app$/
-      ]
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:4200', 'http://localhost:5173', 'http://localhost:8081', 'http://localhost:19006'],
+  origin: (origin, callback) => {
+    // Permitir requests sin origin (como mobile apps o curl)
+    if (!origin) return callback(null, true);
+    
+    // Verificar si el origin está en la lista permitida
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Verificar si coincide con el patrón de Vercel preview
+    if (/^https:\/\/dashboardmunpa-[a-z0-9]+-mishu-lojans-projects\.vercel\.app$/.test(origin)) {
+      return callback(null, true);
+    }
+    
+    // Rechazar otros origins
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
