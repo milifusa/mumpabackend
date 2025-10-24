@@ -3007,6 +3007,65 @@ app.get('/api/admin/children', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+// Obtener un hijo específico
+app.get('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    
+    console.log('👶 [ADMIN] Obteniendo hijo:', childId);
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    // Obtener información del padre
+    let parentInfo = null;
+    if (childData.parentId) {
+      try {
+        const parentDoc = await db.collection('users').doc(childData.parentId).get();
+        if (parentDoc.exists) {
+          const parentData = parentDoc.data();
+          parentInfo = {
+            uid: childData.parentId,
+            displayName: parentData.displayName || 'Usuario',
+            email: parentData.email,
+            photoURL: parentData.photoURL || null
+          };
+        }
+      } catch (error) {
+        console.log('⚠️ [ADMIN] Error obteniendo info del padre:', childData.parentId);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: childDoc.id,
+        ...childData,
+        parent: parentInfo,
+        createdAt: childData.createdAt?.toDate(),
+        updatedAt: childData.updatedAt?.toDate(),
+        registeredAt: childData.registeredAt?.toDate()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo hijo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo hijo',
+      error: error.message
+    });
+  }
+});
+
 // Editar hijo (admin puede editar cualquier hijo)
 app.put('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, res) => {
   try {
