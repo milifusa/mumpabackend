@@ -3987,10 +3987,17 @@ app.get('/api/admin/lists/:listId/items/:itemId/ratings', authenticateToken, isA
 // Obtener comentarios de un item específico
 app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { listId, itemId } = req.params;
+    const { listId } = req.params;
+    let { itemId } = req.params;
     const { page = 1, limit = 20 } = req.query;
     
-    console.log('💬 [ADMIN] Obteniendo comentarios del item:', itemId, 'en lista:', listId);
+    // Decodificar el itemId por si viene con URL encoding
+    itemId = decodeURIComponent(itemId);
+    
+    console.log('💬 [ADMIN] Obteniendo comentarios del item');
+    console.log('   - ItemId recibido:', itemId);
+    console.log('   - ItemId length:', itemId.length);
+    console.log('   - ListId:', listId);
 
     // Primero, obtener todos los comentarios de la lista para debug
     const allCommentsSnapshot = await db.collection('listComments')
@@ -3998,10 +4005,17 @@ app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, is
       .get();
     
     console.log('📊 [ADMIN] Total comentarios en la lista:', allCommentsSnapshot.size);
+    
     if (allCommentsSnapshot.size > 0) {
-      console.log('🔍 [ADMIN] Ejemplo de itemIds encontrados:', 
-        allCommentsSnapshot.docs.slice(0, 3).map(doc => doc.data().itemId)
-      );
+      const exampleItemIds = allCommentsSnapshot.docs.slice(0, 5).map(doc => {
+        const itemId = doc.data().itemId;
+        return {
+          id: itemId,
+          length: itemId?.length,
+          type: typeof itemId
+        };
+      });
+      console.log('🔍 [ADMIN] Ejemplos de itemIds en Firestore:', JSON.stringify(exampleItemIds, null, 2));
     }
 
     // Obtener todos los comentarios del item
@@ -4010,11 +4024,29 @@ app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, is
       .where('itemId', '==', itemId)
       .get();
 
-    console.log('✅ [ADMIN] Comentarios encontrados para itemId', itemId, ':', commentsSnapshot.size);
+    console.log('✅ [ADMIN] Comentarios encontrados para itemId exacto:', commentsSnapshot.size);
+    
+    // Si no se encontraron, intentar buscar con comparación flexible
+    let allComments = [];
+    if (commentsSnapshot.size === 0 && allCommentsSnapshot.size > 0) {
+      console.log('⚠️ [ADMIN] No se encontró match exacto, buscando similares...');
+      allCommentsSnapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.itemId && data.itemId.toString() === itemId.toString()) {
+          allComments.push({ id: doc.id, data });
+          console.log('✅ [ADMIN] Match encontrado con conversión a string');
+        }
+      });
+    }
+
+    // Usar los comentarios encontrados (exactos o flexibles)
+    const docsToProcess = commentsSnapshot.size > 0 
+      ? commentsSnapshot.docs 
+      : allComments.map(c => ({ id: c.id, data: () => c.data }));
 
     const comments = [];
-    for (const doc of commentsSnapshot.docs) {
-      const data = doc.data();
+    for (const doc of docsToProcess) {
+      const data = typeof doc.data === 'function' ? doc.data() : doc.data;
       
       // Obtener información del usuario con foto
       let userInfo = null;
