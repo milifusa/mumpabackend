@@ -201,7 +201,70 @@ Authorization: Bearer {JWT_TOKEN}
 
 ---
 
-### 5. Eliminar Comunidad
+### 5. Obtener Miembros de una Comunidad
+```http
+GET /api/admin/communities/:communityId/members?page=1&limit=50
+```
+
+**Headers:**
+```
+Authorization: Bearer {JWT_TOKEN}
+```
+
+**Query Parameters:**
+- `page` (opcional): Número de página (default: 1)
+- `limit` (opcional): Miembros por página (default: 50)
+
+**Respuesta exitosa (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "user123",
+      "displayName": "María García",
+      "email": "maria@example.com",
+      "photoURL": "https://example.com/photo.jpg",
+      "isActive": true,
+      "createdAt": "2025-01-10T10:30:00.000Z",
+      "lastLoginAt": "2025-01-22T15:45:00.000Z"
+    },
+    {
+      "id": "user456",
+      "displayName": "Ana López",
+      "email": "ana@example.com",
+      "photoURL": null,
+      "isActive": true,
+      "createdAt": "2025-01-12T14:20:00.000Z",
+      "lastLoginAt": "2025-01-21T09:15:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 25,
+    "totalPages": 1
+  },
+  "communityInfo": {
+    "id": "abc123",
+    "name": "Mamás Primerizas 2025",
+    "memberCount": 25
+  }
+}
+```
+
+**Errores:**
+- `404`: Comunidad no encontrada
+
+**Características:**
+- Los miembros se ordenan alfabéticamente por `displayName`
+- Incluye información básica del perfil de cada miembro
+- Si un miembro no existe en la base de datos, se omite de la lista
+- Ideal para mostrar una lista de miembros en el dashboard
+
+---
+
+### 6. Eliminar Comunidad
 ```http
 DELETE /api/admin/communities/:communityId
 ```
@@ -447,6 +510,11 @@ export class CommunityService {
     return this.http.put(`${this.apiUrl}/${communityId}`, data);
   }
 
+  // Obtener miembros de una comunidad
+  getCommunityMembers(communityId: string, page: number = 1, limit: number = 50): Observable<any> {
+    return this.http.get(`${this.apiUrl}/${communityId}/members?page=${page}&limit=${limit}`);
+  }
+
   // Eliminar comunidad
   deleteCommunity(communityId: string): Observable<any> {
     return this.http.delete(`${this.apiUrl}/${communityId}`);
@@ -490,6 +558,126 @@ export class PostService {
   }
 }
 ```
+
+### Ejemplo de Componente para Ver Miembros de Comunidad:
+
+```typescript
+import { Component, OnInit } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
+import { CommunityService } from './community.service';
+
+@Component({
+  selector: 'app-community-members',
+  template: `
+    <div class="community-members">
+      <h2>Miembros de {{ communityInfo?.name }}</h2>
+      
+      <div class="members-stats">
+        <p>Total de miembros: {{ communityInfo?.memberCount }}</p>
+      </div>
+
+      <div class="members-list" *ngIf="members.length > 0">
+        <div class="member-card" *ngFor="let member of members">
+          <img 
+            [src]="member.photoURL || 'assets/default-avatar.png'" 
+            alt="{{ member.displayName }}"
+            class="member-avatar"
+          >
+          <div class="member-info">
+            <h3>{{ member.displayName }}</h3>
+            <p>{{ member.email }}</p>
+            <span class="member-status" [class.active]="member.isActive">
+              {{ member.isActive ? 'Activo' : 'Inactivo' }}
+            </span>
+            <p class="member-dates">
+              <small>Miembro desde: {{ member.createdAt | date:'short' }}</small>
+              <small *ngIf="member.lastLoginAt">
+                Último acceso: {{ member.lastLoginAt | date:'short' }}
+              </small>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div *ngIf="members.length === 0 && !isLoading">
+        <p>No hay miembros en esta comunidad.</p>
+      </div>
+
+      <div class="pagination" *ngIf="pagination.totalPages > 1">
+        <button 
+          [disabled]="pagination.page === 1"
+          (click)="loadPage(pagination.page - 1)"
+        >
+          Anterior
+        </button>
+        <span>Página {{ pagination.page }} de {{ pagination.totalPages }}</span>
+        <button 
+          [disabled]="pagination.page === pagination.totalPages"
+          (click)="loadPage(pagination.page + 1)"
+        >
+          Siguiente
+        </button>
+      </div>
+
+      <div *ngIf="isLoading" class="loading">
+        Cargando miembros...
+      </div>
+
+      <div *ngIf="errorMessage" class="error-message">
+        {{ errorMessage }}
+      </div>
+    </div>
+  `
+})
+export class CommunityMembersComponent implements OnInit {
+  communityId: string = '';
+  members: any[] = [];
+  communityInfo: any = null;
+  pagination = {
+    page: 1,
+    limit: 50,
+    total: 0,
+    totalPages: 0
+  };
+  isLoading = false;
+  errorMessage = '';
+
+  constructor(
+    private route: ActivatedRoute,
+    private communityService: CommunityService
+  ) {}
+
+  ngOnInit() {
+    this.communityId = this.route.snapshot.paramMap.get('id') || '';
+    this.loadMembers();
+  }
+
+  loadMembers(page: number = 1) {
+    this.isLoading = true;
+    this.errorMessage = '';
+
+    this.communityService.getCommunityMembers(this.communityId, page, 50)
+      .subscribe({
+        next: (response) => {
+          this.members = response.data;
+          this.pagination = response.pagination;
+          this.communityInfo = response.communityInfo;
+          this.isLoading = false;
+        },
+        error: (error) => {
+          this.errorMessage = error.error?.message || 'Error cargando miembros';
+          this.isLoading = false;
+        }
+      });
+  }
+
+  loadPage(page: number) {
+    this.loadMembers(page);
+  }
+}
+```
+
+---
 
 ### Ejemplo de Componente para Crear Comunidad:
 
@@ -606,7 +794,8 @@ export class CreateCommunityComponent {
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
 | POST | `/api/admin/communities` | Crear nueva comunidad |
-| GET | `/api/admin/communities/:communityId` | ✨ **NUEVO**: Obtener detalle de comunidad con posts |
+| GET | `/api/admin/communities/:communityId` | Obtener detalle de comunidad con posts |
+| GET | `/api/admin/communities/:communityId/members` | ✨ **NUEVO**: Obtener miembros de una comunidad |
 | PUT | `/api/admin/communities/:communityId` | Editar comunidad |
 | GET | `/api/admin/communities` | Obtener comunidades (ya existía) |
 | DELETE | `/api/admin/communities/:communityId` | Eliminar comunidad (ya existía) |
