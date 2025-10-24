@@ -8412,6 +8412,17 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
     if (listData.items && listData.items.length > 0) {
       itemsWithStats = await Promise.all(
         listData.items.map(async (item) => {
+          // Si el item no tiene ID, retornar sin stats
+          if (!item.id) {
+            console.warn('⚠️ [LISTS] Item sin ID encontrado:', item);
+            return {
+              ...item,
+              averageRating: 0,
+              totalRatings: 0,
+              commentCount: 0
+            };
+          }
+
           // Obtener calificaciones del item
           const ratingsSnapshot = await db.collection('itemRatings')
             .where('listId', '==', listId)
