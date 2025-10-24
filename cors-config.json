@@ -1,0 +1,9 @@
+[
+  {
+    "origin": ["http://localhost:4200", "https://mumpa.online", "https://www.mumpa.online"],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+    "responseHeader": ["Content-Type", "Authorization"],
+    "maxAgeSeconds": 3600
+  }
+]
+
