@@ -3572,6 +3572,7 @@ app.put('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
       });
     }
 
+    const oldListData = listDoc.data();
     const updateData = {
       updatedAt: new Date()
     };
@@ -3583,24 +3584,114 @@ app.put('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
     
     // Si se están actualizando los items, procesarlos con estructura completa
     if (items !== undefined) {
-      const processedItems = items.map((item, index) => ({
-        id: item.id || `item_${Date.now()}_${index}`,
-        text: item.text ? item.text.trim() : '',
-        imageUrl: item.imageUrl || null,
-        priority: item.priority || 'medium',
-        details: item.details || '',
-        brand: item.brand || '',
-        store: item.store || '',
-        approximatePrice: item.approximatePrice || null,
-        completed: item.completed || false,
-        createdAt: item.createdAt || new Date()
-      }));
+      const oldItems = oldListData.items || [];
+      const itemIdMapping = {}; // Mapeo de itemId viejo -> itemId nuevo
+      
+      const processedItems = items.map((item, index) => {
+        // Si el item ya tiene un ID, conservarlo sin cambios
+        if (item.id) {
+          return {
+            id: item.id, // Mantener el ID existente
+            text: item.text ? item.text.trim() : '',
+            imageUrl: item.imageUrl || null,
+            priority: item.priority || 'medium',
+            details: item.details || '',
+            brand: item.brand || '',
+            store: item.store || '',
+            approximatePrice: item.approximatePrice || null,
+            completed: item.completed || false,
+            createdAt: item.createdAt || new Date()
+          };
+        }
+        
+        // Si no tiene ID, intentar encontrar el item anterior por texto
+        const newItemId = `item_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        if (item.text) {
+          const oldItem = oldItems.find(old => 
+            old.text && old.text.toLowerCase().trim() === item.text.toLowerCase().trim()
+          );
+          
+          if (oldItem && oldItem.id) {
+            // Usar el ID del item anterior si se encuentra por texto
+            console.log(`🔗 [ADMIN] Reutilizando itemId existente: ${oldItem.id} para "${item.text}"`);
+            return {
+              id: oldItem.id, // Reutilizar ID existente
+              text: item.text.trim(),
+              imageUrl: item.imageUrl || null,
+              priority: item.priority || 'medium',
+              details: item.details || '',
+              brand: item.brand || '',
+              store: item.store || '',
+              approximatePrice: item.approximatePrice || null,
+              completed: item.completed || false,
+              createdAt: item.createdAt || oldItem.createdAt || new Date()
+            };
+          }
+        }
+        
+        // Generar nuevo ID solo si es un item completamente nuevo
+        console.log(`✨ [ADMIN] Generando nuevo itemId: ${newItemId} para "${item.text}"`);
+        return {
+          id: newItemId,
+          text: item.text ? item.text.trim() : '',
+          imageUrl: item.imageUrl || null,
+          priority: item.priority || 'medium',
+          details: item.details || '',
+          brand: item.brand || '',
+          store: item.store || '',
+          approximatePrice: item.approximatePrice || null,
+          completed: item.completed || false,
+          createdAt: item.createdAt || new Date()
+        };
+      });
       
       updateData.items = processedItems;
       updateData.completedItems = processedItems.filter(item => item.completed).length;
       updateData.totalItems = processedItems.length;
       
       console.log('✅ [ADMIN] Items procesados:', processedItems.length);
+      
+      // Actualizar itemId en comentarios y ratings si hay mapeos
+      if (Object.keys(itemIdMapping).length > 0) {
+        console.log('🔄 [ADMIN] Actualizando itemIds en comentarios y ratings...');
+        
+        // Actualizar comentarios
+        const commentsSnapshot = await db.collection('listComments')
+          .where('listId', '==', listId)
+          .get();
+        
+        const commentUpdates = [];
+        commentsSnapshot.forEach(doc => {
+          const oldItemId = doc.data().itemId;
+          if (itemIdMapping[oldItemId]) {
+            commentUpdates.push(
+              doc.ref.update({ itemId: itemIdMapping[oldItemId] })
+            );
+            console.log(`  ✓ Comentario ${doc.id}: ${oldItemId} -> ${itemIdMapping[oldItemId]}`);
+          }
+        });
+        
+        // Actualizar ratings
+        const ratingsSnapshot = await db.collection('itemRatings')
+          .where('listId', '==', listId)
+          .get();
+        
+        const ratingUpdates = [];
+        ratingsSnapshot.forEach(doc => {
+          const oldItemId = doc.data().itemId;
+          if (itemIdMapping[oldItemId]) {
+            ratingUpdates.push(
+              doc.ref.update({ itemId: itemIdMapping[oldItemId] })
+            );
+            console.log(`  ✓ Rating ${doc.id}: ${oldItemId} -> ${itemIdMapping[oldItemId]}`);
+          }
+        });
+        
+        // Ejecutar todas las actualizaciones
+        await Promise.all([...commentUpdates, ...ratingUpdates]);
+        console.log(`✅ [ADMIN] Actualizados ${commentUpdates.length} comentarios y ${ratingUpdates.length} ratings`);
+      }
     }
 
     await listRef.update(updateData);
