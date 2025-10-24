@@ -3814,6 +3814,75 @@ app.delete('/api/admin/lists/:listId/comments/:commentId', authenticateToken, is
 });
 
 // ==========================================
+// 📸 SUBIDA DE IMÁGENES GENERAL
+// ==========================================
+
+// Endpoint general para subir imágenes
+app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { type = 'general' } = req.body; // tipo: list, item, community, profile, etc.
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ninguna imagen'
+      });
+    }
+
+    const file = req.file;
+    const timestamp = Date.now();
+    const fileName = `${type}-${uid}-${timestamp}-${file.originalname}`;
+    const blob = bucket.file(`images/${type}/${fileName}`);
+    
+    const blobStream = blob.createWriteStream({
+      metadata: {
+        contentType: file.mimetype
+      }
+    });
+
+    blobStream.on('error', (error) => {
+      console.error('Error subiendo imagen:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error al subir la imagen',
+        error: error.message
+      });
+    });
+
+    blobStream.on('finish', async () => {
+      try {
+        await blob.makePublic();
+        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${blob.name}`;
+        
+        res.json({
+          success: true,
+          message: 'Imagen subida exitosamente',
+          imageUrl: publicUrl
+        });
+      } catch (error) {
+        console.error('Error haciendo la imagen pública:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Error al hacer pública la imagen',
+          error: error.message
+        });
+      }
+    });
+
+    blobStream.end(file.buffer);
+
+  } catch (error) {
+    console.error('Error en upload de imagen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo imagen',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
 // 📸 FOTO DE PERFIL DEL USUARIO
 // ==========================================
 
