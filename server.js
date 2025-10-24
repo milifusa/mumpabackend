@@ -21,6 +21,9 @@ const OpenAI = require('openai');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// JWT Secret para tokens de admin
+const JWT_SECRET = process.env.JWT_SECRET || 'munpa-secret-key-2025-change-in-production';
+
 // Configuración de CORS mejorada
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
@@ -5068,32 +5071,32 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
       // Si no se proporciona childId, obtener todos los hijos
       console.log('🔍 [TIPS] Obteniendo todos los hijos del usuario');
       
-      const childrenSnapshot = await db.collection('children')
-        .where('parentId', '==', uid)
-        .orderBy('createdAt', 'desc')
-        .get();
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .orderBy('createdAt', 'desc')
+      .get();
 
-      if (childrenSnapshot.empty) {
-        return res.status(404).json({
-          success: false,
-          message: 'No tienes hijos registrados'
-        });
-      }
-
-      childrenSnapshot.forEach(doc => {
-        const childData = doc.data();
-        const currentInfo = getChildCurrentInfo(childData);
-        children.push({
-          id: doc.id,
-          name: childData.name,
-          ageInMonths: childData.ageInMonths,
-          currentAgeInMonths: currentInfo.currentAgeInMonths,
-          isUnborn: childData.isUnborn,
-          gestationWeeks: childData.gestationWeeks,
-          currentGestationWeeks: currentInfo.currentGestationWeeks,
-          daysSinceCreation: currentInfo.daysSinceCreation
-        });
+    if (childrenSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'No tienes hijos registrados'
       });
+    }
+
+    childrenSnapshot.forEach(doc => {
+      const childData = doc.data();
+      const currentInfo = getChildCurrentInfo(childData);
+      children.push({
+        id: doc.id,
+        name: childData.name,
+        ageInMonths: childData.ageInMonths,
+        currentAgeInMonths: currentInfo.currentAgeInMonths,
+        isUnborn: childData.isUnborn,
+        gestationWeeks: childData.gestationWeeks,
+        currentGestationWeeks: currentInfo.currentGestationWeeks,
+        daysSinceCreation: currentInfo.daysSinceCreation
+      });
+    });
       
       console.log('✅ [TIPS] Todos los hijos obtenidos:', children.length);
     }
