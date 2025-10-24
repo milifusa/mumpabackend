@@ -5,12 +5,15 @@
 1. [Autenticación](#autenticación)
 2. [Estadísticas](#estadísticas)
 3. [Gestión de Usuarios](#gestión-de-usuarios)
-4. [Gestión de Comunidades](#gestión-de-comunidades) ✨ **¡Ahora con CREATE y UPDATE!**
-5. [Gestión de Posts](#gestión-de-posts) ✨ **¡Ahora con CREATE y UPDATE!**
-6. [Gestión de Listas](#gestión-de-listas)
-7. [Cómo Hacer un Usuario Admin](#cómo-hacer-un-usuario-admin)
+4. [Gestión de Hijos](#gestión-de-hijos) ✨ **¡NUEVO!**
+5. [Gestión de Comunidades](#gestión-de-comunidades) ✨ **¡Con CREATE y UPDATE!**
+6. [Gestión de Posts](#gestión-de-posts) ✨ **¡Con CREATE y UPDATE!**
+7. [Gestión de Listas](#gestión-de-listas)
+8. [Cómo Hacer un Usuario Admin](#cómo-hacer-un-usuario-admin)
 
-> 📝 **Nota:** Para una documentación detallada con ejemplos de código Angular sobre crear y editar comunidades y posts, consulta: [ADMIN-CRUD-COMUNIDADES-POSTS.md](./ADMIN-CRUD-COMUNIDADES-POSTS.md)
+> 📝 **Documentación detallada:**
+> - [ADMIN-CRUD-COMUNIDADES-POSTS.md](./ADMIN-CRUD-COMUNIDADES-POSTS.md) - Crear y editar comunidades y posts
+> - [ADMIN-GESTION-HIJOS.md](./ADMIN-GESTION-HIJOS.md) - ✨ **NUEVO**: Gestión completa de hijos
 
 ---
 
@@ -303,6 +306,88 @@ deleteUser(userId: string, permanent: boolean = false): Observable<any> {
   });
 }
 ```
+
+---
+
+## 👶 Gestión de Hijos
+
+El dashboard permite gestionar los perfiles de hijos de todos los usuarios.
+
+### GET `/api/admin/children`
+
+Obtiene todos los hijos registrados en la plataforma.
+
+**Query Parameters:**
+- `page` (number, default: 1)
+- `limit` (number, default: 20)
+- `search` (string, opcional): Buscar por nombre o ID del padre
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "child123",
+      "parentId": "user456",
+      "name": "Sofía García",
+      "ageInMonths": 8,
+      "gestationWeeks": null,
+      "isUnborn": false,
+      "photoUrl": "https://...",
+      "createdAt": "2025-01-10T10:30:00.000Z",
+      "updatedAt": "2025-01-15T14:20:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 156,
+    "totalPages": 8
+  }
+}
+```
+
+---
+
+### PUT `/api/admin/children/:childId`
+
+Edita la información de cualquier hijo (sin restricciones de ownership).
+
+**Body:**
+```json
+{
+  "name": "Sofía María García",
+  "ageInMonths": 9,
+  "isUnborn": false,
+  "photoUrl": "https://..."
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Hijo actualizado exitosamente",
+  "data": { ... }
+}
+```
+
+---
+
+### DELETE `/api/admin/children/:childId`
+
+Elimina permanentemente el perfil de un hijo.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Hijo eliminado exitosamente"
+}
+```
+
+> 📚 **Documentación completa**: [ADMIN-GESTION-HIJOS.md](./ADMIN-GESTION-HIJOS.md)
 
 ---
 
