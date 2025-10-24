@@ -3344,9 +3344,12 @@ app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
       const listData = doc.data();
       let ownerInfo = null;
 
-      if (listData.userId) {
+      // Buscar el dueño usando userId o creatorId (compatibilidad con ambos formatos)
+      const ownerId = listData.userId || listData.creatorId;
+
+      if (ownerId) {
         try {
-          const userDoc = await db.collection('users').doc(listData.userId).get();
+          const userDoc = await db.collection('users').doc(ownerId).get();
           if (userDoc.exists) {
             const userData = userDoc.data();
             ownerInfo = {
@@ -3356,7 +3359,7 @@ app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
             };
           }
         } catch (error) {
-          console.error(`Error obteniendo usuario ${listData.userId}:`, error);
+          console.error(`Error obteniendo usuario ${ownerId}:`, error);
         }
       }
 
@@ -3425,10 +3428,12 @@ app.get('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
     const listData = listDoc.data();
     let ownerInfo = null;
 
-    // Obtener información del dueño
-    if (listData.userId) {
+    // Obtener información del dueño (compatibilidad con userId y creatorId)
+    const ownerId = listData.userId || listData.creatorId;
+
+    if (ownerId) {
       try {
-        const userDoc = await db.collection('users').doc(listData.userId).get();
+        const userDoc = await db.collection('users').doc(ownerId).get();
         if (userDoc.exists) {
           const userData = userDoc.data();
           ownerInfo = {
@@ -3439,7 +3444,7 @@ app.get('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res)
           };
         }
       } catch (error) {
-        console.error(`Error obteniendo usuario ${listData.userId}:`, error);
+        console.error(`Error obteniendo usuario ${ownerId}:`, error);
       }
     }
 
