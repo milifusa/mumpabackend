@@ -5,10 +5,12 @@
 1. [Autenticación](#autenticación)
 2. [Estadísticas](#estadísticas)
 3. [Gestión de Usuarios](#gestión-de-usuarios)
-4. [Gestión de Comunidades](#gestión-de-comunidades)
-5. [Gestión de Posts](#gestión-de-posts)
+4. [Gestión de Comunidades](#gestión-de-comunidades) ✨ **¡Ahora con CREATE y UPDATE!**
+5. [Gestión de Posts](#gestión-de-posts) ✨ **¡Ahora con CREATE y UPDATE!**
 6. [Gestión de Listas](#gestión-de-listas)
 7. [Cómo Hacer un Usuario Admin](#cómo-hacer-un-usuario-admin)
+
+> 📝 **Nota:** Para una documentación detallada con ejemplos de código Angular sobre crear y editar comunidades y posts, consulta: [ADMIN-CRUD-COMUNIDADES-POSTS.md](./ADMIN-CRUD-COMUNIDADES-POSTS.md)
 
 ---
 
@@ -358,6 +360,69 @@ getCommunities(page: number = 1, limit: number = 20, search: string = ''): Obser
 
 ---
 
+### POST `/api/admin/communities` ✨ **NUEVO**
+
+Crea una nueva comunidad.
+
+**Body:**
+```json
+{
+  "name": "Mamás Primerizas 2025",
+  "description": "Comunidad para mamás que esperan su primer bebé",
+  "imageUrl": "https://example.com/image.jpg",
+  "isPrivate": false
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Comunidad creada exitosamente",
+  "data": {
+    "id": "abc123",
+    "name": "Mamás Primerizas 2025",
+    "description": "Comunidad para mamás que esperan su primer bebé",
+    "imageUrl": "https://example.com/image.jpg",
+    "isPrivate": false,
+    "members": ["user123"],
+    "memberCount": 1,
+    "postCount": 0
+  }
+}
+```
+
+---
+
+### PUT `/api/admin/communities/:communityId` ✨ **NUEVO**
+
+Edita una comunidad existente.
+
+**Body (todos los campos son opcionales):**
+```json
+{
+  "name": "Nuevo nombre",
+  "description": "Nueva descripción",
+  "imageUrl": "https://example.com/new-image.jpg",
+  "isPrivate": true
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Comunidad actualizada exitosamente",
+  "data": {
+    "id": "abc123",
+    "name": "Nuevo nombre",
+    "description": "Nueva descripción"
+  }
+}
+```
+
+---
+
 ### DELETE `/api/admin/communities/:communityId`
 
 Elimina una comunidad permanentemente.
@@ -428,6 +493,65 @@ getPosts(page: number = 1, limit: number = 20): Observable<any> {
     headers: this.getHeaders(),
     params: params
   });
+}
+```
+
+---
+
+### POST `/api/admin/posts` ✨ **NUEVO**
+
+Crea un nuevo post en una comunidad.
+
+**Body:**
+```json
+{
+  "content": "¡Bienvenidas a la comunidad! Aquí pueden compartir sus experiencias.",
+  "imageUrl": "https://example.com/post-image.jpg",
+  "communityId": "abc123"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Post creado exitosamente",
+  "data": {
+    "id": "post123",
+    "content": "¡Bienvenidas a la comunidad!",
+    "imageUrl": "https://example.com/post-image.jpg",
+    "authorId": "user123",
+    "communityId": "abc123",
+    "likes": [],
+    "commentCount": 0
+  }
+}
+```
+
+---
+
+### PUT `/api/admin/posts/:postId` ✨ **NUEVO**
+
+Edita un post existente.
+
+**Body (todos los campos son opcionales):**
+```json
+{
+  "content": "Contenido actualizado del post",
+  "imageUrl": "https://example.com/updated-image.jpg"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Post actualizado exitosamente",
+  "data": {
+    "id": "post123",
+    "content": "Contenido actualizado del post",
+    "imageUrl": "https://example.com/updated-image.jpg"
+  }
 }
 ```
 
