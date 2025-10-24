@@ -2710,6 +2710,79 @@ app.put('/api/admin/communities/:communityId', authenticateToken, isAdmin, async
   }
 });
 
+// Obtener detalle de una comunidad específica con sus posts
+app.get('/api/admin/communities/:communityId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { communityId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    
+    console.log('🏘️ [ADMIN] Obteniendo detalle de comunidad:', communityId);
+
+    // Obtener datos de la comunidad
+    const communityDoc = await db.collection('communities').doc(communityId).get();
+    
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    // Obtener posts de la comunidad
+    const postsSnapshot = await db.collection('posts')
+      .where('communityId', '==', communityId)
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const allPosts = postsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate()
+    }));
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedPosts = allPosts.slice(startIndex, endIndex);
+
+    // Obtener información de miembros
+    const communityData = communityDoc.data();
+    const memberCount = communityData.members?.length || 0;
+
+    res.json({
+      success: true,
+      data: {
+        community: {
+          id: communityDoc.id,
+          ...communityData,
+          createdAt: communityData.createdAt?.toDate(),
+          updatedAt: communityData.updatedAt?.toDate()
+        },
+        posts: paginatedPosts,
+        stats: {
+          totalPosts: allPosts.length,
+          memberCount: memberCount
+        },
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: allPosts.length,
+          totalPages: Math.ceil(allPosts.length / limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo detalle de comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalle de comunidad',
+      error: error.message
+    });
+  }
+});
+
 // Eliminar comunidad
 app.delete('/api/admin/communities/:communityId', authenticateToken, isAdmin, async (req, res) => {
   try {
