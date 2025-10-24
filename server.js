@@ -3073,18 +3073,32 @@ app.delete('/api/admin/children/:childId', authenticateToken, isAdmin, async (re
     // Eliminar el hijo
     await db.collection('children').doc(childId).delete();
 
-    // Actualizar el contador de hijos del padre
+    // Actualizar el contador de hijos del padre (solo si el padre existe)
     if (parentId) {
-      const childrenSnapshot = await db.collection('children')
-        .where('parentId', '==', parentId)
-        .get();
-      
-      const actualChildrenCount = childrenSnapshot.size;
-      
-      await db.collection('users').doc(parentId).update({
-        childrenCount: actualChildrenCount,
-        updatedAt: new Date()
-      });
+      try {
+        // Verificar que el usuario padre existe
+        const parentDoc = await db.collection('users').doc(parentId).get();
+        
+        if (parentDoc.exists) {
+          const childrenSnapshot = await db.collection('children')
+            .where('parentId', '==', parentId)
+            .get();
+          
+          const actualChildrenCount = childrenSnapshot.size;
+          
+          await db.collection('users').doc(parentId).update({
+            childrenCount: actualChildrenCount,
+            updatedAt: new Date()
+          });
+          
+          console.log(`✅ [ADMIN] Contador de hijos actualizado para usuario ${parentId}: ${actualChildrenCount}`);
+        } else {
+          console.log(`⚠️ [ADMIN] Usuario padre ${parentId} no encontrado, no se actualizará el contador`);
+        }
+      } catch (updateError) {
+        // Si falla la actualización del padre, solo lo registramos pero no fallamos la operación
+        console.error('⚠️ [ADMIN] Error actualizando contador del padre:', updateError.message);
+      }
     }
 
     res.json({
