@@ -1,0 +1,14 @@
+[
+  {
+    "origin": [
+      "http://localhost:4200",
+      "https://munpa.online",
+      "https://www.munpa.online",
+      "https://dash.munpa.online"
+    ],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+    "responseHeader": ["Content-Type", "Authorization", "Content-Length"],
+    "maxAgeSeconds": 3600
+  }
+]
+

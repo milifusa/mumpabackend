@@ -3371,6 +3371,133 @@ app.get('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+// Crear nueva lista
+app.post('/api/admin/lists', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { title, description, items, isPublic = true } = req.body;
+    
+    console.log('➕ [ADMIN] Creando nueva lista:', title);
+
+    if (!title) {
+      return res.status(400).json({
+        success: false,
+        message: 'El título de la lista es requerido'
+      });
+    }
+
+    const listData = {
+      title,
+      description: description || '',
+      items: items || [],
+      isPublic,
+      userId: req.user.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const listRef = await db.collection('lists').add(listData);
+
+    res.json({
+      success: true,
+      message: 'Lista creada exitosamente',
+      data: {
+        id: listRef.id,
+        ...listData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando lista',
+      error: error.message
+    });
+  }
+});
+
+// Editar lista
+app.put('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { title, description, items, isPublic } = req.body;
+    
+    console.log('✏️ [ADMIN] Editando lista:', listId);
+
+    const listRef = db.collection('lists').doc(listId);
+    const listDoc = await listRef.get();
+
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    const updateData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (title !== undefined) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (items !== undefined) updateData.items = items;
+    if (isPublic !== undefined) updateData.isPublic = isPublic;
+
+    await listRef.update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Lista actualizada exitosamente',
+      data: {
+        id: listId,
+        ...listDoc.data(),
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error editando lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error editando lista',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar lista
+app.delete('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando lista:', listId);
+
+    const listDoc = await db.collection('lists').doc(listId).get();
+    
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    await db.collection('lists').doc(listId).delete();
+
+    res.json({
+      success: true,
+      message: 'Lista eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando lista',
+      error: error.message
+    });
+  }
+});
+
 // ==========================================
 // 📸 FOTO DE PERFIL DEL USUARIO
 // ==========================================
