@@ -91,7 +91,74 @@ Content-Type: application/json
 
 ---
 
-### 3. Obtener Todas las Comunidades
+### 3. Obtener Detalle de una Comunidad (con sus posts)
+```http
+GET /api/admin/communities/:communityId?page=1&limit=20
+```
+
+**Headers:**
+```
+Authorization: Bearer {JWT_TOKEN}
+```
+
+**Query Parameters:**
+- `page` (opcional): Número de página para los posts (default: 1)
+- `limit` (opcional): Posts por página (default: 20)
+
+**Respuesta exitosa (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "community": {
+      "id": "abc123",
+      "name": "Mamás Primerizas 2025",
+      "description": "Comunidad para mamás que esperan su primer bebé",
+      "imageUrl": "https://example.com/image.jpg",
+      "isPrivate": false,
+      "members": ["user1", "user2", "user3"],
+      "createdBy": "user123",
+      "memberCount": 25,
+      "postCount": 150,
+      "createdAt": "2025-01-15T10:30:00.000Z",
+      "updatedAt": "2025-01-20T15:45:00.000Z"
+    },
+    "posts": [
+      {
+        "id": "post123",
+        "content": "¡Bienvenidas a la comunidad!",
+        "imageUrl": "https://example.com/post-image.jpg",
+        "authorId": "user456",
+        "communityId": "abc123",
+        "likes": ["user1", "user2"],
+        "commentCount": 5,
+        "createdAt": "2025-01-20T10:30:00.000Z",
+        "updatedAt": "2025-01-20T10:30:00.000Z"
+      }
+    ],
+    "stats": {
+      "totalPosts": 150,
+      "memberCount": 25
+    },
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 150,
+      "totalPages": 8
+    }
+  }
+}
+```
+
+**Errores:**
+- `404`: Comunidad no encontrada
+
+**Uso:**
+Este endpoint es perfecto para mostrar una vista detallada de una comunidad específica en el dashboard, incluyendo todos sus posts con paginación.
+
+---
+
+### 4. Obtener Todas las Comunidades
 ```http
 GET /api/admin/communities?page=1&limit=20&search=mamás
 ```
@@ -134,7 +201,7 @@ Authorization: Bearer {JWT_TOKEN}
 
 ---
 
-### 4. Eliminar Comunidad
+### 5. Eliminar Comunidad
 ```http
 DELETE /api/admin/communities/:communityId
 ```
@@ -323,15 +390,23 @@ headers: {
 
 ## 📋 Notas Importantes
 
+### Permisos de Administrador:
+- ✅ **El administrador puede editar CUALQUIER post**, sin importar quién lo haya creado
+- ✅ **El administrador puede editar CUALQUIER comunidad**, sin importar quién sea el owner
+- ✅ **No hay verificación de ownership** en los endpoints de edición y eliminación del dashboard
+- ✅ Todos los endpoints están protegidos por el middleware `isAdmin`
+
 ### Comunidades:
 - El administrador que crea la comunidad automáticamente se convierte en el primer miembro
 - Los contadores `memberCount` y `postCount` se actualizan automáticamente
 - La búsqueda funciona tanto en `name` como en `description`
+- El endpoint de detalle (`GET /api/admin/communities/:id`) incluye todos los posts de la comunidad con paginación
 
 ### Posts:
 - Al crear un post, se incrementa automáticamente el contador `postCount` de la comunidad
-- El `authorId` se toma automáticamente del usuario autenticado
+- El `authorId` se toma automáticamente del usuario autenticado (admin)
 - Los campos `likes` y `commentCount` se inicializan vacíos/en 0
+- **El admin puede editar posts de cualquier usuario en cualquier comunidad**
 
 ### Validaciones:
 - Todos los endpoints verifican que el usuario sea administrador
@@ -531,13 +606,21 @@ export class CreateCommunityComponent {
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
 | POST | `/api/admin/communities` | Crear nueva comunidad |
+| GET | `/api/admin/communities/:communityId` | ✨ **NUEVO**: Obtener detalle de comunidad con posts |
 | PUT | `/api/admin/communities/:communityId` | Editar comunidad |
 | GET | `/api/admin/communities` | Obtener comunidades (ya existía) |
 | DELETE | `/api/admin/communities/:communityId` | Eliminar comunidad (ya existía) |
 | POST | `/api/admin/posts` | Crear nuevo post |
-| PUT | `/api/admin/posts/:postId` | Editar post |
+| PUT | `/api/admin/posts/:postId` | Editar post (sin verificación de ownership) |
 | GET | `/api/admin/posts` | Obtener posts (ya existía) |
 | DELETE | `/api/admin/posts/:postId` | Eliminar post (ya existía) |
+
+### 🔑 Características Clave
+
+- ✅ **Control total del admin**: Editar/eliminar cualquier contenido
+- ✅ **Sin restricciones de ownership**: El admin no necesita ser el creador
+- ✅ **Vista detallada de comunidades**: Incluye posts con paginación
+- ✅ **CRUD completo**: Crear, Leer, Actualizar, Eliminar
 
 **¡Todos los endpoints están desplegados y listos para usar!** 🚀
 
