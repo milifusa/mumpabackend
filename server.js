@@ -2783,6 +2783,103 @@ app.get('/api/admin/communities/:communityId', authenticateToken, isAdmin, async
   }
 });
 
+// Obtener miembros de una comunidad
+app.get('/api/admin/communities/:communityId/members', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { communityId } = req.params;
+    const { page = 1, limit = 50 } = req.query;
+    
+    console.log('👥 [ADMIN] Obteniendo miembros de comunidad:', communityId);
+
+    // Obtener la comunidad
+    const communityDoc = await db.collection('communities').doc(communityId).get();
+    
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    const memberIds = communityData.members || [];
+
+    if (memberIds.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          page: 1,
+          limit: parseInt(limit),
+          total: 0,
+          totalPages: 0
+        }
+      });
+    }
+
+    // Obtener información detallada de cada miembro
+    const memberPromises = memberIds.map(async (memberId) => {
+      try {
+        const userDoc = await db.collection('users').doc(memberId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          return {
+            id: userDoc.id,
+            displayName: userData.displayName || 'Sin nombre',
+            email: userData.email || null,
+            photoURL: userData.photoURL || null,
+            isActive: userData.isActive !== false,
+            createdAt: userData.createdAt?.toDate(),
+            lastLoginAt: userData.lastLoginAt?.toDate()
+          };
+        }
+        return null;
+      } catch (error) {
+        console.error(`Error obteniendo usuario ${memberId}:`, error);
+        return null;
+      }
+    });
+
+    const allMembers = (await Promise.all(memberPromises)).filter(m => m !== null);
+
+    // Ordenar por displayName
+    allMembers.sort((a, b) => {
+      const nameA = a.displayName?.toLowerCase() || '';
+      const nameB = b.displayName?.toLowerCase() || '';
+      return nameA.localeCompare(nameB);
+    });
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedMembers = allMembers.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedMembers,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: allMembers.length,
+        totalPages: Math.ceil(allMembers.length / limit)
+      },
+      communityInfo: {
+        id: communityId,
+        name: communityData.name,
+        memberCount: allMembers.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo miembros:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo miembros de la comunidad',
+      error: error.message
+    });
+  }
+});
+
 // Eliminar comunidad
 app.delete('/api/admin/communities/:communityId', authenticateToken, isAdmin, async (req, res) => {
   try {
