@@ -3591,6 +3591,223 @@ app.delete('/api/admin/lists/:listId', authenticateToken, isAdmin, async (req, r
   }
 });
 
+// Obtener calificaciones de una lista (items)
+app.get('/api/admin/lists/:listId/ratings', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    
+    console.log('⭐ [ADMIN] Obteniendo calificaciones de lista:', listId);
+
+    const listDoc = await db.collection('lists').doc(listId).get();
+    
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    // Obtener todas las calificaciones de items de esta lista
+    const ratingsSnapshot = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .get();
+
+    const ratings = await Promise.all(ratingsSnapshot.docs.map(async (doc) => {
+      const ratingData = doc.data();
+      let userInfo = null;
+
+      // Obtener información del usuario que calificó
+      if (ratingData.userId) {
+        try {
+          const userDoc = await db.collection('users').doc(ratingData.userId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            userInfo = {
+              id: userDoc.id,
+              displayName: userData.displayName || 'Usuario',
+              email: userData.email || null
+            };
+          }
+        } catch (error) {
+          console.error(`Error obteniendo usuario ${ratingData.userId}:`, error);
+        }
+      }
+
+      return {
+        id: doc.id,
+        ...ratingData,
+        user: userInfo,
+        createdAt: ratingData.createdAt?.toDate()
+      };
+    }));
+
+    // Calcular estadísticas por item
+    const itemStats = {};
+    ratings.forEach(rating => {
+      if (!itemStats[rating.itemId]) {
+        itemStats[rating.itemId] = {
+          itemId: rating.itemId,
+          totalRatings: 0,
+          sumRatings: 0,
+          averageRating: 0
+        };
+      }
+      itemStats[rating.itemId].totalRatings++;
+      itemStats[rating.itemId].sumRatings += rating.rating;
+    });
+
+    // Calcular promedios
+    Object.keys(itemStats).forEach(itemId => {
+      const stats = itemStats[itemId];
+      stats.averageRating = parseFloat((stats.sumRatings / stats.totalRatings).toFixed(1));
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ratings: ratings,
+        stats: Object.values(itemStats),
+        totalRatings: ratings.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo calificaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo calificaciones',
+      error: error.message
+    });
+  }
+});
+
+// Obtener comentarios de una lista (items)
+app.get('/api/admin/lists/:listId/comments', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { page = 1, limit = 50 } = req.query;
+    
+    console.log('💬 [ADMIN] Obteniendo comentarios de lista:', listId);
+
+    const listDoc = await db.collection('lists').doc(listId).get();
+    
+    if (!listDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lista no encontrada'
+      });
+    }
+
+    // Obtener todos los comentarios de items de esta lista
+    const commentsSnapshot = await db.collection('listComments')
+      .where('listId', '==', listId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const allComments = await Promise.all(commentsSnapshot.docs.map(async (doc) => {
+      const commentData = doc.data();
+      let userInfo = null;
+
+      // Obtener información del usuario que comentó
+      if (commentData.userId) {
+        try {
+          const userDoc = await db.collection('users').doc(commentData.userId).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            userInfo = {
+              id: userDoc.id,
+              displayName: userData.displayName || 'Usuario',
+              email: userData.email || null,
+              photoURL: userData.photoURL || null
+            };
+          }
+        } catch (error) {
+          console.error(`Error obteniendo usuario ${commentData.userId}:`, error);
+        }
+      }
+
+      return {
+        id: doc.id,
+        ...commentData,
+        user: userInfo,
+        createdAt: commentData.createdAt?.toDate()
+      };
+    }));
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedComments = allComments.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedComments,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: allComments.length,
+        totalPages: Math.ceil(allComments.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo comentarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo comentarios',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar calificación
+app.delete('/api/admin/lists/:listId/ratings/:ratingId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { ratingId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando calificación:', ratingId);
+
+    await db.collection('itemRatings').doc(ratingId).delete();
+
+    res.json({
+      success: true,
+      message: 'Calificación eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando calificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando calificación',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar comentario
+app.delete('/api/admin/lists/:listId/comments/:commentId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando comentario:', commentId);
+
+    await db.collection('listComments').doc(commentId).delete();
+
+    res.json({
+      success: true,
+      message: 'Comentario eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando comentario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando comentario',
+      error: error.message
+    });
+  }
+});
+
 // ==========================================
 // 📸 FOTO DE PERFIL DEL USUARIO
 // ==========================================
