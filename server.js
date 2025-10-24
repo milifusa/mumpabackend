@@ -3851,6 +3851,7 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
     const file = req.file;
     const timestamp = Date.now();
     const fileName = `${type}-${uid}-${timestamp}-${file.originalname}`;
+    const bucket = admin.storage().bucket();
     const blob = bucket.file(`images/${type}/${fileName}`);
     
     const blobStream = blob.createWriteStream({
@@ -3918,6 +3919,7 @@ app.post('/api/admin/upload/image', authenticateToken, isAdmin, upload.single('i
     const file = req.file;
     const timestamp = Date.now();
     const fileName = `${type}-admin-${uid}-${timestamp}-${file.originalname}`;
+    const bucket = admin.storage().bucket();
     const blob = bucket.file(`images/${type}/${fileName}`);
     
     const blobStream = blob.createWriteStream({
