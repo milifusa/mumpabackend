@@ -2613,6 +2613,103 @@ app.get('/api/admin/communities', authenticateToken, isAdmin, async (req, res) =
   }
 });
 
+// Crear nueva comunidad
+app.post('/api/admin/communities', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, imageUrl, isPrivate = false } = req.body;
+    
+    console.log('➕ [ADMIN] Creando nueva comunidad:', name);
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre de la comunidad es requerido'
+      });
+    }
+
+    const communityData = {
+      name,
+      description: description || '',
+      imageUrl: imageUrl || null,
+      isPrivate,
+      members: [req.user.uid], // El admin es el primer miembro
+      createdBy: req.user.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      memberCount: 1,
+      postCount: 0
+    };
+
+    const communityRef = await db.collection('communities').add(communityData);
+
+    res.json({
+      success: true,
+      message: 'Comunidad creada exitosamente',
+      data: {
+        id: communityRef.id,
+        ...communityData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando comunidad',
+      error: error.message
+    });
+  }
+});
+
+// Editar comunidad
+app.put('/api/admin/communities/:communityId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { communityId } = req.params;
+    const { name, description, imageUrl, isPrivate } = req.body;
+    
+    console.log('✏️ [ADMIN] Editando comunidad:', communityId);
+
+    const communityRef = db.collection('communities').doc(communityId);
+    const communityDoc = await communityRef.get();
+
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const updateData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (isPrivate !== undefined) updateData.isPrivate = isPrivate;
+
+    await communityRef.update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Comunidad actualizada exitosamente',
+      data: {
+        id: communityId,
+        ...communityDoc.data(),
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error editando comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error editando comunidad',
+      error: error.message
+    });
+  }
+});
+
 // Eliminar comunidad
 app.delete('/api/admin/communities/:communityId', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -2677,6 +2774,124 @@ app.get('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error obteniendo posts',
+      error: error.message
+    });
+  }
+});
+
+// Crear nuevo post
+app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { content, imageUrl, communityId } = req.body;
+    
+    console.log('➕ [ADMIN] Creando nuevo post');
+
+    if (!content) {
+      return res.status(400).json({
+        success: false,
+        message: 'El contenido del post es requerido'
+      });
+    }
+
+    if (!communityId) {
+      return res.status(400).json({
+        success: false,
+        message: 'El ID de la comunidad es requerido'
+      });
+    }
+
+    // Verificar que la comunidad existe
+    const communityDoc = await db.collection('communities').doc(communityId).get();
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const postData = {
+      content,
+      authorId: req.user.uid,
+      communityId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      likes: [],
+      commentCount: 0
+    };
+
+    // Solo agregar imageUrl si se proporciona
+    if (imageUrl) {
+      postData.imageUrl = imageUrl;
+    }
+
+    const postRef = await db.collection('posts').add(postData);
+
+    // Incrementar el contador de posts en la comunidad
+    await db.collection('communities').doc(communityId).update({
+      postCount: admin.firestore.FieldValue.increment(1)
+    });
+
+    res.json({
+      success: true,
+      message: 'Post creado exitosamente',
+      data: {
+        id: postRef.id,
+        ...postData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando post',
+      error: error.message
+    });
+  }
+});
+
+// Editar post
+app.put('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { content, imageUrl } = req.body;
+    
+    console.log('✏️ [ADMIN] Editando post:', postId);
+
+    const postRef = db.collection('posts').doc(postId);
+    const postDoc = await postRef.get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post no encontrado'
+      });
+    }
+
+    const updateData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (content !== undefined) updateData.content = content;
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+
+    await postRef.update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Post actualizado exitosamente',
+      data: {
+        id: postId,
+        ...postDoc.data(),
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error editando post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error editando post',
       error: error.message
     });
   }
