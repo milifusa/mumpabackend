@@ -3883,11 +3883,25 @@ app.get('/api/admin/lists/:listId/items/:itemId/ratings', authenticateToken, isA
     
     console.log('⭐ [ADMIN] Obteniendo ratings del item:', itemId, 'en lista:', listId);
 
+    // Primero, obtener todos los ratings de la lista para debug
+    const allRatingsSnapshot = await db.collection('itemRatings')
+      .where('listId', '==', listId)
+      .get();
+    
+    console.log('📊 [ADMIN] Total ratings en la lista:', allRatingsSnapshot.size);
+    if (allRatingsSnapshot.size > 0) {
+      console.log('🔍 [ADMIN] Ejemplo de itemIds encontrados:', 
+        allRatingsSnapshot.docs.slice(0, 3).map(doc => doc.data().itemId)
+      );
+    }
+
     // Obtener todas las calificaciones del item
     const ratingsSnapshot = await db.collection('itemRatings')
       .where('listId', '==', listId)
       .where('itemId', '==', itemId)
       .get();
+
+    console.log('✅ [ADMIN] Ratings encontrados para itemId', itemId, ':', ratingsSnapshot.size);
 
     const ratings = [];
     for (const doc of ratingsSnapshot.docs) {
@@ -3978,11 +3992,25 @@ app.get('/api/admin/lists/:listId/items/:itemId/comments', authenticateToken, is
     
     console.log('💬 [ADMIN] Obteniendo comentarios del item:', itemId, 'en lista:', listId);
 
+    // Primero, obtener todos los comentarios de la lista para debug
+    const allCommentsSnapshot = await db.collection('listComments')
+      .where('listId', '==', listId)
+      .get();
+    
+    console.log('📊 [ADMIN] Total comentarios en la lista:', allCommentsSnapshot.size);
+    if (allCommentsSnapshot.size > 0) {
+      console.log('🔍 [ADMIN] Ejemplo de itemIds encontrados:', 
+        allCommentsSnapshot.docs.slice(0, 3).map(doc => doc.data().itemId)
+      );
+    }
+
     // Obtener todos los comentarios del item
     const commentsSnapshot = await db.collection('listComments')
       .where('listId', '==', listId)
       .where('itemId', '==', itemId)
       .get();
+
+    console.log('✅ [ADMIN] Comentarios encontrados para itemId', itemId, ':', commentsSnapshot.size);
 
     const comments = [];
     for (const doc of commentsSnapshot.docs) {
