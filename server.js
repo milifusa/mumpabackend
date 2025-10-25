@@ -3710,6 +3710,371 @@ app.delete('/api/admin/posts/:postId/comments/:commentId', authenticateToken, is
   }
 });
 
+// ========== GESTIÓN DE CATEGORÍAS ==========
+
+// ===== ENDPOINTS PARA LA APP (SOLO LECTURA) =====
+
+// Obtener todas las categorías activas (para la app)
+app.get('/api/categories', authenticateToken, async (req, res) => {
+  try {
+    console.log('📂 [APP] Obteniendo categorías');
+
+    const snapshot = await db.collection('categories')
+      .where('isActive', '==', true)
+      .orderBy('order', 'asc')
+      .get();
+
+    const categories = snapshot.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name,
+      description: doc.data().description,
+      imageUrl: doc.data().imageUrl,
+      order: doc.data().order,
+      icon: doc.data().icon
+    }));
+
+    res.json({
+      success: true,
+      data: categories
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
+
+// Obtener una categoría específica (para la app)
+app.get('/api/categories/:categoryId', authenticateToken, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    
+    console.log('📂 [APP] Obteniendo categoría:', categoryId);
+
+    const categoryDoc = await db.collection('categories').doc(categoryId).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    const categoryData = categoryDoc.data();
+
+    if (!categoryData.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no disponible'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: categoryDoc.id,
+        name: categoryData.name,
+        description: categoryData.description,
+        imageUrl: categoryData.imageUrl,
+        order: categoryData.order,
+        icon: categoryData.icon
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categoría',
+      error: error.message
+    });
+  }
+});
+
+// ===== ENDPOINTS ADMIN (CRUD COMPLETO) =====
+
+// Obtener todas las categorías (admin)
+app.get('/api/admin/categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '' } = req.query;
+    
+    console.log('📂 [ADMIN] Obteniendo categorías');
+
+    const snapshot = await db.collection('categories')
+      .orderBy('order', 'asc')
+      .get();
+
+    let categories = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      updatedAt: doc.data().updatedAt?.toDate()
+    }));
+
+    // Filtrar por búsqueda si existe
+    if (search) {
+      const searchLower = search.toLowerCase();
+      categories = categories.filter(category => 
+        category.name?.toLowerCase().includes(searchLower) ||
+        category.description?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedCategories = categories.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedCategories,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: categories.length,
+        totalPages: Math.ceil(categories.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
+
+// Obtener una categoría específica (admin)
+app.get('/api/admin/categories/:categoryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    
+    console.log('📂 [ADMIN] Obteniendo categoría:', categoryId);
+
+    const categoryDoc = await db.collection('categories').doc(categoryId).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    const categoryData = categoryDoc.data();
+
+    res.json({
+      success: true,
+      data: {
+        id: categoryDoc.id,
+        ...categoryData,
+        createdAt: categoryData.createdAt?.toDate(),
+        updatedAt: categoryData.updatedAt?.toDate()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categoría',
+      error: error.message
+    });
+  }
+});
+
+// Crear nueva categoría (admin)
+app.post('/api/admin/categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, imageUrl, icon, order, isActive = true } = req.body;
+    
+    console.log('➕ [ADMIN] Creando nueva categoría:', name);
+
+    // Validaciones
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre de la categoría es requerido'
+      });
+    }
+
+    // Si no se proporciona orden, obtener el siguiente número
+    let categoryOrder = order;
+    if (categoryOrder === undefined || categoryOrder === null) {
+      const snapshot = await db.collection('categories').get();
+      categoryOrder = snapshot.size;
+    }
+
+    const categoryData = {
+      name: name.trim(),
+      description: description ? description.trim() : '',
+      imageUrl: imageUrl || null,
+      icon: icon || null,
+      order: parseInt(categoryOrder),
+      isActive: isActive === true || isActive === 'true',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const categoryRef = await db.collection('categories').add(categoryData);
+
+    console.log('✅ [ADMIN] Categoría creada:', categoryRef.id);
+
+    res.json({
+      success: true,
+      message: 'Categoría creada exitosamente',
+      data: {
+        id: categoryRef.id,
+        ...categoryData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar categoría (admin)
+app.put('/api/admin/categories/:categoryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const { name, description, imageUrl, icon, order, isActive } = req.body;
+    
+    console.log('✏️ [ADMIN] Actualizando categoría:', categoryId);
+
+    const categoryRef = db.collection('categories').doc(categoryId);
+    const categoryDoc = await categoryRef.get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (name !== undefined) updateData.name = name.trim();
+    if (description !== undefined) updateData.description = description.trim();
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (icon !== undefined) updateData.icon = icon;
+    if (order !== undefined) updateData.order = parseInt(order);
+    if (isActive !== undefined) updateData.isActive = isActive === true || isActive === 'true';
+
+    await categoryRef.update(updateData);
+
+    console.log('✅ [ADMIN] Categoría actualizada');
+
+    res.json({
+      success: true,
+      message: 'Categoría actualizada exitosamente',
+      data: {
+        id: categoryId,
+        ...categoryDoc.data(),
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar categoría (admin)
+app.delete('/api/admin/categories/:categoryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando categoría:', categoryId);
+
+    const categoryDoc = await db.collection('categories').doc(categoryId).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    await db.collection('categories').doc(categoryId).delete();
+
+    console.log('✅ [ADMIN] Categoría eliminada');
+
+    res.json({
+      success: true,
+      message: 'Categoría eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Reordenar categorías (admin)
+app.patch('/api/admin/categories/reorder', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categories } = req.body; // Array de { id, order }
+    
+    console.log('🔄 [ADMIN] Reordenando categorías');
+
+    if (!Array.isArray(categories)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere un array de categorías'
+      });
+    }
+
+    const batch = db.batch();
+
+    categories.forEach(({ id, order }) => {
+      const categoryRef = db.collection('categories').doc(id);
+      batch.update(categoryRef, { 
+        order: parseInt(order),
+        updatedAt: new Date()
+      });
+    });
+
+    await batch.commit();
+
+    console.log('✅ [ADMIN] Categorías reordenadas:', categories.length);
+
+    res.json({
+      success: true,
+      message: 'Categorías reordenadas exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error reordenando categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error reordenando categorías',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE LISTAS ==========
 
 // Obtener todas las listas
