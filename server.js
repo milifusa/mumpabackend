@@ -4075,6 +4075,493 @@ app.patch('/api/admin/categories/reorder', authenticateToken, isAdmin, async (re
   }
 });
 
+// ========== GESTIÓN DE RECOMENDADOS ==========
+
+// ===== ENDPOINTS PARA LA APP (SOLO LECTURA) =====
+
+// Obtener todos los recomendados activos (para la app)
+app.get('/api/recommendations', authenticateToken, async (req, res) => {
+  try {
+    const { categoryId } = req.query;
+    
+    console.log('⭐ [APP] Obteniendo recomendados', categoryId ? `para categoría: ${categoryId}` : '');
+
+    let query = db.collection('recommendations')
+      .where('isActive', '==', true);
+
+    if (categoryId) {
+      query = query.where('categoryId', '==', categoryId);
+    }
+
+    const snapshot = await query.get();
+
+    const recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
+      const data = doc.data();
+      
+      // Obtener información de la categoría
+      let categoryInfo = null;
+      if (data.categoryId) {
+        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+        if (categoryDoc.exists) {
+          const catData = categoryDoc.data();
+          categoryInfo = {
+            id: categoryDoc.id,
+            name: catData.name,
+            icon: catData.icon
+          };
+        }
+      }
+
+      return {
+        id: doc.id,
+        name: data.name,
+        description: data.description,
+        address: data.address,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        phone: data.phone,
+        email: data.email,
+        website: data.website,
+        facebook: data.facebook,
+        instagram: data.instagram,
+        twitter: data.twitter,
+        whatsapp: data.whatsapp,
+        imageUrl: data.imageUrl,
+        category: categoryInfo
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: recommendations
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo recomendados:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendados',
+      error: error.message
+    });
+  }
+});
+
+// Obtener un recomendado específico (para la app)
+app.get('/api/recommendations/:recommendationId', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    
+    console.log('⭐ [APP] Obteniendo recomendado:', recommendationId);
+
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    const data = recDoc.data();
+
+    if (!data.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no disponible'
+      });
+    }
+
+    // Obtener información de la categoría
+    let categoryInfo = null;
+    if (data.categoryId) {
+      const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+      if (categoryDoc.exists) {
+        const catData = categoryDoc.data();
+        categoryInfo = {
+          id: categoryDoc.id,
+          name: catData.name,
+          icon: catData.icon,
+          imageUrl: catData.imageUrl
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: recDoc.id,
+        name: data.name,
+        description: data.description,
+        address: data.address,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        phone: data.phone,
+        email: data.email,
+        website: data.website,
+        facebook: data.facebook,
+        instagram: data.instagram,
+        twitter: data.twitter,
+        whatsapp: data.whatsapp,
+        imageUrl: data.imageUrl,
+        category: categoryInfo
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo recomendado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendado',
+      error: error.message
+    });
+  }
+});
+
+// ===== ENDPOINTS ADMIN (CRUD COMPLETO) =====
+
+// Obtener todos los recomendados (admin)
+app.get('/api/admin/recommendations', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '', categoryId } = req.query;
+    
+    console.log('⭐ [ADMIN] Obteniendo recomendados');
+
+    let query = db.collection('recommendations');
+
+    if (categoryId) {
+      query = query.where('categoryId', '==', categoryId);
+    }
+
+    const snapshot = await query.get();
+
+    let recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
+      const data = doc.data();
+      
+      // Obtener información de la categoría
+      let categoryInfo = null;
+      if (data.categoryId) {
+        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+        if (categoryDoc.exists) {
+          const catData = categoryDoc.data();
+          categoryInfo = {
+            id: categoryDoc.id,
+            name: catData.name
+          };
+        }
+      }
+
+      return {
+        id: doc.id,
+        ...data,
+        category: categoryInfo,
+        createdAt: data.createdAt?.toDate(),
+        updatedAt: data.updatedAt?.toDate()
+      };
+    }));
+
+    // Filtrar por búsqueda si existe
+    if (search) {
+      const searchLower = search.toLowerCase();
+      recommendations = recommendations.filter(rec => 
+        rec.name?.toLowerCase().includes(searchLower) ||
+        rec.description?.toLowerCase().includes(searchLower) ||
+        rec.address?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedRecommendations = recommendations.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedRecommendations,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: recommendations.length,
+        totalPages: Math.ceil(recommendations.length / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo recomendados:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendados',
+      error: error.message
+    });
+  }
+});
+
+// Obtener un recomendado específico (admin)
+app.get('/api/admin/recommendations/:recommendationId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    
+    console.log('⭐ [ADMIN] Obteniendo recomendado:', recommendationId);
+
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    const data = recDoc.data();
+
+    // Obtener información de la categoría
+    let categoryInfo = null;
+    if (data.categoryId) {
+      const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+      if (categoryDoc.exists) {
+        const catData = categoryDoc.data();
+        categoryInfo = {
+          id: categoryDoc.id,
+          name: catData.name,
+          imageUrl: catData.imageUrl
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: recDoc.id,
+        ...data,
+        category: categoryInfo,
+        createdAt: data.createdAt?.toDate(),
+        updatedAt: data.updatedAt?.toDate()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo recomendado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendado',
+      error: error.message
+    });
+  }
+});
+
+// Crear nuevo recomendado (admin)
+app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      categoryId,
+      name,
+      description,
+      address,
+      latitude,
+      longitude,
+      phone,
+      email,
+      website,
+      facebook,
+      instagram,
+      twitter,
+      whatsapp,
+      imageUrl,
+      isActive = true
+    } = req.body;
+    
+    console.log('➕ [ADMIN] Creando nuevo recomendado:', name);
+
+    // Validaciones
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido'
+      });
+    }
+
+    if (!categoryId) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría es requerida'
+      });
+    }
+
+    // Verificar que la categoría existe
+    const categoryDoc = await db.collection('categories').doc(categoryId).get();
+    if (!categoryDoc.exists) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría seleccionada no existe'
+      });
+    }
+
+    const recommendationData = {
+      categoryId,
+      name: name.trim(),
+      description: description ? description.trim() : '',
+      address: address ? address.trim() : '',
+      latitude: latitude ? parseFloat(latitude) : null,
+      longitude: longitude ? parseFloat(longitude) : null,
+      phone: phone ? phone.trim() : '',
+      email: email ? email.trim() : '',
+      website: website ? website.trim() : '',
+      facebook: facebook ? facebook.trim() : '',
+      instagram: instagram ? instagram.trim() : '',
+      twitter: twitter ? twitter.trim() : '',
+      whatsapp: whatsapp ? whatsapp.trim() : '',
+      imageUrl: imageUrl || null,
+      isActive: isActive === true || isActive === 'true',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const recRef = await db.collection('recommendations').add(recommendationData);
+
+    console.log('✅ [ADMIN] Recomendado creado:', recRef.id);
+
+    res.json({
+      success: true,
+      message: 'Recomendado creado exitosamente',
+      data: {
+        id: recRef.id,
+        ...recommendationData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando recomendado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando recomendado',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar recomendado (admin)
+app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const {
+      categoryId,
+      name,
+      description,
+      address,
+      latitude,
+      longitude,
+      phone,
+      email,
+      website,
+      facebook,
+      instagram,
+      twitter,
+      whatsapp,
+      imageUrl,
+      isActive
+    } = req.body;
+    
+    console.log('✏️ [ADMIN] Actualizando recomendado:', recommendationId);
+
+    const recRef = db.collection('recommendations').doc(recommendationId);
+    const recDoc = await recRef.get();
+
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    // Si se cambia la categoría, verificar que existe
+    if (categoryId !== undefined) {
+      const categoryDoc = await db.collection('categories').doc(categoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'La categoría seleccionada no existe'
+        });
+      }
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (categoryId !== undefined) updateData.categoryId = categoryId;
+    if (name !== undefined) updateData.name = name.trim();
+    if (description !== undefined) updateData.description = description.trim();
+    if (address !== undefined) updateData.address = address.trim();
+    if (latitude !== undefined) updateData.latitude = latitude ? parseFloat(latitude) : null;
+    if (longitude !== undefined) updateData.longitude = longitude ? parseFloat(longitude) : null;
+    if (phone !== undefined) updateData.phone = phone.trim();
+    if (email !== undefined) updateData.email = email.trim();
+    if (website !== undefined) updateData.website = website.trim();
+    if (facebook !== undefined) updateData.facebook = facebook.trim();
+    if (instagram !== undefined) updateData.instagram = instagram.trim();
+    if (twitter !== undefined) updateData.twitter = twitter.trim();
+    if (whatsapp !== undefined) updateData.whatsapp = whatsapp.trim();
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (isActive !== undefined) updateData.isActive = isActive === true || isActive === 'true';
+
+    await recRef.update(updateData);
+
+    console.log('✅ [ADMIN] Recomendado actualizado');
+
+    res.json({
+      success: true,
+      message: 'Recomendado actualizado exitosamente',
+      data: {
+        id: recommendationId,
+        ...recDoc.data(),
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando recomendado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando recomendado',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar recomendado (admin)
+app.delete('/api/admin/recommendations/:recommendationId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando recomendado:', recommendationId);
+
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    await db.collection('recommendations').doc(recommendationId).delete();
+
+    console.log('✅ [ADMIN] Recomendado eliminado');
+
+    res.json({
+      success: true,
+      message: 'Recomendado eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando recomendado:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando recomendado',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE LISTAS ==========
 
 // Obtener todas las listas
