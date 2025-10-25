@@ -4148,6 +4148,176 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
   }
 });
 
+// ===== ENDPOINTS DE FAVORITOS (DEBEN IR ANTES DE :recommendationId) =====
+
+// Obtener mis recomendados favoritos (APP)
+app.get('/api/recommendations/favorites', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    console.log('❤️ [APP] Obteniendo favoritos del usuario:', userId);
+
+    // Obtener IDs de favoritos del usuario
+    const favoritesSnapshot = await db.collection('recommendationFavorites')
+      .where('userId', '==', userId)
+      .get();
+
+    if (favoritesSnapshot.empty) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+
+    // Obtener los recomendados completos
+    const recommendationIds = favoritesSnapshot.docs.map(doc => doc.data().recommendationId);
+    
+    const recommendations = await Promise.all(recommendationIds.map(async (recId) => {
+      const recDoc = await db.collection('recommendations').doc(recId).get();
+      
+      if (!recDoc.exists) return null;
+      
+      const data = recDoc.data();
+      
+      // Obtener información de la categoría
+      let categoryInfo = null;
+      if (data.categoryId) {
+        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+        if (categoryDoc.exists) {
+          const catData = categoryDoc.data();
+          categoryInfo = {
+            id: categoryDoc.id,
+            name: catData.name,
+            icon: catData.icon
+          };
+        }
+      }
+
+      return {
+        id: recDoc.id,
+        name: data.name,
+        description: data.description,
+        address: data.address,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        phone: data.phone,
+        email: data.email,
+        website: data.website,
+        imageUrl: data.imageUrl,
+        totalReviews: data.totalReviews || 0,
+        averageRating: data.averageRating || 0,
+        isFavorite: true,
+        category: categoryInfo
+      };
+    }));
+
+    // Filtrar nulls (recomendados que ya no existen)
+    const validRecommendations = recommendations.filter(rec => rec !== null);
+
+    res.json({
+      success: true,
+      data: validRecommendations
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo favoritos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo favoritos',
+      error: error.message
+    });
+  }
+});
+
+// Verificar si un recomendado es favorito (APP)
+app.get('/api/recommendations/:recommendationId/favorite', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const userId = req.user.uid;
+    
+    console.log('❤️ [APP] Verificando si es favorito:', recommendationId);
+
+    const favoriteSnapshot = await db.collection('recommendationFavorites')
+      .where('userId', '==', userId)
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    res.json({
+      success: true,
+      isFavorite: !favoriteSnapshot.empty
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error verificando favorito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando favorito',
+      error: error.message
+    });
+  }
+});
+
+// Agregar/quitar recomendado de favoritos (toggle) (APP)
+app.post('/api/recommendations/:recommendationId/favorite', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const userId = req.user.uid;
+    
+    console.log('❤️ [APP] Toggle favorito para recomendado:', recommendationId);
+
+    // Verificar que el recomendado existe
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    // Verificar si ya es favorito
+    const favoriteSnapshot = await db.collection('recommendationFavorites')
+      .where('userId', '==', userId)
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    if (favoriteSnapshot.empty) {
+      // Agregar a favoritos
+      await db.collection('recommendationFavorites').add({
+        userId,
+        recommendationId,
+        createdAt: new Date()
+      });
+
+      console.log('✅ [APP] Agregado a favoritos');
+
+      res.json({
+        success: true,
+        message: 'Agregado a favoritos',
+        isFavorite: true
+      });
+    } else {
+      // Quitar de favoritos
+      await favoriteSnapshot.docs[0].ref.delete();
+
+      console.log('✅ [APP] Eliminado de favoritos');
+
+      res.json({
+        success: true,
+        message: 'Eliminado de favoritos',
+        isFavorite: false
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ [APP] Error con favorito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al marcar como favorito',
+      error: error.message
+    });
+  }
+});
+
 // Obtener un recomendado específico (para la app)
 app.get('/api/recommendations/:recommendationId', authenticateToken, async (req, res) => {
   try {
@@ -4997,176 +5167,6 @@ async function updateRecommendationStats(recommendationId) {
     console.error('❌ Error actualizando estadísticas:', error);
   }
 }
-
-// ========== FAVORITOS DE RECOMENDADOS ==========
-
-// Obtener mis recomendados favoritos (APP)
-app.get('/api/recommendations/favorites', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.uid;
-    
-    console.log('❤️ [APP] Obteniendo favoritos del usuario:', userId);
-
-    // Obtener IDs de favoritos del usuario
-    const favoritesSnapshot = await db.collection('recommendationFavorites')
-      .where('userId', '==', userId)
-      .get();
-
-    if (favoritesSnapshot.empty) {
-      return res.json({
-        success: true,
-        data: []
-      });
-    }
-
-    // Obtener los recomendados completos
-    const recommendationIds = favoritesSnapshot.docs.map(doc => doc.data().recommendationId);
-    
-    const recommendations = await Promise.all(recommendationIds.map(async (recId) => {
-      const recDoc = await db.collection('recommendations').doc(recId).get();
-      
-      if (!recDoc.exists) return null;
-      
-      const data = recDoc.data();
-      
-      // Obtener información de la categoría
-      let categoryInfo = null;
-      if (data.categoryId) {
-        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
-        if (categoryDoc.exists) {
-          const catData = categoryDoc.data();
-          categoryInfo = {
-            id: categoryDoc.id,
-            name: catData.name,
-            icon: catData.icon
-          };
-        }
-      }
-
-      return {
-        id: recDoc.id,
-        name: data.name,
-        description: data.description,
-        address: data.address,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        phone: data.phone,
-        email: data.email,
-        website: data.website,
-        imageUrl: data.imageUrl,
-        totalReviews: data.totalReviews || 0,
-        averageRating: data.averageRating || 0,
-        isFavorite: true,
-        category: categoryInfo
-      };
-    }));
-
-    // Filtrar nulls (recomendados que ya no existen)
-    const validRecommendations = recommendations.filter(rec => rec !== null);
-
-    res.json({
-      success: true,
-      data: validRecommendations
-    });
-
-  } catch (error) {
-    console.error('❌ [APP] Error obteniendo favoritos:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error obteniendo favoritos',
-      error: error.message
-    });
-  }
-});
-
-// Verificar si un recomendado es favorito (APP)
-app.get('/api/recommendations/:recommendationId/favorite', authenticateToken, async (req, res) => {
-  try {
-    const { recommendationId } = req.params;
-    const userId = req.user.uid;
-    
-    console.log('❤️ [APP] Verificando si es favorito:', recommendationId);
-
-    const favoriteSnapshot = await db.collection('recommendationFavorites')
-      .where('userId', '==', userId)
-      .where('recommendationId', '==', recommendationId)
-      .get();
-
-    res.json({
-      success: true,
-      isFavorite: !favoriteSnapshot.empty
-    });
-
-  } catch (error) {
-    console.error('❌ [APP] Error verificando favorito:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error verificando favorito',
-      error: error.message
-    });
-  }
-});
-
-// Agregar/quitar recomendado de favoritos (toggle) (APP)
-app.post('/api/recommendations/:recommendationId/favorite', authenticateToken, async (req, res) => {
-  try {
-    const { recommendationId } = req.params;
-    const userId = req.user.uid;
-    
-    console.log('❤️ [APP] Toggle favorito para recomendado:', recommendationId);
-
-    // Verificar que el recomendado existe
-    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
-    if (!recDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Recomendado no encontrado'
-      });
-    }
-
-    // Verificar si ya es favorito
-    const favoriteSnapshot = await db.collection('recommendationFavorites')
-      .where('userId', '==', userId)
-      .where('recommendationId', '==', recommendationId)
-      .get();
-
-    if (favoriteSnapshot.empty) {
-      // Agregar a favoritos
-      await db.collection('recommendationFavorites').add({
-        userId,
-        recommendationId,
-        createdAt: new Date()
-      });
-
-      console.log('✅ [APP] Agregado a favoritos');
-
-      res.json({
-        success: true,
-        message: 'Agregado a favoritos',
-        isFavorite: true
-      });
-    } else {
-      // Quitar de favoritos
-      await favoriteSnapshot.docs[0].ref.delete();
-
-      console.log('✅ [APP] Eliminado de favoritos');
-
-      res.json({
-        success: true,
-        message: 'Eliminado de favoritos',
-        isFavorite: false
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ [APP] Error con favorito:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al marcar como favorito',
-      error: error.message
-    });
-  }
-});
 
 // ========== GESTIÓN DE LISTAS ==========
 
