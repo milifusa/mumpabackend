@@ -4150,6 +4150,77 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
 
 // ===== ENDPOINTS DE FAVORITOS (DEBEN IR ANTES DE :recommendationId) =====
 
+// Obtener las 10 recomendaciones más recientes (APP)
+app.get('/api/recommendations/recent', authenticateToken, async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    
+    console.log('🆕 [APP] Obteniendo recomendaciones recientes');
+
+    // Obtener las recomendaciones más recientes ordenadas por createdAt
+    const snapshot = await db.collection('recommendations')
+      .where('isActive', '==', true)
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit))
+      .get();
+
+    const recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
+      const data = doc.data();
+      
+      // Obtener información de la categoría
+      let categoryInfo = null;
+      if (data.categoryId) {
+        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+        if (categoryDoc.exists) {
+          const catData = categoryDoc.data();
+          categoryInfo = {
+            id: categoryDoc.id,
+            name: catData.name,
+            icon: catData.icon,
+            imageUrl: catData.imageUrl
+          };
+        }
+      }
+
+      // Contar comentarios de reviews
+      const reviewsSnapshot = await db.collection('recommendationReviews')
+        .where('recommendationId', '==', doc.id)
+        .get();
+
+      const commentsCount = reviewsSnapshot.docs.filter(reviewDoc => {
+        const reviewData = reviewDoc.data();
+        return reviewData.comment && reviewData.comment.trim().length > 0;
+      }).length;
+
+      return {
+        id: doc.id,
+        name: data.name,
+        description: data.description,
+        address: data.address,
+        imageUrl: data.imageUrl,
+        totalReviews: data.totalReviews || 0,
+        averageRating: data.averageRating || 0,
+        commentsCount: commentsCount,
+        category: categoryInfo,
+        createdAt: data.createdAt?.toDate()
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: recommendations
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo recomendaciones recientes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendaciones recientes',
+      error: error.message
+    });
+  }
+});
+
 // Obtener mis recomendados favoritos (APP)
 app.get('/api/recommendations/favorites', authenticateToken, async (req, res) => {
   try {
