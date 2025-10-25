@@ -4127,6 +4127,8 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
         twitter: data.twitter,
         whatsapp: data.whatsapp,
         imageUrl: data.imageUrl,
+        totalReviews: data.totalReviews || 0,
+        averageRating: data.averageRating || 0,
         category: categoryInfo
       };
     }));
@@ -4203,6 +4205,8 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
         twitter: data.twitter,
         whatsapp: data.whatsapp,
         imageUrl: data.imageUrl,
+        totalReviews: data.totalReviews || 0,
+        averageRating: data.averageRating || 0,
         category: categoryInfo
       }
     });
@@ -4561,6 +4565,438 @@ app.delete('/api/admin/recommendations/:recommendationId', authenticateToken, is
     });
   }
 });
+
+// ========== REVIEWS DE RECOMENDADOS ==========
+
+// ===== ENDPOINTS PARA LA APP =====
+
+// Obtener reviews de un recomendado (APP)
+app.get('/api/recommendations/:recommendationId/reviews', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+    
+    console.log('⭐ [APP] Obteniendo reviews para recomendado:', recommendationId);
+
+    // Verificar que el recomendado existe
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    // Obtener reviews
+    const reviewsSnapshot = await db.collection('recommendationReviews')
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    let reviews = await Promise.all(reviewsSnapshot.docs.map(async (doc) => {
+      const reviewData = doc.data();
+      
+      // Obtener información del usuario
+      let userInfo = null;
+      if (reviewData.userId) {
+        const userDoc = await db.collection('users').doc(reviewData.userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          userInfo = {
+            id: userDoc.id,
+            displayName: userData.displayName,
+            photoURL: userData.photoURL
+          };
+        }
+      }
+
+      return {
+        id: doc.id,
+        rating: reviewData.rating,
+        comment: reviewData.comment,
+        user: userInfo,
+        createdAt: reviewData.createdAt?.toDate(),
+        updatedAt: reviewData.updatedAt?.toDate()
+      };
+    }));
+
+    // Ordenar por fecha (más recientes primero)
+    reviews.sort((a, b) => {
+      const dateA = a.createdAt || new Date(0);
+      const dateB = b.createdAt || new Date(0);
+      return dateB - dateA;
+    });
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedReviews = reviews.slice(startIndex, endIndex);
+
+    // Calcular estadísticas
+    const totalReviews = reviews.length;
+    const averageRating = totalReviews > 0 
+      ? reviews.reduce((sum, review) => sum + review.rating, 0) / totalReviews 
+      : 0;
+
+    res.json({
+      success: true,
+      data: paginatedReviews,
+      stats: {
+        totalReviews,
+        averageRating: Math.round(averageRating * 10) / 10 // Redondear a 1 decimal
+      },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalReviews,
+        totalPages: Math.ceil(totalReviews / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo reviews:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo reviews',
+      error: error.message
+    });
+  }
+});
+
+// Crear o actualizar review de un recomendado (APP)
+app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const { rating, comment } = req.body;
+    const userId = req.user.uid;
+    
+    console.log('⭐ [APP] Creando/actualizando review para recomendado:', recommendationId);
+
+    // Validaciones
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'La calificación debe ser entre 1 y 5 estrellas'
+      });
+    }
+
+    // Verificar que el recomendado existe
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    // Verificar si el usuario ya tiene una review para este recomendado
+    const existingReviewSnapshot = await db.collection('recommendationReviews')
+      .where('recommendationId', '==', recommendationId)
+      .where('userId', '==', userId)
+      .get();
+
+    let reviewRef;
+    let isNew = true;
+
+    if (!existingReviewSnapshot.empty) {
+      // Actualizar review existente
+      reviewRef = existingReviewSnapshot.docs[0].ref;
+      isNew = false;
+      
+      await reviewRef.update({
+        rating: parseInt(rating),
+        comment: comment ? comment.trim() : '',
+        updatedAt: new Date()
+      });
+
+      console.log('✅ [APP] Review actualizada');
+    } else {
+      // Crear nueva review
+      const reviewData = {
+        recommendationId,
+        userId,
+        rating: parseInt(rating),
+        comment: comment ? comment.trim() : '',
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      reviewRef = await db.collection('recommendationReviews').add(reviewData);
+
+      console.log('✅ [APP] Review creada');
+    }
+
+    // Recalcular estadísticas del recomendado
+    await updateRecommendationStats(recommendationId);
+
+    // Obtener la review actualizada con info del usuario
+    const reviewDoc = await reviewRef.get();
+    const reviewData = reviewDoc.data();
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+
+    res.json({
+      success: true,
+      message: isNew ? 'Review creada exitosamente' : 'Review actualizada exitosamente',
+      data: {
+        id: reviewDoc.id,
+        rating: reviewData.rating,
+        comment: reviewData.comment,
+        user: {
+          id: userId,
+          displayName: userData.displayName,
+          photoURL: userData.photoURL
+        },
+        createdAt: reviewData.createdAt?.toDate(),
+        updatedAt: reviewData.updatedAt?.toDate()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error creando/actualizando review:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando review',
+      error: error.message
+    });
+  }
+});
+
+// Obtener la review del usuario actual para un recomendado (APP)
+app.get('/api/recommendations/:recommendationId/reviews/my-review', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const userId = req.user.uid;
+    
+    console.log('⭐ [APP] Obteniendo mi review para recomendado:', recommendationId);
+
+    const reviewSnapshot = await db.collection('recommendationReviews')
+      .where('recommendationId', '==', recommendationId)
+      .where('userId', '==', userId)
+      .get();
+
+    if (reviewSnapshot.empty) {
+      return res.json({
+        success: true,
+        data: null
+      });
+    }
+
+    const reviewDoc = reviewSnapshot.docs[0];
+    const reviewData = reviewDoc.data();
+
+    res.json({
+      success: true,
+      data: {
+        id: reviewDoc.id,
+        rating: reviewData.rating,
+        comment: reviewData.comment,
+        createdAt: reviewData.createdAt?.toDate(),
+        updatedAt: reviewData.updatedAt?.toDate()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo mi review:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo review',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar review propia (APP)
+app.delete('/api/recommendations/:recommendationId/reviews/my-review', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const userId = req.user.uid;
+    
+    console.log('🗑️ [APP] Eliminando mi review para recomendado:', recommendationId);
+
+    const reviewSnapshot = await db.collection('recommendationReviews')
+      .where('recommendationId', '==', recommendationId)
+      .where('userId', '==', userId)
+      .get();
+
+    if (reviewSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'No tienes una review para este recomendado'
+      });
+    }
+
+    await reviewSnapshot.docs[0].ref.delete();
+
+    // Recalcular estadísticas del recomendado
+    await updateRecommendationStats(recommendationId);
+
+    console.log('✅ [APP] Review eliminada');
+
+    res.json({
+      success: true,
+      message: 'Review eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error eliminando review:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando review',
+      error: error.message
+    });
+  }
+});
+
+// ===== ENDPOINTS ADMIN =====
+
+// Obtener todas las reviews de un recomendado (ADMIN)
+app.get('/api/admin/recommendations/:recommendationId/reviews', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const { page = 1, limit = 50 } = req.query;
+    
+    console.log('⭐ [ADMIN] Obteniendo reviews para recomendado:', recommendationId);
+
+    const reviewsSnapshot = await db.collection('recommendationReviews')
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    let reviews = await Promise.all(reviewsSnapshot.docs.map(async (doc) => {
+      const reviewData = doc.data();
+      
+      // Obtener información del usuario
+      let userInfo = null;
+      if (reviewData.userId) {
+        const userDoc = await db.collection('users').doc(reviewData.userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          userInfo = {
+            id: userDoc.id,
+            displayName: userData.displayName,
+            email: userData.email,
+            photoURL: userData.photoURL
+          };
+        }
+      }
+
+      return {
+        id: doc.id,
+        recommendationId: reviewData.recommendationId,
+        rating: reviewData.rating,
+        comment: reviewData.comment,
+        user: userInfo,
+        createdAt: reviewData.createdAt?.toDate(),
+        updatedAt: reviewData.updatedAt?.toDate()
+      };
+    }));
+
+    // Ordenar por fecha
+    reviews.sort((a, b) => (b.createdAt || new Date(0)) - (a.createdAt || new Date(0)));
+
+    // Paginación
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedReviews = reviews.slice(startIndex, endIndex);
+
+    // Estadísticas
+    const totalReviews = reviews.length;
+    const averageRating = totalReviews > 0 
+      ? reviews.reduce((sum, review) => sum + review.rating, 0) / totalReviews 
+      : 0;
+
+    res.json({
+      success: true,
+      data: paginatedReviews,
+      stats: {
+        totalReviews,
+        averageRating: Math.round(averageRating * 10) / 10
+      },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalReviews,
+        totalPages: Math.ceil(totalReviews / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo reviews:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo reviews',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar una review (ADMIN)
+app.delete('/api/admin/recommendations/:recommendationId/reviews/:reviewId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recommendationId, reviewId } = req.params;
+    
+    console.log('🗑️ [ADMIN] Eliminando review:', reviewId);
+
+    const reviewDoc = await db.collection('recommendationReviews').doc(reviewId).get();
+
+    if (!reviewDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Review no encontrada'
+      });
+    }
+
+    await db.collection('recommendationReviews').doc(reviewId).delete();
+
+    // Recalcular estadísticas del recomendado
+    await updateRecommendationStats(recommendationId);
+
+    console.log('✅ [ADMIN] Review eliminada');
+
+    res.json({
+      success: true,
+      message: 'Review eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando review:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando review',
+      error: error.message
+    });
+  }
+});
+
+// Función auxiliar para recalcular estadísticas de un recomendado
+async function updateRecommendationStats(recommendationId) {
+  try {
+    const reviewsSnapshot = await db.collection('recommendationReviews')
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    const totalReviews = reviewsSnapshot.size;
+    let averageRating = 0;
+
+    if (totalReviews > 0) {
+      const totalRating = reviewsSnapshot.docs.reduce((sum, doc) => {
+        return sum + (doc.data().rating || 0);
+      }, 0);
+      averageRating = totalRating / totalReviews;
+    }
+
+    // Actualizar el recomendado con las estadísticas
+    await db.collection('recommendations').doc(recommendationId).update({
+      totalReviews,
+      averageRating: Math.round(averageRating * 10) / 10,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ Estadísticas actualizadas para recomendado:', recommendationId);
+  } catch (error) {
+    console.error('❌ Error actualizando estadísticas:', error);
+  }
+}
 
 // ========== GESTIÓN DE LISTAS ==========
 
