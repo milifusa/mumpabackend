@@ -2366,6 +2366,114 @@ app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+// Crear nuevo usuario administrador
+app.post('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { email, password, displayName, role = 'admin', isAdmin: isAdminUser = true } = req.body;
+    
+    console.log('➕ [ADMIN] Creando nuevo usuario administrador:', email);
+
+    // Validaciones
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email y contraseña son requeridos'
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'La contraseña debe tener al menos 6 caracteres'
+      });
+    }
+
+    // Validar formato de email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email inválido'
+      });
+    }
+
+    // Verificar si el email ya existe
+    try {
+      const existingUser = await auth.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'El email ya está registrado'
+        });
+      }
+    } catch (error) {
+      // Si no existe, continuar (esto es lo esperado)
+      if (error.code !== 'auth/user-not-found') {
+        throw error;
+      }
+    }
+
+    // Crear usuario en Firebase Auth
+    const userRecord = await auth.createUser({
+      email,
+      password,
+      displayName: displayName || email.split('@')[0],
+      emailVerified: false
+    });
+
+    console.log('✅ [ADMIN] Usuario creado en Firebase Auth:', userRecord.uid);
+
+    // Crear documento en Firestore
+    const userData = {
+      email,
+      displayName: displayName || email.split('@')[0],
+      role: role, // 'admin' por defecto
+      isAdmin: isAdminUser, // true por defecto
+      isActive: true,
+      photoURL: null,
+      childrenCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastLoginAt: null
+    };
+
+    await db.collection('users').doc(userRecord.uid).set(userData);
+
+    console.log('✅ [ADMIN] Usuario creado en Firestore');
+
+    res.json({
+      success: true,
+      message: 'Usuario administrador creado exitosamente',
+      data: {
+        uid: userRecord.uid,
+        email: userRecord.email,
+        displayName: userData.displayName,
+        role: userData.role,
+        isAdmin: userData.isAdmin,
+        createdAt: userData.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando usuario:', error);
+    
+    let errorMessage = 'Error creando usuario';
+    if (error.code === 'auth/email-already-exists') {
+      errorMessage = 'El email ya está registrado';
+    } else if (error.code === 'auth/invalid-email') {
+      errorMessage = 'Email inválido';
+    } else if (error.code === 'auth/weak-password') {
+      errorMessage = 'La contraseña es muy débil';
+    }
+
+    res.status(500).json({
+      success: false,
+      message: errorMessage,
+      error: error.message
+    });
+  }
+});
+
 // Obtener detalle de un usuario específico
 app.get('/api/admin/users/:userId', authenticateToken, isAdmin, async (req, res) => {
   try {
