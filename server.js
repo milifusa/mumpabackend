@@ -4129,7 +4129,18 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
         imageUrl: data.imageUrl,
         totalReviews: data.totalReviews || 0,
         averageRating: data.averageRating || 0,
-        category: categoryInfo
+        category: categoryInfo,
+        // Badges y features
+        verified: data.verified || false,
+        badges: data.badges || [],
+        features: data.features || {
+          hasChangingTable: false,
+          hasNursingRoom: false,
+          hasParking: false,
+          isStrollerAccessible: false,
+          acceptsEmergencies: false,
+          is24Hours: false
+        }
       };
     }));
 
@@ -4243,7 +4254,18 @@ app.get('/api/recommendations/nearby', authenticateToken, async (req, res) => {
             averageRating: data.averageRating || 0,
             distance: Math.round(distance * 10) / 10, // Redondear a 1 decimal
             estimatedTime: estimatedTime,
-            category: categoryInfo
+            category: categoryInfo,
+            // Badges y features
+            verified: data.verified || false,
+            badges: data.badges || [],
+            features: data.features || {
+              hasChangingTable: false,
+              hasNursingRoom: false,
+              hasParking: false,
+              isStrollerAccessible: false,
+              acceptsEmergencies: false,
+              is24Hours: false
+            }
           };
         })
     );
@@ -4371,7 +4393,18 @@ app.get('/api/recommendations/recent', authenticateToken, async (req, res) => {
         averageRating: data.averageRating || 0,
         commentsCount: commentsCount,
         category: categoryInfo,
-        createdAt: data.createdAt?.toDate()
+        createdAt: data.createdAt?.toDate(),
+        // Badges y features
+        verified: data.verified || false,
+        badges: data.badges || [],
+        features: data.features || {
+          hasChangingTable: false,
+          hasNursingRoom: false,
+          hasParking: false,
+          isStrollerAccessible: false,
+          acceptsEmergencies: false,
+          is24Hours: false
+        }
       };
     }));
 
@@ -4447,7 +4480,18 @@ app.get('/api/recommendations/favorites', authenticateToken, async (req, res) =>
         totalReviews: data.totalReviews || 0,
         averageRating: data.averageRating || 0,
         isFavorite: true,
-        category: categoryInfo
+        category: categoryInfo,
+        // Badges y features
+        verified: data.verified || false,
+        badges: data.badges || [],
+        features: data.features || {
+          hasChangingTable: false,
+          hasNursingRoom: false,
+          hasParking: false,
+          isStrollerAccessible: false,
+          acceptsEmergencies: false,
+          is24Hours: false
+        }
       };
     }));
 
@@ -4617,7 +4661,18 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
         imageUrl: data.imageUrl,
         totalReviews: data.totalReviews || 0,
         averageRating: data.averageRating || 0,
-        category: categoryInfo
+        category: categoryInfo,
+        // Badges y features
+        verified: data.verified || false,
+        badges: data.badges || [],
+        features: data.features || {
+          hasChangingTable: false,
+          hasNursingRoom: false,
+          hasParking: false,
+          isStrollerAccessible: false,
+          acceptsEmergencies: false,
+          is24Hours: false
+        }
       }
     });
 
@@ -4780,7 +4835,11 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
       twitter,
       whatsapp,
       imageUrl,
-      isActive = true
+      isActive = true,
+      // Badges y features
+      verified = false,
+      badges = [],
+      features = {}
     } = req.body;
     
     console.log('➕ [ADMIN] Creando nuevo recomendado:', name);
@@ -4809,6 +4868,35 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
       });
     }
 
+    // Procesar features con valores por defecto
+    const processedFeatures = {
+      hasChangingTable: features.hasChangingTable === true,
+      hasNursingRoom: features.hasNursingRoom === true,
+      hasParking: features.hasParking === true,
+      isStrollerAccessible: features.isStrollerAccessible === true,
+      acceptsEmergencies: features.acceptsEmergencies === true,
+      is24Hours: features.is24Hours === true
+    };
+
+    // Generar badges automáticamente basados en features
+    const autoBadges = [];
+    if (processedFeatures.hasChangingTable) autoBadges.push('changing_table');
+    if (processedFeatures.hasNursingRoom) autoBadges.push('nursing_room');
+    if (processedFeatures.hasParking) autoBadges.push('parking');
+    if (processedFeatures.isStrollerAccessible) autoBadges.push('stroller_accessible');
+    if (processedFeatures.acceptsEmergencies) autoBadges.push('emergency_24_7');
+    if (processedFeatures.is24Hours) autoBadges.push('24_hours');
+
+    // Badge "baby_friendly" si tiene al menos 3 features
+    const featuresCount = Object.values(processedFeatures).filter(v => v === true).length;
+    if (featuresCount >= 3) {
+      autoBadges.push('baby_friendly');
+    }
+
+    // Combinar badges manuales con auto-generados (sin duplicados)
+    const allBadges = Array.isArray(badges) ? badges : [];
+    const finalBadges = [...new Set([...allBadges, ...autoBadges])];
+
     const recommendationData = {
       categoryId,
       name: name.trim(),
@@ -4825,6 +4913,10 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
       whatsapp: whatsapp ? whatsapp.trim() : '',
       imageUrl: imageUrl || null,
       isActive: isActive === true || isActive === 'true',
+      // Badges y features
+      verified: verified === true || verified === 'true',
+      badges: finalBadges,
+      features: processedFeatures,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -4871,7 +4963,11 @@ app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdm
       twitter,
       whatsapp,
       imageUrl,
-      isActive
+      isActive,
+      // Badges y features
+      verified,
+      badges,
+      features
     } = req.body;
     
     console.log('✏️ [ADMIN] Actualizando recomendado:', recommendationId);
@@ -4916,6 +5012,48 @@ app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdm
     if (whatsapp !== undefined) updateData.whatsapp = whatsapp.trim();
     if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
     if (isActive !== undefined) updateData.isActive = isActive === true || isActive === 'true';
+
+    // Actualizar badges y features
+    if (verified !== undefined) {
+      updateData.verified = verified === true || verified === 'true';
+    }
+
+    if (features !== undefined) {
+      // Procesar features con valores por defecto
+      const processedFeatures = {
+        hasChangingTable: features.hasChangingTable === true,
+        hasNursingRoom: features.hasNursingRoom === true,
+        hasParking: features.hasParking === true,
+        isStrollerAccessible: features.isStrollerAccessible === true,
+        acceptsEmergencies: features.acceptsEmergencies === true,
+        is24Hours: features.is24Hours === true
+      };
+
+      // Generar badges automáticamente basados en features
+      const autoBadges = [];
+      if (processedFeatures.hasChangingTable) autoBadges.push('changing_table');
+      if (processedFeatures.hasNursingRoom) autoBadges.push('nursing_room');
+      if (processedFeatures.hasParking) autoBadges.push('parking');
+      if (processedFeatures.isStrollerAccessible) autoBadges.push('stroller_accessible');
+      if (processedFeatures.acceptsEmergencies) autoBadges.push('emergency_24_7');
+      if (processedFeatures.is24Hours) autoBadges.push('24_hours');
+
+      // Badge "baby_friendly" si tiene al menos 3 features
+      const featuresCount = Object.values(processedFeatures).filter(v => v === true).length;
+      if (featuresCount >= 3) {
+        autoBadges.push('baby_friendly');
+      }
+
+      // Combinar badges manuales con auto-generados (sin duplicados)
+      const manualBadges = Array.isArray(badges) ? badges : (recDoc.data().badges || []);
+      const finalBadges = [...new Set([...manualBadges, ...autoBadges])];
+
+      updateData.features = processedFeatures;
+      updateData.badges = finalBadges;
+    } else if (badges !== undefined) {
+      // Solo se actualizan badges manualmente sin features
+      updateData.badges = Array.isArray(badges) ? badges : [];
+    }
 
     await recRef.update(updateData);
 
