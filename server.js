@@ -5215,6 +5215,7 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
     } = req.body;
     
     console.log('➕ [ADMIN] Creando nuevo recomendado:', name);
+    console.log('📋 [DEBUG] verified recibido:', verified, 'tipo:', typeof verified);
 
     // Validaciones
     if (!name || name.trim().length === 0) {
@@ -5286,12 +5287,14 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
       imageUrl: imageUrl || null,
       isActive: isActive === true || isActive === 'true',
       // Badges y features
-      verified: verified === true || verified === 'true',
+      verified: verified === true || verified === 'true' || verified === '1' || verified === 1,
       badges: finalBadges,
       features: processedFeatures,
       createdAt: new Date(),
       updatedAt: new Date()
     };
+
+    console.log('📋 [DEBUG] recommendationData.verified final:', recommendationData.verified);
 
     const recRef = await db.collection('recommendations').add(recommendationData);
 
@@ -5387,7 +5390,9 @@ app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdm
 
     // Actualizar badges y features
     if (verified !== undefined) {
-      updateData.verified = verified === true || verified === 'true';
+      console.log('📋 [DEBUG UPDATE] verified recibido:', verified, 'tipo:', typeof verified);
+      updateData.verified = verified === true || verified === 'true' || verified === '1' || verified === 1;
+      console.log('📋 [DEBUG UPDATE] verified final:', updateData.verified);
     }
 
     if (features !== undefined) {
@@ -5446,6 +5451,84 @@ app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdm
     res.status(500).json({
       success: false,
       message: 'Error actualizando recomendado',
+      error: error.message
+    });
+  }
+});
+
+// Migración: Agregar campos verified, badges y features a recomendados existentes (admin)
+app.post('/api/admin/recommendations/migrate-badges', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('🔄 [ADMIN] Iniciando migración de badges...');
+
+    const snapshot = await db.collection('recommendations').get();
+    
+    let updated = 0;
+    let skipped = 0;
+    const updates = [];
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      
+      // Solo actualizar si no tiene los nuevos campos
+      if (data.verified === undefined || data.badges === undefined || data.features === undefined) {
+        const updateData = {};
+        
+        // Agregar verified si no existe
+        if (data.verified === undefined) {
+          updateData.verified = false;
+        }
+        
+        // Agregar badges si no existe
+        if (data.badges === undefined) {
+          updateData.badges = [];
+        }
+        
+        // Agregar features si no existe
+        if (data.features === undefined) {
+          updateData.features = {
+            hasChangingTable: false,
+            hasNursingRoom: false,
+            hasParking: false,
+            isStrollerAccessible: false,
+            acceptsEmergencies: false,
+            is24Hours: false
+          };
+        }
+        
+        if (Object.keys(updateData).length > 0) {
+          updates.push(
+            db.collection('recommendations').doc(doc.id).update(updateData)
+          );
+          updated++;
+        }
+      } else {
+        skipped++;
+      }
+    }
+
+    // Ejecutar todas las actualizaciones en paralelo
+    if (updates.length > 0) {
+      await Promise.all(updates);
+    }
+
+    console.log(`✅ [ADMIN] Migración completada: ${updated} actualizados, ${skipped} omitidos`);
+
+    res.json({
+      success: true,
+      message: 'Migración completada exitosamente',
+      data: {
+        total: snapshot.size,
+        updated,
+        skipped
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error en migración:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error ejecutando migración',
       error: error.message
     });
   }
