@@ -4150,6 +4150,175 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
 
 // ===== ENDPOINTS DE FAVORITOS (DEBEN IR ANTES DE :recommendationId) =====
 
+// Obtener recomendaciones cercanas ordenadas por distancia (APP)
+app.get('/api/recommendations/nearby', authenticateToken, async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 10, categoryId, limit = 20 } = req.query;
+    
+    console.log('📍 [APP] Obteniendo recomendaciones cercanas:', { latitude, longitude, radius });
+
+    // Validar parámetros requeridos
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren latitude y longitude'
+      });
+    }
+
+    const userLat = parseFloat(latitude);
+    const userLng = parseFloat(longitude);
+    const maxRadius = parseFloat(radius);
+
+    if (isNaN(userLat) || isNaN(userLng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude y longitude deben ser números válidos'
+      });
+    }
+
+    // Obtener recomendaciones activas (filtrar por categoría si se proporciona)
+    let query = db.collection('recommendations')
+      .where('isActive', '==', true);
+
+    if (categoryId) {
+      query = query.where('categoryId', '==', categoryId);
+    }
+
+    const snapshot = await query.get();
+
+    // Calcular distancia para cada recomendación y filtrar por radio
+    const recommendationsWithDistance = await Promise.all(
+      snapshot.docs
+        .filter(doc => {
+          const data = doc.data();
+          // Solo incluir recomendaciones con coordenadas válidas
+          return data.latitude && data.longitude;
+        })
+        .map(async (doc) => {
+          const data = doc.data();
+          
+          // Calcular distancia usando fórmula de Haversine
+          const distance = calculateDistance(
+            userLat,
+            userLng,
+            data.latitude,
+            data.longitude
+          );
+
+          // Filtrar por radio máximo
+          if (distance > maxRadius) {
+            return null;
+          }
+
+          // Calcular tiempo estimado (asumiendo 40 km/h promedio en ciudad)
+          const estimatedTime = calculateEstimatedTime(distance);
+
+          // Obtener información de la categoría
+          let categoryInfo = null;
+          if (data.categoryId) {
+            const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
+            if (categoryDoc.exists) {
+              const catData = categoryDoc.data();
+              categoryInfo = {
+                id: categoryDoc.id,
+                name: catData.name,
+                icon: catData.icon,
+                imageUrl: catData.imageUrl
+              };
+            }
+          }
+
+          return {
+            id: doc.id,
+            name: data.name,
+            description: data.description,
+            address: data.address,
+            latitude: data.latitude,
+            longitude: data.longitude,
+            phone: data.phone,
+            email: data.email,
+            website: data.website,
+            imageUrl: data.imageUrl,
+            totalReviews: data.totalReviews || 0,
+            averageRating: data.averageRating || 0,
+            distance: Math.round(distance * 10) / 10, // Redondear a 1 decimal
+            estimatedTime: estimatedTime,
+            category: categoryInfo
+          };
+        })
+    );
+
+    // Filtrar nulls (fuera de radio) y ordenar por distancia
+    const validRecommendations = recommendationsWithDistance
+      .filter(rec => rec !== null)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, parseInt(limit));
+
+    res.json({
+      success: true,
+      data: validRecommendations,
+      metadata: {
+        userLocation: {
+          latitude: userLat,
+          longitude: userLng
+        },
+        radius: maxRadius,
+        found: validRecommendations.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo recomendaciones cercanas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendaciones cercanas',
+      error: error.message
+    });
+  }
+});
+
+// Función auxiliar para calcular distancia usando fórmula de Haversine
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Radio de la Tierra en km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c;
+  
+  return distance;
+}
+
+// Función auxiliar para convertir grados a radianes
+function toRad(degrees) {
+  return degrees * (Math.PI / 180);
+}
+
+// Función auxiliar para calcular tiempo estimado
+function calculateEstimatedTime(distanceKm) {
+  const avgSpeedKmH = 40; // Velocidad promedio en ciudad (km/h)
+  const timeInHours = distanceKm / avgSpeedKmH;
+  const timeInMinutes = Math.round(timeInHours * 60);
+  
+  if (timeInMinutes < 1) {
+    return "menos de 1 min";
+  } else if (timeInMinutes < 60) {
+    return `${timeInMinutes} min`;
+  } else {
+    const hours = Math.floor(timeInMinutes / 60);
+    const minutes = timeInMinutes % 60;
+    if (minutes === 0) {
+      return `${hours} ${hours === 1 ? 'hora' : 'horas'}`;
+    }
+    return `${hours} h ${minutes} min`;
+  }
+}
+
 // Obtener las 10 recomendaciones más recientes (APP)
 app.get('/api/recommendations/recent', authenticateToken, async (req, res) => {
   try {
