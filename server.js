@@ -5595,6 +5595,8 @@ app.get('/api/recommendations/:recommendationId/reviews', authenticateToken, asy
       .where('recommendationId', '==', recommendationId)
       .get();
 
+    const userId = req.user?.uid; // Usuario actual para saber si marcó como útil
+
     let reviews = await Promise.all(reviewsSnapshot.docs.map(async (doc) => {
       const reviewData = doc.data();
       
@@ -5606,17 +5608,29 @@ app.get('/api/recommendations/:recommendationId/reviews', authenticateToken, asy
           const userData = userDoc.data();
           userInfo = {
             id: userDoc.id,
-            displayName: userData.displayName,
-            photoURL: userData.photoURL
+            displayName: userData.displayName || 'Usuario',
+            photoURL: userData.photoURL || null
           };
         }
       }
 
+      // Verificar si el usuario actual marcó como útil
+      const helpfulBy = reviewData.helpfulBy || [];
+      const isHelpfulByMe = userId ? helpfulBy.includes(userId) : false;
+
       return {
         id: doc.id,
+        userId: reviewData.userId,
+        userName: userInfo?.displayName || 'Usuario',
+        userAvatar: userInfo?.photoURL || null,
         rating: reviewData.rating,
         comment: reviewData.comment,
-        user: userInfo,
+        // Nuevos campos
+        photos: reviewData.photos || [],
+        childAge: reviewData.childAge || '',
+        visitedWith: reviewData.visitedWith || '',
+        helpfulCount: reviewData.helpfulCount || 0,
+        isHelpfulByMe,
         createdAt: reviewData.createdAt?.toDate(),
         updatedAt: reviewData.updatedAt?.toDate()
       };
@@ -5669,7 +5683,7 @@ app.get('/api/recommendations/:recommendationId/reviews', authenticateToken, asy
 app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, async (req, res) => {
   try {
     const { recommendationId } = req.params;
-    const { rating, comment } = req.body;
+    const { rating, comment, photos = [], childAge, visitedWith } = req.body;
     const userId = req.user.uid;
     
     console.log('⭐ [APP] Creando/actualizando review para recomendado:', recommendationId);
@@ -5679,6 +5693,23 @@ app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, as
       return res.status(400).json({
         success: false,
         message: 'La calificación debe ser entre 1 y 5 estrellas'
+      });
+    }
+
+    // Validar visitedWith si se proporciona
+    const validVisitedWith = ['Solo', 'Pareja', 'Familia', 'Amigos'];
+    if (visitedWith && !validVisitedWith.includes(visitedWith)) {
+      return res.status(400).json({
+        success: false,
+        message: `visitedWith debe ser uno de: ${validVisitedWith.join(', ')}`
+      });
+    }
+
+    // Validar fotos (máximo 5)
+    if (photos && photos.length > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Máximo 5 fotos por review'
       });
     }
 
@@ -5705,11 +5736,18 @@ app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, as
       reviewRef = existingReviewSnapshot.docs[0].ref;
       isNew = false;
       
-      await reviewRef.update({
+      const updateData = {
         rating: parseInt(rating),
         comment: comment ? comment.trim() : '',
         updatedAt: new Date()
-      });
+      };
+
+      // Actualizar campos opcionales si se proporcionan
+      if (photos !== undefined) updateData.photos = Array.isArray(photos) ? photos : [];
+      if (childAge !== undefined) updateData.childAge = childAge ? childAge.trim() : '';
+      if (visitedWith !== undefined) updateData.visitedWith = visitedWith || '';
+
+      await reviewRef.update(updateData);
 
       console.log('✅ [APP] Review actualizada');
     } else {
@@ -5719,6 +5757,11 @@ app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, as
         userId,
         rating: parseInt(rating),
         comment: comment ? comment.trim() : '',
+        photos: Array.isArray(photos) ? photos : [],
+        childAge: childAge ? childAge.trim() : '',
+        visitedWith: visitedWith || '',
+        helpfulCount: 0,
+        helpfulBy: [], // Array de userIds que marcaron como útil
         createdAt: new Date(),
         updatedAt: new Date()
       };
@@ -5743,13 +5786,15 @@ app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, as
       message: isNew ? 'Review creada exitosamente' : 'Review actualizada exitosamente',
       data: {
         id: reviewDoc.id,
+        userId,
+        userName: userData.displayName || 'Usuario',
+        userAvatar: userData.photoURL || null,
         rating: reviewData.rating,
         comment: reviewData.comment,
-        user: {
-          id: userId,
-          displayName: userData.displayName,
-          photoURL: userData.photoURL
-        },
+        photos: reviewData.photos || [],
+        childAge: reviewData.childAge || '',
+        visitedWith: reviewData.visitedWith || '',
+        helpfulCount: reviewData.helpfulCount || 0,
         createdAt: reviewData.createdAt?.toDate(),
         updatedAt: reviewData.updatedAt?.toDate()
       }
@@ -5760,6 +5805,259 @@ app.post('/api/recommendations/:recommendationId/reviews', authenticateToken, as
     res.status(500).json({
       success: false,
       message: 'Error creando review',
+      error: error.message
+    });
+  }
+});
+
+// Subir fotos para reviews (APP) - Una sola foto
+app.post('/api/recommendations/:recommendationId/reviews/upload-photo', authenticateToken, upload.single('photo'), async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const userId = req.user.uid;
+
+    console.log('📸 [APP] Subiendo foto de review para:', recommendationId);
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ninguna foto'
+      });
+    }
+
+    const file = req.file;
+    const timestamp = Date.now();
+    const fileName = `review-${recommendationId}-${userId}-${timestamp}-${file.originalname}`;
+    
+    const bucket = admin.storage().bucket();
+    const blob = bucket.file(`reviews/${recommendationId}/${fileName}`);
+    
+    const blobStream = blob.createWriteStream({
+      metadata: {
+        contentType: file.mimetype,
+        metadata: {
+          uploadedBy: userId,
+          recommendationId: recommendationId
+        }
+      }
+    });
+
+    blobStream.on('error', (error) => {
+      console.error('❌ [APP] Error subiendo foto:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error subiendo foto',
+        error: error.message
+      });
+    });
+
+    blobStream.on('finish', async () => {
+      try {
+        await blob.makePublic();
+        const photoUrl = `https://storage.googleapis.com/${bucket.name}/${blob.name}`;
+        
+        console.log('✅ [APP] Foto subida:', photoUrl);
+
+        res.json({
+          success: true,
+          message: 'Foto subida exitosamente',
+          data: {
+            photoUrl
+          }
+        });
+      } catch (error) {
+        console.error('❌ [APP] Error haciendo pública la foto:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Error procesando foto',
+          error: error.message
+        });
+      }
+    });
+
+    blobStream.end(file.buffer);
+
+  } catch (error) {
+    console.error('❌ [APP] Error en upload de foto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo foto',
+      error: error.message
+    });
+  }
+});
+
+// Subir múltiples fotos para reviews (APP) - Hasta 5 fotos
+app.post('/api/recommendations/:recommendationId/reviews/upload-photos', authenticateToken, upload.array('photos', 5), async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const userId = req.user.uid;
+
+    console.log('📸 [APP] Subiendo fotos de review (múltiples) para:', recommendationId);
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionaron fotos'
+      });
+    }
+
+    if (req.files.length > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Máximo 5 fotos por vez'
+      });
+    }
+
+    const bucket = admin.storage().bucket();
+    const uploadPromises = req.files.map((file) => {
+      return new Promise((resolve, reject) => {
+        const timestamp = Date.now();
+        const random = Math.random().toString(36).substring(7);
+        const fileName = `review-${recommendationId}-${userId}-${timestamp}-${random}-${file.originalname}`;
+        
+        const blob = bucket.file(`reviews/${recommendationId}/${fileName}`);
+        
+        const blobStream = blob.createWriteStream({
+          metadata: {
+            contentType: file.mimetype,
+            metadata: {
+              uploadedBy: userId,
+              recommendationId: recommendationId
+            }
+          }
+        });
+
+        blobStream.on('error', (error) => {
+          reject(error);
+        });
+
+        blobStream.on('finish', async () => {
+          try {
+            await blob.makePublic();
+            const photoUrl = `https://storage.googleapis.com/${bucket.name}/${blob.name}`;
+            resolve(photoUrl);
+          } catch (error) {
+            reject(error);
+          }
+        });
+
+        blobStream.end(file.buffer);
+      });
+    });
+
+    const photoUrls = await Promise.all(uploadPromises);
+
+    console.log('✅ [APP] Fotos subidas:', photoUrls.length);
+
+    res.json({
+      success: true,
+      message: `${photoUrls.length} foto(s) subida(s) exitosamente`,
+      data: {
+        photoUrls
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error subiendo fotos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo fotos',
+      error: error.message
+    });
+  }
+});
+
+// Marcar/desmarcar review como útil (APP)
+app.post('/api/recommendations/:recommendationId/reviews/:reviewId/helpful', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId, reviewId } = req.params;
+    const userId = req.user.uid;
+
+    console.log('👍 [APP] Toggle útil en review:', reviewId);
+
+    const reviewRef = db.collection('recommendationReviews').doc(reviewId);
+    const reviewDoc = await reviewRef.get();
+
+    if (!reviewDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Review no encontrada'
+      });
+    }
+
+    const reviewData = reviewDoc.data();
+    const helpfulBy = reviewData.helpfulBy || [];
+
+    let isHelpful;
+    let newHelpfulBy;
+
+    if (helpfulBy.includes(userId)) {
+      // Ya marcado, quitar
+      newHelpfulBy = helpfulBy.filter(id => id !== userId);
+      isHelpful = false;
+    } else {
+      // No marcado, agregar
+      newHelpfulBy = [...helpfulBy, userId];
+      isHelpful = true;
+    }
+
+    await reviewRef.update({
+      helpfulBy: newHelpfulBy,
+      helpfulCount: newHelpfulBy.length
+    });
+
+    console.log(`✅ [APP] Review marcada como ${isHelpful ? 'útil' : 'no útil'}`);
+
+    res.json({
+      success: true,
+      isHelpful,
+      helpfulCount: newHelpfulBy.length
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error marcando review como útil:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marcando review',
+      error: error.message
+    });
+  }
+});
+
+// Verificar si el usuario marcó una review como útil (APP)
+app.get('/api/recommendations/:recommendationId/reviews/:reviewId/helpful', authenticateToken, async (req, res) => {
+  try {
+    const { reviewId } = req.params;
+    const userId = req.user.uid;
+
+    console.log('❓ [APP] Verificando útil en review:', reviewId);
+
+    const reviewDoc = await db.collection('recommendationReviews').doc(reviewId).get();
+
+    if (!reviewDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Review no encontrada'
+      });
+    }
+
+    const reviewData = reviewDoc.data();
+    const helpfulBy = reviewData.helpfulBy || [];
+    const isHelpful = helpfulBy.includes(userId);
+
+    res.json({
+      success: true,
+      data: {
+        isHelpful
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error verificando útil:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando review',
       error: error.message
     });
   }
@@ -5794,6 +6092,10 @@ app.get('/api/recommendations/:recommendationId/reviews/my-review', authenticate
         id: reviewDoc.id,
         rating: reviewData.rating,
         comment: reviewData.comment,
+        photos: reviewData.photos || [],
+        childAge: reviewData.childAge || '',
+        visitedWith: reviewData.visitedWith || '',
+        helpfulCount: reviewData.helpfulCount || 0,
         createdAt: reviewData.createdAt?.toDate(),
         updatedAt: reviewData.updatedAt?.toDate()
       }
@@ -5966,6 +6268,87 @@ app.delete('/api/admin/recommendations/:recommendationId/reviews/:reviewId', aut
     res.status(500).json({
       success: false,
       message: 'Error eliminando review',
+      error: error.message
+    });
+  }
+});
+
+// Migración: Agregar nuevos campos a reviews existentes (ADMIN)
+app.post('/api/admin/reviews/migrate-fields', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('🔄 [ADMIN] Iniciando migración de reviews...');
+
+    const snapshot = await db.collection('recommendationReviews').get();
+    
+    let updated = 0;
+    let skipped = 0;
+    const updates = [];
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      
+      // Solo actualizar si no tiene los nuevos campos
+      if (data.photos === undefined || data.helpfulCount === undefined || data.helpfulBy === undefined) {
+        const updateData = {};
+        
+        // Agregar photos si no existe
+        if (data.photos === undefined) {
+          updateData.photos = [];
+        }
+        
+        // Agregar childAge si no existe
+        if (data.childAge === undefined) {
+          updateData.childAge = '';
+        }
+        
+        // Agregar visitedWith si no existe
+        if (data.visitedWith === undefined) {
+          updateData.visitedWith = '';
+        }
+        
+        // Agregar helpfulCount si no existe
+        if (data.helpfulCount === undefined) {
+          updateData.helpfulCount = 0;
+        }
+        
+        // Agregar helpfulBy si no existe
+        if (data.helpfulBy === undefined) {
+          updateData.helpfulBy = [];
+        }
+        
+        if (Object.keys(updateData).length > 0) {
+          updates.push(
+            db.collection('recommendationReviews').doc(doc.id).update(updateData)
+          );
+          updated++;
+        }
+      } else {
+        skipped++;
+      }
+    }
+
+    // Ejecutar todas las actualizaciones en paralelo
+    if (updates.length > 0) {
+      await Promise.all(updates);
+    }
+
+    console.log(`✅ [ADMIN] Migración completada: ${updated} reviews actualizadas, ${skipped} omitidas`);
+
+    res.json({
+      success: true,
+      message: 'Migración de reviews completada exitosamente',
+      data: {
+        total: snapshot.size,
+        updated,
+        skipped
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error en migración de reviews:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error ejecutando migración',
       error: error.message
     });
   }
