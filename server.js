@@ -4602,6 +4602,378 @@ app.post('/api/recommendations/:recommendationId/favorite', authenticateToken, a
   }
 });
 
+// ===== ENDPOINTS DE WISHLIST (LISTA DE DESEOS) =====
+
+// Agregar a wishlist (APP)
+app.post('/api/recommendations/wishlist', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { recommendationId, notes, priority = 'medium' } = req.body;
+
+    console.log('💝 [APP] Agregando a wishlist:', recommendationId);
+
+    // Validaciones
+    if (!recommendationId) {
+      return res.status(400).json({
+        success: false,
+        message: 'El recommendationId es requerido'
+      });
+    }
+
+    if (priority && !['high', 'medium', 'low'].includes(priority)) {
+      return res.status(400).json({
+        success: false,
+        message: 'La prioridad debe ser: high, medium o low'
+      });
+    }
+
+    // Verificar que el recomendado existe
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendado no encontrado'
+      });
+    }
+
+    // Verificar si ya está en la wishlist
+    const existingWishlist = await db.collection('recommendationWishlist')
+      .where('userId', '==', userId)
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    if (!existingWishlist.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este recomendado ya está en tu lista de deseos'
+      });
+    }
+
+    // Agregar a wishlist
+    const wishlistData = {
+      userId,
+      recommendationId,
+      notes: notes || '',
+      priority: priority || 'medium',
+      addedAt: new Date(),
+      createdAt: new Date()
+    };
+
+    const wishlistRef = await db.collection('recommendationWishlist').add(wishlistData);
+
+    console.log('✅ [APP] Agregado a wishlist:', wishlistRef.id);
+
+    res.json({
+      success: true,
+      message: 'Agregado a tu lista de deseos',
+      data: {
+        id: wishlistRef.id,
+        ...wishlistData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error agregando a wishlist:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error agregando a lista de deseos',
+      error: error.message
+    });
+  }
+});
+
+// Obtener mi wishlist (APP)
+app.get('/api/recommendations/wishlist', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { priority } = req.query;
+
+    console.log('💝 [APP] Obteniendo wishlist del usuario:', userId);
+
+    // Query base
+    let query = db.collection('recommendationWishlist')
+      .where('userId', '==', userId);
+
+    // Filtrar por prioridad si se especifica
+    if (priority) {
+      if (!['high', 'medium', 'low'].includes(priority)) {
+        return res.status(400).json({
+          success: false,
+          message: 'La prioridad debe ser: high, medium o low'
+        });
+      }
+      query = query.where('priority', '==', priority);
+    }
+
+    const wishlistSnapshot = await query.get();
+
+    if (wishlistSnapshot.empty) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+
+    // Obtener los recomendados completos
+    const wishlistItems = await Promise.all(wishlistSnapshot.docs.map(async (doc) => {
+      const wishlistData = doc.data();
+      const recDoc = await db.collection('recommendations').doc(wishlistData.recommendationId).get();
+
+      if (!recDoc.exists) return null;
+
+      const recData = recDoc.data();
+
+      // Solo incluir recomendados activos
+      if (!recData.isActive) return null;
+
+      // Obtener información de la categoría
+      let categoryInfo = null;
+      if (recData.categoryId) {
+        const categoryDoc = await db.collection('categories').doc(recData.categoryId).get();
+        if (categoryDoc.exists) {
+          const catData = categoryDoc.data();
+          categoryInfo = {
+            id: categoryDoc.id,
+            name: catData.name,
+            icon: catData.icon,
+            imageUrl: catData.imageUrl
+          };
+        }
+      }
+
+      return {
+        // Datos del recomendado
+        id: recDoc.id,
+        name: recData.name,
+        description: recData.description,
+        address: recData.address,
+        latitude: recData.latitude,
+        longitude: recData.longitude,
+        phone: recData.phone,
+        email: recData.email,
+        website: recData.website,
+        facebook: recData.facebook,
+        instagram: recData.instagram,
+        twitter: recData.twitter,
+        whatsapp: recData.whatsapp,
+        imageUrl: recData.imageUrl,
+        totalReviews: recData.totalReviews || 0,
+        averageRating: recData.averageRating || 0,
+        category: categoryInfo,
+        verified: recData.verified || false,
+        badges: recData.badges || [],
+        features: recData.features || {
+          hasChangingTable: false,
+          hasNursingRoom: false,
+          hasParking: false,
+          isStrollerAccessible: false,
+          acceptsEmergencies: false,
+          is24Hours: false
+        },
+        // Datos de la wishlist
+        wishlistId: doc.id,
+        addedAt: wishlistData.addedAt?.toDate(),
+        notes: wishlistData.notes || '',
+        priority: wishlistData.priority || 'medium'
+      };
+    }));
+
+    // Filtrar nulls (recomendados que ya no existen o no están activos)
+    const validItems = wishlistItems.filter(item => item !== null);
+
+    // Ordenar por prioridad (high > medium > low) y luego por fecha
+    const priorityOrder = { high: 3, medium: 2, low: 1 };
+    validItems.sort((a, b) => {
+      const priorityDiff = priorityOrder[b.priority] - priorityOrder[a.priority];
+      if (priorityDiff !== 0) return priorityDiff;
+      return (b.addedAt?.getTime() || 0) - (a.addedAt?.getTime() || 0);
+    });
+
+    res.json({
+      success: true,
+      data: validItems,
+      metadata: {
+        total: validItems.length,
+        byPriority: {
+          high: validItems.filter(i => i.priority === 'high').length,
+          medium: validItems.filter(i => i.priority === 'medium').length,
+          low: validItems.filter(i => i.priority === 'low').length
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo wishlist:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo lista de deseos',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar item de wishlist (APP)
+app.put('/api/recommendations/wishlist/:wishlistId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { wishlistId } = req.params;
+    const { notes, priority } = req.body;
+
+    console.log('✏️ [APP] Actualizando wishlist item:', wishlistId);
+
+    // Validaciones
+    if (priority && !['high', 'medium', 'low'].includes(priority)) {
+      return res.status(400).json({
+        success: false,
+        message: 'La prioridad debe ser: high, medium o low'
+      });
+    }
+
+    const wishlistRef = db.collection('recommendationWishlist').doc(wishlistId);
+    const wishlistDoc = await wishlistRef.get();
+
+    if (!wishlistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item de wishlist no encontrado'
+      });
+    }
+
+    const wishlistData = wishlistDoc.data();
+
+    // Verificar que el usuario es el dueño
+    if (wishlistData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para modificar este item'
+      });
+    }
+
+    // Actualizar
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (notes !== undefined) updateData.notes = notes;
+    if (priority !== undefined) updateData.priority = priority;
+
+    await wishlistRef.update(updateData);
+
+    console.log('✅ [APP] Wishlist item actualizado');
+
+    res.json({
+      success: true,
+      message: 'Item actualizado exitosamente',
+      data: {
+        id: wishlistId,
+        ...wishlistData,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error actualizando wishlist item:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando item de wishlist',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar de wishlist (APP)
+app.delete('/api/recommendations/wishlist/:wishlistId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { wishlistId } = req.params;
+
+    console.log('🗑️ [APP] Eliminando de wishlist:', wishlistId);
+
+    const wishlistRef = db.collection('recommendationWishlist').doc(wishlistId);
+    const wishlistDoc = await wishlistRef.get();
+
+    if (!wishlistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item de wishlist no encontrado'
+      });
+    }
+
+    const wishlistData = wishlistDoc.data();
+
+    // Verificar que el usuario es el dueño
+    if (wishlistData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para eliminar este item'
+      });
+    }
+
+    await wishlistRef.delete();
+
+    console.log('✅ [APP] Eliminado de wishlist');
+
+    res.json({
+      success: true,
+      message: 'Eliminado de tu lista de deseos'
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error eliminando de wishlist:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando de lista de deseos',
+      error: error.message
+    });
+  }
+});
+
+// Verificar si un recomendado está en wishlist (APP)
+app.get('/api/recommendations/:recommendationId/wishlist', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { recommendationId } = req.params;
+
+    console.log('💝 [APP] Verificando si está en wishlist:', recommendationId);
+
+    const wishlistSnapshot = await db.collection('recommendationWishlist')
+      .where('userId', '==', userId)
+      .where('recommendationId', '==', recommendationId)
+      .get();
+
+    if (wishlistSnapshot.empty) {
+      return res.json({
+        success: true,
+        data: {
+          inWishlist: false
+        }
+      });
+    }
+
+    const wishlistDoc = wishlistSnapshot.docs[0];
+    const wishlistData = wishlistDoc.data();
+
+    res.json({
+      success: true,
+      data: {
+        inWishlist: true,
+        wishlistId: wishlistDoc.id,
+        addedAt: wishlistData.addedAt?.toDate(),
+        notes: wishlistData.notes || '',
+        priority: wishlistData.priority || 'medium'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error verificando wishlist:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando lista de deseos',
+      error: error.message
+    });
+  }
+});
+
 // Obtener un recomendado específico (para la app)
 app.get('/api/recommendations/:recommendationId', authenticateToken, async (req, res) => {
   try {
