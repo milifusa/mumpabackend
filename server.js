@@ -10638,6 +10638,74 @@ app.post('/api/communities/:communityId/join', authenticateToken, async (req, re
   }
 });
 
+// Endpoint para salir de una comunidad
+app.post('/api/communities/:communityId/leave', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId } = req.params;
+
+    console.log('🚪 [COMMUNITY] Usuario intentando salir de comunidad:', uid, communityId);
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la comunidad existe
+    const communityRef = db.collection('communities').doc(communityId);
+    const communityDoc = await communityRef.get();
+
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+
+    // Verificar si el usuario es el creador de la comunidad
+    if (communityData.userId === uid) {
+      return res.status(400).json({
+        success: false,
+        message: 'No puedes salir de una comunidad que creaste. Debes eliminarla o transferir la propiedad primero.'
+      });
+    }
+
+    // Verificar si es miembro
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'No eres miembro de esta comunidad'
+      });
+    }
+
+    // Remover al usuario de la lista de miembros
+    await communityRef.update({
+      members: admin.firestore.FieldValue.arrayRemove(uid),
+      memberCount: admin.firestore.FieldValue.increment(-1),
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [COMMUNITY] Usuario salió de la comunidad:', uid, communityId);
+
+    res.json({
+      success: true,
+      message: 'Has salido de la comunidad exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [COMMUNITY] Error saliendo de comunidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error saliendo de comunidad',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para obtener solicitudes pendientes de una comunidad (solo para el owner)
 app.get('/api/communities/:communityId/join-requests', authenticateToken, async (req, res) => {
   try {
