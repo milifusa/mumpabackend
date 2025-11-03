@@ -29,6 +29,8 @@ const allowedOrigins = [
   // Producción
   'https://munpa.online', 
   'https://www.munpa.online',
+  'https://munpa.app',
+  'https://www.munpa.app',
   'https://dash.munpa.online',
   'https://dashboardmunpa-ey7a5gscn-mishu-lojans-projects.vercel.app',
   // Desarrollo
