@@ -3180,7 +3180,16 @@ app.get('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, 
 app.put('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { childId } = req.params;
-    const { name, ageInMonths, isUnborn, gestationWeeks, photoUrl } = req.body;
+    const { 
+      name, 
+      birthDate,        // Nuevo: fecha de nacimiento
+      dueDate,          // Nuevo: fecha esperada de parto
+      isUnborn, 
+      photoUrl,
+      // Legacy
+      ageInMonths, 
+      gestationWeeks 
+    } = req.body;
     
     console.log('✏️ [ADMIN] Editando hijo:', childId);
 
@@ -3200,48 +3209,73 @@ app.put('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, 
       });
     }
 
-    // Validaciones
-    if (isUnborn && gestationWeeks && (gestationWeeks < 1 || gestationWeeks > 42)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Las semanas de gestación deben estar entre 1 y 42'
-      });
-    }
-
-    if (isUnborn === false && ageInMonths !== undefined && ageInMonths < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'La edad en meses debe ser mayor o igual a 0'
-      });
-    }
-
+    const currentData = childDoc.data();
     const updateData = {
       updatedAt: new Date()
     };
 
     if (name !== undefined) updateData.name = name.trim();
-    if (ageInMonths !== undefined) updateData.ageInMonths = isUnborn ? null : parseInt(ageInMonths);
-    if (isUnborn !== undefined) updateData.isUnborn = isUnborn;
-    if (gestationWeeks !== undefined) updateData.gestationWeeks = isUnborn ? parseInt(gestationWeeks) : null;
     if (photoUrl !== undefined) updateData.photoUrl = photoUrl;
+    if (isUnborn !== undefined) updateData.isUnborn = isUnborn;
 
-    // Limpiar campos según el estado
-    if (isUnborn) {
-      updateData.ageInMonths = null;
+    // Determinar el estado final de isUnborn
+    const finalIsUnborn = isUnborn !== undefined ? isUnborn : currentData.isUnborn;
+
+    // Manejar actualización de fechas/edades según el estado
+    if (finalIsUnborn) {
+      // Es un bebé no nacido
+      if (dueDate) {
+        updateData.dueDate = new Date(dueDate);
+        updateData.gestationWeeks = null;
+        updateData.birthDate = null;
+        updateData.ageInMonths = null;
+      } else if (gestationWeeks !== undefined) {
+        // Legacy: usar semanas de gestación
+        if (gestationWeeks < 1 || gestationWeeks > 42) {
+          return res.status(400).json({
+            success: false,
+            message: 'Las semanas de gestación deben estar entre 1 y 42'
+          });
+        }
+        updateData.gestationWeeks = parseInt(gestationWeeks);
+        updateData.dueDate = null;
+        updateData.birthDate = null;
+        updateData.ageInMonths = null;
+        updateData.registeredAt = new Date();
+      }
     } else {
-      updateData.gestationWeeks = null;
+      // Es un bebé nacido
+      if (birthDate) {
+        updateData.birthDate = new Date(birthDate);
+        updateData.ageInMonths = null;
+        updateData.dueDate = null;
+        updateData.gestationWeeks = null;
+      } else if (ageInMonths !== undefined) {
+        // Legacy: usar edad en meses
+        if (ageInMonths < 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'La edad en meses debe ser mayor o igual a 0'
+          });
+        }
+        updateData.ageInMonths = parseInt(ageInMonths);
+        updateData.birthDate = null;
+        updateData.dueDate = null;
+        updateData.gestationWeeks = null;
+        updateData.registeredAt = new Date();
+      }
     }
 
     await db.collection('children').doc(childId).update(updateData);
 
+    // Obtener el hijo actualizado con información calculada
+    const updatedChildDoc = await db.collection('children').doc(childId).get();
+    const updatedChild = getChildCurrentInfo({ id: childId, ...updatedChildDoc.data() });
+
     res.json({
       success: true,
       message: 'Hijo actualizado exitosamente',
-      data: {
-        id: childId,
-        ...childDoc.data(),
-        ...updateData
-      }
+      data: updatedChild
     });
 
   } catch (error) {
@@ -8201,7 +8235,16 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
 app.post('/api/auth/children', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { name, ageInMonths, isUnborn, gestationWeeks, photoUrl } = req.body;
+    const { 
+      name, 
+      birthDate,        // Nuevo: fecha de nacimiento (para bebés nacidos)
+      dueDate,          // Nuevo: fecha esperada de parto (para bebés no nacidos)
+      isUnborn, 
+      photoUrl,
+      // Legacy (para compatibilidad con apps antiguas)
+      ageInMonths, 
+      gestationWeeks 
+    } = req.body;
 
     if (!name) {
       return res.status(400).json({
@@ -8210,20 +8253,60 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validar que si es un bebé no nacido, tenga semanas de gestación
-    if (isUnborn && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para bebés no nacidos, las semanas de gestación deben estar entre 1 y 42'
-      });
+    // Validar que si es un bebé no nacido, tenga fecha de parto o semanas de gestación (legacy)
+    if (isUnborn) {
+      if (!dueDate && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para bebés no nacidos, la fecha esperada de parto es requerida (o semanas de gestación entre 1 y 42)'
+        });
+      }
+      
+      // Validar que la fecha de parto sea futura (con un margen de 2 semanas para casos de parto tardío)
+      if (dueDate) {
+        const due = new Date(dueDate);
+        const now = new Date();
+        const twoWeeksAgo = new Date(now.getTime() - (14 * 24 * 60 * 60 * 1000));
+        
+        if (due < twoWeeksAgo) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha esperada de parto debe ser futura o reciente (máximo 2 semanas en el pasado)'
+          });
+        }
+      }
     }
 
-    // Validar que si es un bebé nacido, tenga edad en meses
-    if (!isUnborn && (ageInMonths === undefined || ageInMonths < 0)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para bebés nacidos, la edad en meses es requerida y debe ser mayor o igual a 0'
-      });
+    // Validar que si es un bebé nacido, tenga fecha de nacimiento o edad en meses (legacy)
+    if (!isUnborn) {
+      if (!birthDate && (ageInMonths === undefined || ageInMonths < 0)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para bebés nacidos, la fecha de nacimiento es requerida (o edad en meses mayor o igual a 0)'
+        });
+      }
+      
+      // Validar que la fecha de nacimiento sea pasada y no muy lejana
+      if (birthDate) {
+        const birth = new Date(birthDate);
+        const now = new Date();
+        const maxYearsBack = 18; // Máximo 18 años
+        const minDate = new Date(now.getFullYear() - maxYearsBack, now.getMonth(), now.getDate());
+        
+        if (birth > now) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha de nacimiento debe ser en el pasado'
+          });
+        }
+        
+        if (birth < minDate) {
+          return res.status(400).json({
+            success: false,
+            message: `La fecha de nacimiento no puede ser mayor a ${maxYearsBack} años atrás`
+          });
+        }
+      }
     }
 
     if (!db) {
@@ -8237,16 +8320,44 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     const childData = {
       parentId: uid,
       name: name.trim(),
-      ageInMonths: isUnborn ? null : parseInt(ageInMonths),
-      gestationWeeks: isUnborn ? parseInt(gestationWeeks) : null,
       isUnborn: isUnborn || false,
       photoUrl: photoUrl || null,
-      createdAt: now, // Fecha de registro
-      registeredAt: now, // Fecha cuando se registró la edad/semanas
+      createdAt: now,
       updatedAt: now
     };
 
+    // Usar el nuevo sistema basado en fechas
+    if (isUnborn) {
+      if (dueDate) {
+        childData.dueDate = new Date(dueDate); // Nuevo sistema
+        childData.gestationWeeks = null;
+      } else {
+        // Fallback a sistema legacy
+        childData.gestationWeeks = parseInt(gestationWeeks);
+        childData.dueDate = null;
+        childData.registeredAt = now; // Solo para sistema legacy
+      }
+      childData.birthDate = null;
+      childData.ageInMonths = null;
+    } else {
+      if (birthDate) {
+        childData.birthDate = new Date(birthDate); // Nuevo sistema
+        childData.ageInMonths = null;
+      } else {
+        // Fallback a sistema legacy
+        childData.ageInMonths = parseInt(ageInMonths);
+        childData.birthDate = null;
+        childData.registeredAt = now; // Solo para sistema legacy
+      }
+      childData.dueDate = null;
+      childData.gestationWeeks = null;
+    }
+
     const childRef = await db.collection('children').add(childData);
+    
+    // Calcular información actual del hijo
+    const childDoc = await childRef.get();
+    const childWithInfo = getChildCurrentInfo({ id: childRef.id, ...childDoc.data() });
     
     // Calcular el número real de hijos después de agregar
     const childrenSnapshot = await db.collection('children')
@@ -8266,10 +8377,7 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       message: 'Hijo agregado exitosamente',
-      data: {
-        id: childRef.id,
-        ...childData
-      }
+      data: childWithInfo
     });
 
   } catch (error) {
@@ -8287,28 +8395,22 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
     const { childId } = req.params;
-    const { name, ageInMonths, isUnborn, gestationWeeks, photoUrl } = req.body;
+    const { 
+      name, 
+      birthDate,        // Nuevo: fecha de nacimiento
+      dueDate,          // Nuevo: fecha esperada de parto
+      isUnborn, 
+      photoUrl,
+      // Legacy
+      ageInMonths, 
+      gestationWeeks 
+    } = req.body;
 
-    if (!name && ageInMonths === undefined && isUnborn === undefined && gestationWeeks === undefined && !photoUrl) {
+    if (!name && !birthDate && !dueDate && ageInMonths === undefined && 
+        isUnborn === undefined && gestationWeeks === undefined && !photoUrl) {
       return res.status(400).json({
         success: false,
         message: 'Al menos un campo debe ser proporcionado'
-      });
-    }
-
-    // Validar que si se cambia a bebé no nacido, tenga semanas de gestación
-    if (isUnborn && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para bebés no nacidos, las semanas de gestación deben estar entre 1 y 42'
-      });
-    }
-
-    // Validar que si se cambia a bebé nacido, tenga edad en meses
-    if (isUnborn === false && (ageInMonths === undefined || ageInMonths < 0)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Para bebés nacidos, la edad en meses es requerida y debe ser mayor o igual a 0'
       });
     }
 
@@ -8335,39 +8437,120 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
       });
     }
 
+    const currentData = childDoc.data();
     const updateData = {
       updatedAt: new Date()
     };
-    if (name) updateData.name = name.trim();
-    if (ageInMonths !== undefined) updateData.ageInMonths = parseInt(ageInMonths);
-    if (isUnborn !== undefined) updateData.isUnborn = isUnborn;
-    if (gestationWeeks !== undefined) updateData.gestationWeeks = parseInt(gestationWeeks);
-    if (photoUrl !== undefined) updateData.photoUrl = photoUrl;
     
-    // Si se cambia el estado de gestación, limpiar campos no aplicables
-    // Validar URL de foto si se proporciona
-    if (photoUrl && !isValidUrl(photoUrl)) {
-      return res.status(400).json({
-        success: false,
-        message: 'URL de foto inválida'
-      });
+    // Actualizar nombre si se proporciona
+    if (name) updateData.name = name.trim();
+    
+    // Actualizar foto si se proporciona
+    if (photoUrl !== undefined) {
+      if (photoUrl && !isValidUrl(photoUrl)) {
+        return res.status(400).json({
+          success: false,
+          message: 'URL de foto inválida'
+        });
+      }
+      updateData.photoUrl = photoUrl;
+    }
+    
+    // Actualizar estado de embarazo si se proporciona
+    if (isUnborn !== undefined) {
+      updateData.isUnborn = isUnborn;
     }
 
-    if (isUnborn === true) {
-      updateData.ageInMonths = null;
-    } else if (isUnborn === false) {
-      updateData.gestationWeeks = null;
+    // Determinar el estado final de isUnborn
+    const finalIsUnborn = isUnborn !== undefined ? isUnborn : currentData.isUnborn;
+
+    // Manejar actualización de fechas/edades según el estado
+    if (finalIsUnborn) {
+      // Es un bebé no nacido
+      if (dueDate) {
+        // Validar fecha de parto
+        const due = new Date(dueDate);
+        const now = new Date();
+        const twoWeeksAgo = new Date(now.getTime() - (14 * 24 * 60 * 60 * 1000));
+        
+        if (due < twoWeeksAgo) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha esperada de parto debe ser futura o reciente (máximo 2 semanas en el pasado)'
+          });
+        }
+        
+        updateData.dueDate = due;
+        updateData.gestationWeeks = null;
+        updateData.birthDate = null;
+        updateData.ageInMonths = null;
+      } else if (gestationWeeks !== undefined) {
+        // Legacy: usar semanas de gestación
+        if (gestationWeeks < 1 || gestationWeeks > 42) {
+          return res.status(400).json({
+            success: false,
+            message: 'Las semanas de gestación deben estar entre 1 y 42'
+          });
+        }
+        updateData.gestationWeeks = parseInt(gestationWeeks);
+        updateData.dueDate = null;
+        updateData.birthDate = null;
+        updateData.ageInMonths = null;
+        updateData.registeredAt = new Date();
+      }
+    } else {
+      // Es un bebé nacido
+      if (birthDate) {
+        // Validar fecha de nacimiento
+        const birth = new Date(birthDate);
+        const now = new Date();
+        const maxYearsBack = 18;
+        const minDate = new Date(now.getFullYear() - maxYearsBack, now.getMonth(), now.getDate());
+        
+        if (birth > now) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha de nacimiento debe ser en el pasado'
+          });
+        }
+        
+        if (birth < minDate) {
+          return res.status(400).json({
+            success: false,
+            message: `La fecha de nacimiento no puede ser mayor a ${maxYearsBack} años atrás`
+          });
+        }
+        
+        updateData.birthDate = birth;
+        updateData.ageInMonths = null;
+        updateData.dueDate = null;
+        updateData.gestationWeeks = null;
+      } else if (ageInMonths !== undefined) {
+        // Legacy: usar edad en meses
+        if (ageInMonths < 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'La edad en meses debe ser mayor o igual a 0'
+          });
+        }
+        updateData.ageInMonths = parseInt(ageInMonths);
+        updateData.birthDate = null;
+        updateData.dueDate = null;
+        updateData.gestationWeeks = null;
+        updateData.registeredAt = new Date();
+      }
     }
 
     await db.collection('children').doc(childId).update(updateData);
 
+    // Obtener el hijo actualizado con información calculada
+    const updatedChildDoc = await db.collection('children').doc(childId).get();
+    const updatedChild = getChildCurrentInfo({ id: childId, ...updatedChildDoc.data() });
+
     res.json({
       success: true,
       message: 'Hijo actualizado exitosamente',
-      data: {
-        id: childId,
-        ...updateData
-      }
+      data: updatedChild
     });
 
   } catch (error) {
@@ -8557,22 +8740,24 @@ app.post('/api/auth/children/calculate-age', authenticateToken, async (req, res)
       });
     }
 
+    const ageInMonths = calculateAgeFromBirthDate(birthDate);
     const birth = new Date(birthDate);
     const today = new Date();
+    const ageInDays = Math.max(0, Math.floor((today - birth) / (1000 * 60 * 60 * 24)));
     
-    // Calcular diferencia en meses
-    const monthsDiff = (today.getFullYear() - birth.getFullYear()) * 12 + 
-                      (today.getMonth() - birth.getMonth());
-    
-    // Ajustar por días
-    const daysDiff = today.getDate() - birth.getDate();
-    const adjustedMonths = daysDiff < 0 ? monthsDiff - 1 : monthsDiff;
+    const years = Math.floor(ageInMonths / 12);
+    const months = ageInMonths % 12;
 
     res.json({
       success: true,
       data: {
-        ageInMonths: Math.max(0, adjustedMonths),
-        ageInDays: Math.max(0, Math.floor((today - birth) / (1000 * 60 * 60 * 24)))
+        ageInMonths: ageInMonths,
+        ageInDays: ageInDays,
+        ageInYears: years,
+        monthsRemainder: months,
+        formattedAge: years > 0 
+          ? `${years} año${years > 1 ? 's' : ''}${months > 0 ? ` y ${months} mes${months > 1 ? 'es' : ''}` : ''}`
+          : `${months} mes${months > 1 ? 'es' : ''}`
       }
     });
 
@@ -8581,6 +8766,81 @@ app.post('/api/auth/children/calculate-age', authenticateToken, async (req, res)
     res.status(500).json({
       success: false,
       message: 'Error calculando edad',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint helper para calcular fecha de parto desde semanas de gestación
+app.post('/api/auth/children/calculate-due-date', authenticateToken, async (req, res) => {
+  try {
+    const { gestationWeeks } = req.body;
+
+    if (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 45) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las semanas de gestación deben estar entre 1 y 45'
+      });
+    }
+
+    const today = new Date();
+    const weeksRemaining = 40 - gestationWeeks; // Embarazo completo son 40 semanas
+    const daysRemaining = weeksRemaining * 7;
+    
+    const dueDate = new Date(today.getTime() + (daysRemaining * 24 * 60 * 60 * 1000));
+
+    res.json({
+      success: true,
+      data: {
+        dueDate: dueDate.toISOString().split('T')[0], // Formato YYYY-MM-DD
+        currentWeeks: gestationWeeks,
+        weeksRemaining: Math.max(0, weeksRemaining),
+        daysRemaining: Math.max(0, daysRemaining),
+        isOverdue: gestationWeeks >= 40
+      }
+    });
+  } catch (error) {
+    console.error('Error calculando fecha de parto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error calculando fecha de parto',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint helper para calcular semanas de gestación desde fecha de parto
+app.post('/api/auth/children/calculate-gestation-weeks', authenticateToken, async (req, res) => {
+  try {
+    const { dueDate } = req.body;
+
+    if (!dueDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fecha de parto es requerida'
+      });
+    }
+
+    const gestationInfo = calculateGestationFromDueDate(dueDate);
+
+    res.json({
+      success: true,
+      data: {
+        currentWeeks: gestationInfo.weeks,
+        daysUntilDue: gestationInfo.daysUntilDue,
+        isOverdue: gestationInfo.isOverdue,
+        dueDateFormatted: new Date(dueDate).toLocaleDateString('es-ES', { 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        })
+      }
+    });
+  } catch (error) {
+    console.error('Error calculando semanas de gestación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error calculando semanas de gestación',
       error: error.message
     });
   }
@@ -9232,7 +9492,41 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
   }
 });
 
-// Función para calcular edad actual basada en fecha de creación
+// Función para calcular edad en meses desde fecha de nacimiento
+const calculateAgeFromBirthDate = (birthDate) => {
+  const now = new Date();
+  
+  // Manejar Timestamp de Firestore
+  let birth;
+  if (birthDate && typeof birthDate === 'object' && birthDate._seconds) {
+    birth = new Date(birthDate._seconds * 1000);
+  } else {
+    birth = new Date(birthDate);
+  }
+  
+  // Calcular años y meses
+  let years = now.getFullYear() - birth.getFullYear();
+  let months = now.getMonth() - birth.getMonth();
+  
+  // Ajustar si el día actual es menor que el día de nacimiento
+  if (now.getDate() < birth.getDate()) {
+    months--;
+  }
+  
+  // Si los meses son negativos, ajustar años y meses
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+  
+  const totalMonths = Math.max(0, years * 12 + months);
+  
+  console.log(`📊 [AGE CALCULATION] Nacimiento: ${birth.toLocaleDateString()} → Edad actual: ${totalMonths} meses (${years} años, ${months} meses)`);
+  
+  return totalMonths;
+};
+
+// Función para calcular edad actual basada en fecha de creación (LEGACY - para compatibilidad con datos antiguos)
 const calculateCurrentAge = (registeredAge, createdAt) => {
   const now = new Date();
   
@@ -9255,12 +9549,45 @@ const calculateCurrentAge = (registeredAge, createdAt) => {
   // Calcular edad actual sumando los meses transcurridos
   const currentAge = Math.max(0, registeredAge + diffMonths);
   
-  console.log(`📊 [AGE CALCULATION] ${registeredAge} meses + ${diffMonths} meses = ${currentAge} meses (${diffDays} días desde creación)`);
+  console.log(`📊 [AGE CALCULATION LEGACY] ${registeredAge} meses + ${diffMonths} meses = ${currentAge} meses (${diffDays} días desde creación)`);
   
   return currentAge;
 };
 
-// Función para calcular semanas de gestación actual basada en fecha de creación
+// Función para calcular semanas de gestación desde fecha esperada de parto
+const calculateGestationFromDueDate = (dueDate) => {
+  const now = new Date();
+  
+  // Manejar Timestamp de Firestore
+  let due;
+  if (dueDate && typeof dueDate === 'object' && dueDate._seconds) {
+    due = new Date(dueDate._seconds * 1000);
+  } else {
+    due = new Date(dueDate);
+  }
+  
+  // Un embarazo completo son 40 semanas (280 días)
+  // Calculamos cuántos días faltan hasta la fecha de parto
+  const diffTime = due - now;
+  const daysUntilDue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  // Calcular semanas de gestación actual
+  // Si faltan X días, la gestación actual es (280 - X) / 7
+  const currentWeeks = Math.floor((280 - daysUntilDue) / 7);
+  
+  // Limitar a un rango realista (4-45 semanas, permitiendo un poco de margen para partos tardíos)
+  const finalWeeks = Math.max(4, Math.min(45, currentWeeks));
+  
+  console.log(`📊 [GESTATION CALCULATION] Fecha de parto: ${due.toLocaleDateString()} → Semanas actuales: ${finalWeeks} (faltan ${daysUntilDue} días)`);
+  
+  return {
+    weeks: finalWeeks,
+    isOverdue: currentWeeks >= 40,
+    daysUntilDue: daysUntilDue
+  };
+};
+
+// Función para calcular semanas de gestación actual basada en fecha de creación (LEGACY - para compatibilidad)
 const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
   const now = new Date();
   
@@ -9284,7 +9611,7 @@ const calculateCurrentGestationWeeks = (registeredWeeks, createdAt) => {
   // Limitar a un rango realista (4-42 semanas)
   const finalWeeks = Math.max(4, Math.min(42, currentWeeks));
   
-  console.log(`📊 [GESTATION CALCULATION] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${finalWeeks} semanas (${diffDays} días desde creación)`);
+  console.log(`📊 [GESTATION CALCULATION LEGACY] ${registeredWeeks} semanas + ${diffWeeks} semanas = ${finalWeeks} semanas (${diffDays} días desde creación)`);
   
   return finalWeeks;
 };
@@ -9303,30 +9630,70 @@ const getChildCurrentInfo = (child) => {
     createdDate = new Date(child.createdAt);
   }
   
+  const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
+  
   if (child.isUnborn) {
-    const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.createdAt);
-    const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
-    
-    return {
-      ...child,
-      currentGestationWeeks: currentGestationWeeks,
-      currentAgeInMonths: null,
-      registeredGestationWeeks: child.gestationWeeks,
-      daysSinceCreation: daysSinceCreation,
-      isOverdue: currentGestationWeeks >= 40
-    };
+    // Si tiene dueDate (nuevo sistema), usar eso
+    if (child.dueDate) {
+      const gestationInfo = calculateGestationFromDueDate(child.dueDate);
+      
+      return {
+        ...child,
+        currentGestationWeeks: gestationInfo.weeks,
+        currentAgeInMonths: null,
+        registeredGestationWeeks: null, // Ya no aplica con el nuevo sistema
+        daysSinceCreation: daysSinceCreation,
+        isOverdue: gestationInfo.isOverdue,
+        daysUntilDue: gestationInfo.daysUntilDue
+      };
+    } 
+    // Fallback a sistema antiguo (legacy)
+    else if (child.gestationWeeks) {
+      const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.createdAt);
+      
+      return {
+        ...child,
+        currentGestationWeeks: currentGestationWeeks,
+        currentAgeInMonths: null,
+        registeredGestationWeeks: child.gestationWeeks,
+        daysSinceCreation: daysSinceCreation,
+        isOverdue: currentGestationWeeks >= 40
+      };
+    }
   } else {
-    const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.createdAt);
-    const daysSinceCreation = Math.floor((now - createdDate) / (1000 * 60 * 60 * 24));
-    
-    return {
-      ...child,
-      currentAgeInMonths: currentAgeInMonths,
-      currentGestationWeeks: null,
-      registeredAgeInMonths: child.ageInMonths,
-      daysSinceCreation: daysSinceCreation
-    };
+    // Si tiene birthDate (nuevo sistema), usar eso
+    if (child.birthDate) {
+      const currentAgeInMonths = calculateAgeFromBirthDate(child.birthDate);
+      
+      return {
+        ...child,
+        currentAgeInMonths: currentAgeInMonths,
+        currentGestationWeeks: null,
+        registeredAgeInMonths: null, // Ya no aplica con el nuevo sistema
+        daysSinceCreation: daysSinceCreation
+      };
+    }
+    // Fallback a sistema antiguo (legacy)
+    else if (child.ageInMonths !== undefined && child.ageInMonths !== null) {
+      const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.createdAt);
+      
+      return {
+        ...child,
+        currentAgeInMonths: currentAgeInMonths,
+        currentGestationWeeks: null,
+        registeredAgeInMonths: child.ageInMonths,
+        daysSinceCreation: daysSinceCreation
+      };
+    }
   }
+  
+  // Si no hay datos válidos, retornar el child original con valores por defecto
+  return {
+    ...child,
+    currentAgeInMonths: 0,
+    currentGestationWeeks: null,
+    daysSinceCreation: daysSinceCreation
+  };
 };
 
 // Función para obtener respuestas previas de desarrollo
