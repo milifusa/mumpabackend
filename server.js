@@ -15677,16 +15677,6 @@ app.delete('/api/children/:childId/albums/:albumId', authenticateToken, async (r
 
 
 
-
-// Middleware para rutas no encontradas
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Ruta no encontrada',
-    path: req.originalUrl
-  });
-});
-
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
@@ -17971,5 +17961,20 @@ app.post('/api/admin/marketplace/categories/init-defaults', authenticateToken, i
       error: error.message
     });
   }
+});
+
+// ============================================================================
+// ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
+// ============================================================================
+
+// Middleware para rutas no encontradas (DEBE estar después de todas las rutas)
+app.use('*', (req, res) => {
+  console.log('⚠️ [404] Ruta no encontrada:', req.method, req.originalUrl);
+  res.status(404).json({
+    success: false,
+    message: 'Ruta no encontrada',
+    path: req.originalUrl,
+    method: req.method
+  });
 });
 
