@@ -17749,8 +17749,9 @@ app.delete('/api/admin/marketplace/categories/:id', authenticateToken, isAdmin, 
     }
 
     // Eliminar imagen de Storage si existe
-    if (categoryData.imageStoragePath && bucket) {
+    if (categoryData.imageStoragePath) {
       try {
+        const bucket = admin.storage().bucket();
         const file = bucket.file(categoryData.imageStoragePath);
         await file.delete();
         console.log('🗑️ [ADMIN] Imagen de categoría eliminada:', categoryData.imageStoragePath);
@@ -17856,6 +17857,9 @@ app.post('/api/admin/marketplace/categories/upload-image', authenticateToken, is
       });
     }
 
+    // Obtener bucket de Firebase Storage
+    const bucket = admin.storage().bucket();
+    
     if (!bucket) {
       return res.status(500).json({
         success: false,
