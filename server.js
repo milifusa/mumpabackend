@@ -17473,6 +17473,85 @@ app.get('/api/marketplace/categories/:id', async (req, res) => {
 // 🛠️ ADMIN - GESTIÓN DE CATEGORÍAS
 // ============================================================================
 
+// Listar todas las categorías (Admin) - con filtros y paginación
+app.get('/api/admin/marketplace/categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 20, 
+      search = '', 
+      includeInactive = 'true',
+      orderBy = 'order'
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener todas las categorías
+    let query = db.collection('marketplace_categories');
+
+    // El admin puede ver todas, incluidas las inactivas
+    // (No aplicar filtro de isActive)
+
+    // Ordenamiento
+    const validOrderBy = ['order', 'name', 'createdAt', 'productCount'];
+    const orderField = validOrderBy.includes(orderBy) ? orderBy : 'order';
+    query = query.orderBy(orderField, 'asc');
+
+    const snapshot = await query.get();
+    let categories = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar por includeInactive
+    if (includeInactive === 'false') {
+      categories = categories.filter(cat => cat.isActive);
+    }
+
+    // Búsqueda por nombre o slug
+    if (search && search.trim().length > 0) {
+      const searchLower = search.toLowerCase().trim();
+      categories = categories.filter(cat => 
+        cat.name.toLowerCase().includes(searchLower) ||
+        cat.slug.toLowerCase().includes(searchLower) ||
+        (cat.description && cat.description.toLowerCase().includes(searchLower))
+      );
+    }
+
+    // Paginación
+    const total = categories.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedCategories = categories.slice(startIndex, endIndex);
+
+    console.log(`✅ [ADMIN] Categorías listadas: ${paginatedCategories.length} de ${total}`);
+
+    res.json({
+      success: true,
+      data: paginatedCategories,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
+
 // Crear nueva categoría (Admin)
 app.post('/api/admin/marketplace/categories', authenticateToken, isAdmin, async (req, res) => {
   try {
