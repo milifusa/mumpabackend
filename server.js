@@ -17394,3 +17394,582 @@ app.get('/api/admin/marketplace/transactions', authenticateToken, isAdmin, async
   }
 });
 
+// ============================================================================
+// 🏷️ CATEGORÍAS DINÁMICAS PARA MARKETPLACE
+// ============================================================================
+
+// Obtener todas las categorías (público)
+app.get('/api/marketplace/categories', async (req, res) => {
+  try {
+    const { includeInactive } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('marketplace_categories');
+
+    // Si no es admin o no se especifica, solo mostrar activas
+    if (!includeInactive || includeInactive !== 'true') {
+      query = query.where('isActive', '==', true);
+    }
+
+    query = query.orderBy('order', 'asc');
+
+    const snapshot = await query.get();
+    const categories = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: categories
+    });
+
+  } catch (error) {
+    console.error('❌ [CATEGORIES] Error obteniendo categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
+
+// Obtener detalle de una categoría
+app.get('/api/marketplace/categories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const categoryDoc = await db.collection('marketplace_categories').doc(id).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: categoryDoc.id,
+        ...categoryDoc.data()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [CATEGORIES] Error obteniendo categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categoría',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// 🛠️ ADMIN - GESTIÓN DE CATEGORÍAS
+// ============================================================================
+
+// Crear nueva categoría (Admin)
+app.post('/api/admin/marketplace/categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      name,
+      slug,
+      description,
+      icon,
+      imageUrl,
+      imageStoragePath,
+      order,
+      isActive
+    } = req.body;
+
+    // Validaciones
+    if (!name || name.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre es requerido (mínimo 2 caracteres)'
+      });
+    }
+
+    if (!slug || slug.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'El slug es requerido'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el slug sea único
+    const existingSlug = await db.collection('marketplace_categories')
+      .where('slug', '==', slug.trim().toLowerCase())
+      .get();
+
+    if (!existingSlug.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya existe una categoría con ese slug'
+      });
+    }
+
+    const now = new Date();
+    const categoryData = {
+      name: name.trim(),
+      slug: slug.trim().toLowerCase(),
+      description: description?.trim() || '',
+      icon: icon || '📦',
+      imageUrl: imageUrl || null,
+      imageStoragePath: imageStoragePath || null,
+      order: order || 999,
+      isActive: isActive !== undefined ? isActive : true,
+      productCount: 0,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: req.user.uid
+    };
+
+    const categoryRef = await db.collection('marketplace_categories').add(categoryData);
+
+    console.log('✅ [ADMIN] Categoría creada:', categoryRef.id);
+
+    res.json({
+      success: true,
+      message: 'Categoría creada exitosamente',
+      data: {
+        id: categoryRef.id,
+        ...categoryData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar categoría (Admin)
+app.put('/api/admin/marketplace/categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name,
+      slug,
+      description,
+      icon,
+      imageUrl,
+      imageStoragePath,
+      order,
+      isActive
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const categoryDoc = await db.collection('marketplace_categories').doc(id).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (name) updateData.name = name.trim();
+    if (description !== undefined) updateData.description = description.trim();
+    if (icon) updateData.icon = icon;
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (imageStoragePath !== undefined) updateData.imageStoragePath = imageStoragePath;
+    if (order !== undefined) updateData.order = parseInt(order);
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    // Si se cambia el slug, verificar que sea único
+    if (slug && slug !== categoryDoc.data().slug) {
+      const existingSlug = await db.collection('marketplace_categories')
+        .where('slug', '==', slug.trim().toLowerCase())
+        .get();
+
+      if (!existingSlug.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ya existe una categoría con ese slug'
+        });
+      }
+
+      updateData.slug = slug.trim().toLowerCase();
+    }
+
+    await db.collection('marketplace_categories').doc(id).update(updateData);
+
+    console.log('✅ [ADMIN] Categoría actualizada:', id);
+
+    res.json({
+      success: true,
+      message: 'Categoría actualizada exitosamente',
+      data: updateData
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar categoría (Admin)
+app.delete('/api/admin/marketplace/categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const categoryDoc = await db.collection('marketplace_categories').doc(id).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    // Verificar que no tenga productos
+    const categoryData = categoryDoc.data();
+    if (categoryData.productCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `No se puede eliminar. La categoría tiene ${categoryData.productCount} productos asociados. Primero elimina o reasigna los productos.`
+      });
+    }
+
+    // Eliminar imagen de Storage si existe
+    if (categoryData.imageStoragePath && bucket) {
+      try {
+        const file = bucket.file(categoryData.imageStoragePath);
+        await file.delete();
+        console.log('🗑️ [ADMIN] Imagen de categoría eliminada:', categoryData.imageStoragePath);
+      } catch (error) {
+        console.warn('⚠️ [ADMIN] No se pudo eliminar la imagen:', error.message);
+      }
+    }
+
+    await db.collection('marketplace_categories').doc(id).delete();
+
+    console.log('✅ [ADMIN] Categoría eliminada:', id);
+
+    res.json({
+      success: true,
+      message: 'Categoría eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Toggle activo/inactivo (Admin)
+app.patch('/api/admin/marketplace/categories/:id/toggle', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const categoryDoc = await db.collection('marketplace_categories').doc(id).get();
+
+    if (!categoryDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    const currentStatus = categoryDoc.data().isActive;
+    const newStatus = !currentStatus;
+
+    await db.collection('marketplace_categories').doc(id).update({
+      isActive: newStatus,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [ADMIN] Categoría toggle:', id, '->', newStatus);
+
+    res.json({
+      success: true,
+      message: `Categoría ${newStatus ? 'activada' : 'desactivada'} exitosamente`,
+      data: {
+        isActive: newStatus
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error en toggle de categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Subir imagen de categoría (Admin)
+app.post('/api/admin/marketplace/categories/upload-image', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+  try {
+    const { categoryId } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ninguna imagen'
+      });
+    }
+
+    // Validar tipo de archivo
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de imagen no válido. Solo JPG, PNG o WEBP'
+      });
+    }
+
+    // Validar tamaño (máximo 2MB)
+    if (req.file.size > 2 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: 'La imagen no debe superar 2MB'
+      });
+    }
+
+    if (!bucket) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase Storage no disponible'
+      });
+    }
+
+    const timestamp = Date.now();
+    const fileName = `${categoryId || timestamp}_${req.file.originalname}`;
+    const filePath = `marketplace/categories/${fileName}`;
+    const file = bucket.file(filePath);
+
+    const stream = file.createWriteStream({
+      metadata: {
+        contentType: req.file.mimetype,
+      },
+    });
+
+    stream.on('error', (error) => {
+      console.error('❌ [ADMIN] Error subiendo imagen:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error subiendo imagen',
+        error: error.message
+      });
+    });
+
+    stream.on('finish', async () => {
+      await file.makePublic();
+      const publicUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+
+      console.log('✅ [ADMIN] Imagen de categoría subida:', filePath);
+
+      res.json({
+        success: true,
+        message: 'Imagen subida exitosamente',
+        data: {
+          imageUrl: publicUrl,
+          imageStoragePath: filePath
+        }
+      });
+    });
+
+    stream.end(req.file.buffer);
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error en upload de imagen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo imagen',
+      error: error.message
+    });
+  }
+});
+
+// Inicializar categorías por defecto (Admin)
+app.post('/api/admin/marketplace/categories/init-defaults', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar si ya existen categorías
+    const existingCategories = await db.collection('marketplace_categories').get();
+    if (!existingCategories.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya existen categorías en el sistema'
+      });
+    }
+
+    const defaultCategories = [
+      {
+        name: 'Transporte',
+        slug: 'transporte',
+        description: 'Carriolas, sillas de auto, portabebés',
+        icon: '🚗',
+        order: 1
+      },
+      {
+        name: 'Ropa',
+        slug: 'ropa',
+        description: 'Ropa de bebé, mamá y embarazo',
+        icon: '👕',
+        order: 2
+      },
+      {
+        name: 'Juguetes',
+        slug: 'juguetes',
+        description: 'Juguetes educativos y de entretenimiento',
+        icon: '🧸',
+        order: 3
+      },
+      {
+        name: 'Alimentación',
+        slug: 'alimentacion',
+        description: 'Biberones, extractores, esterilizadores',
+        icon: '🍼',
+        order: 4
+      },
+      {
+        name: 'Muebles',
+        slug: 'muebles',
+        description: 'Cunas, cambiadores, mecedoras',
+        icon: '🛏️',
+        order: 5
+      },
+      {
+        name: 'Higiene',
+        slug: 'higiene',
+        description: 'Bañeras, pañaleras, cambiadores',
+        icon: '🧼',
+        order: 6
+      },
+      {
+        name: 'Libros',
+        slug: 'libros',
+        description: 'Libros infantiles y de crianza',
+        icon: '📚',
+        order: 7
+      },
+      {
+        name: 'Maternidad',
+        slug: 'maternidad',
+        description: 'Ropa de embarazo, almohadas, fajas',
+        icon: '🤰',
+        order: 8
+      },
+      {
+        name: 'Electrónica',
+        slug: 'electronica',
+        description: 'Monitores, calentadores, luces',
+        icon: '📱',
+        order: 9
+      },
+      {
+        name: 'Otros',
+        slug: 'otros',
+        description: 'Otros artículos para bebé',
+        icon: '📦',
+        order: 10
+      }
+    ];
+
+    const now = new Date();
+    const batch = db.batch();
+
+    defaultCategories.forEach(category => {
+      const categoryRef = db.collection('marketplace_categories').doc();
+      batch.set(categoryRef, {
+        ...category,
+        imageUrl: null,
+        imageStoragePath: null,
+        isActive: true,
+        productCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: req.user.uid
+      });
+    });
+
+    await batch.commit();
+
+    console.log('✅ [ADMIN] Categorías por defecto inicializadas');
+
+    res.json({
+      success: true,
+      message: `${defaultCategories.length} categorías creadas exitosamente`,
+      data: {
+        count: defaultCategories.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error inicializando categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error inicializando categorías',
+      error: error.message
+    });
+  }
+});
+
