@@ -18458,6 +18458,528 @@ app.post('/api/admin/marketplace/categories/init-defaults', authenticateToken, i
 });
 
 // ============================================================================
+// 🎨 BANNERS - Sistema de Banners Rotativos
+// ============================================================================
+
+// Obtener banners activos (público)
+app.get('/api/banners', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const now = new Date();
+
+    // Obtener banners activos y dentro del rango de fechas
+    const snapshot = await db.collection('banners')
+      .where('isActive', '==', true)
+      .orderBy('order', 'asc')
+      .get();
+
+    let banners = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar por fechas de visibilidad
+    banners = banners.filter(banner => {
+      const startDate = banner.startDate?.toDate?.() || new Date(0);
+      const endDate = banner.endDate?.toDate?.() || new Date('2099-12-31');
+      return now >= startDate && now <= endDate;
+    });
+
+    console.log('📰 [BANNERS] Banners activos:', banners.length);
+
+    res.json({
+      success: true,
+      data: banners
+    });
+
+  } catch (error) {
+    console.error('❌ [BANNERS] Error obteniendo banners:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo banners',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// 🎨 ADMIN - Gestión de Banners
+// ============================================================================
+
+// Listar todos los banners (admin)
+app.get('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      search = '',
+      includeInactive = 'true'
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('banners');
+
+    // Filtrar por estado activo
+    if (includeInactive === 'false') {
+      query = query.where('isActive', '==', true);
+    }
+
+    // Ordenar
+    query = query.orderBy('order', 'asc');
+
+    const snapshot = await query.get();
+    let banners = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Búsqueda por texto
+    if (search) {
+      const searchLower = search.toLowerCase();
+      banners = banners.filter(banner =>
+        banner.title?.toLowerCase().includes(searchLower) ||
+        banner.description?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Paginación
+    const total = banners.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedBanners = banners.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedBanners,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo banners:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo banners',
+      error: error.message
+    });
+  }
+});
+
+// Crear banner (admin)
+app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      imageUrl,
+      imageStoragePath,
+      link,
+      order,
+      duration,
+      startDate,
+      endDate,
+      isActive
+    } = req.body;
+
+    // Validaciones
+    if (!title || title.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'El título es requerido (mínimo 3 caracteres)'
+      });
+    }
+
+    if (!imageUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'La imagen es requerida'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const now = new Date();
+    const bannerData = {
+      title: title.trim(),
+      description: description?.trim() || '',
+      imageUrl,
+      imageStoragePath: imageStoragePath || null,
+      link: link?.trim() || null,
+      order: order || 999,
+      duration: duration || 5, // Duración en segundos (por defecto 5s)
+      startDate: startDate ? new Date(startDate) : now,
+      endDate: endDate ? new Date(endDate) : null,
+      isActive: isActive !== undefined ? isActive : true,
+      views: 0,
+      clicks: 0,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: req.user.uid
+    };
+
+    const bannerRef = await db.collection('banners').add(bannerData);
+
+    console.log('✅ [ADMIN] Banner creado:', bannerRef.id);
+
+    res.json({
+      success: true,
+      message: 'Banner creado exitosamente',
+      data: {
+        id: bannerRef.id,
+        ...bannerData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando banner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando banner',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar banner (admin)
+app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      title,
+      description,
+      imageUrl,
+      imageStoragePath,
+      link,
+      order,
+      duration,
+      startDate,
+      endDate,
+      isActive
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const bannerDoc = await db.collection('banners').doc(id).get();
+
+    if (!bannerDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Banner no encontrado'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    if (title) {
+      if (title.trim().length < 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'El título debe tener al menos 3 caracteres'
+        });
+      }
+      updateData.title = title.trim();
+    }
+
+    if (description !== undefined) {
+      updateData.description = description.trim();
+    }
+
+    if (imageUrl) {
+      updateData.imageUrl = imageUrl;
+    }
+
+    if (imageStoragePath !== undefined) {
+      updateData.imageStoragePath = imageStoragePath;
+    }
+
+    if (link !== undefined) {
+      updateData.link = link?.trim() || null;
+    }
+
+    if (order !== undefined) {
+      updateData.order = parseInt(order);
+    }
+
+    if (duration !== undefined) {
+      updateData.duration = parseInt(duration);
+    }
+
+    if (startDate !== undefined) {
+      updateData.startDate = startDate ? new Date(startDate) : null;
+    }
+
+    if (endDate !== undefined) {
+      updateData.endDate = endDate ? new Date(endDate) : null;
+    }
+
+    if (isActive !== undefined) {
+      updateData.isActive = isActive;
+    }
+
+    await db.collection('banners').doc(id).update(updateData);
+
+    console.log('✅ [ADMIN] Banner actualizado:', id);
+
+    res.json({
+      success: true,
+      message: 'Banner actualizado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando banner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando banner',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar banner (admin)
+app.delete('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const bannerDoc = await db.collection('banners').doc(id).get();
+
+    if (!bannerDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Banner no encontrado'
+      });
+    }
+
+    const bannerData = bannerDoc.data();
+
+    // Eliminar imagen de Storage si existe
+    if (bannerData.imageStoragePath) {
+      try {
+        const bucket = admin.storage().bucket();
+        const file = bucket.file(bannerData.imageStoragePath);
+        await file.delete();
+        console.log('🗑️ [ADMIN] Imagen de banner eliminada:', bannerData.imageStoragePath);
+      } catch (error) {
+        console.warn('⚠️ [ADMIN] No se pudo eliminar la imagen:', error.message);
+      }
+    }
+
+    await db.collection('banners').doc(id).delete();
+
+    console.log('✅ [ADMIN] Banner eliminado:', id);
+
+    res.json({
+      success: true,
+      message: 'Banner eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando banner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando banner',
+      error: error.message
+    });
+  }
+});
+
+// Activar/Desactivar banner (admin)
+app.patch('/api/admin/banners/:id/toggle', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const bannerDoc = await db.collection('banners').doc(id).get();
+
+    if (!bannerDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Banner no encontrado'
+      });
+    }
+
+    const currentStatus = bannerDoc.data().isActive;
+    const newStatus = !currentStatus;
+
+    await db.collection('banners').doc(id).update({
+      isActive: newStatus,
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [ADMIN] Banner toggle:', id, newStatus ? 'ACTIVADO' : 'DESACTIVADO');
+
+    res.json({
+      success: true,
+      message: `Banner ${newStatus ? 'activado' : 'desactivado'} exitosamente`,
+      isActive: newStatus
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error toggle banner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cambiando estado del banner',
+      error: error.message
+    });
+  }
+});
+
+// Subir imagen de banner (admin)
+app.post('/api/admin/banners/upload-image', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se proporcionó ninguna imagen'
+      });
+    }
+
+    const bucket = admin.storage().bucket();
+    
+    if (!bucket) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase Storage no disponible'
+      });
+    }
+
+    const timestamp = Date.now();
+    const fileName = `banners/${timestamp}_${req.file.originalname}`;
+    const file = bucket.file(fileName);
+
+    await file.save(req.file.buffer, {
+      metadata: {
+        contentType: req.file.mimetype,
+      },
+      public: true,
+    });
+
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+    console.log('✅ [ADMIN] Imagen de banner subida:', fileName);
+
+    res.json({
+      success: true,
+      message: 'Imagen subida exitosamente',
+      data: {
+        imageUrl: publicUrl,
+        imageStoragePath: fileName
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error subiendo imagen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo imagen',
+      error: error.message
+    });
+  }
+});
+
+// Incrementar vistas de banner (público)
+app.post('/api/banners/:id/view', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    await db.collection('banners').doc(id).update({
+      views: admin.firestore.FieldValue.increment(1)
+    });
+
+    res.json({
+      success: true,
+      message: 'Vista registrada'
+    });
+
+  } catch (error) {
+    console.error('❌ [BANNERS] Error registrando vista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando vista',
+      error: error.message
+    });
+  }
+});
+
+// Incrementar clicks de banner (público)
+app.post('/api/banners/:id/click', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    await db.collection('banners').doc(id).update({
+      clicks: admin.firestore.FieldValue.increment(1)
+    });
+
+    res.json({
+      success: true,
+      message: 'Click registrado'
+    });
+
+  } catch (error) {
+    console.error('❌ [BANNERS] Error registrando click:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando click',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
