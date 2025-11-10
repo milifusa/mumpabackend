@@ -3232,11 +3232,11 @@ app.put('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, 
       } else if (gestationWeeks !== undefined) {
         // Legacy: usar semanas de gestación
         if (gestationWeeks < 1 || gestationWeeks > 42) {
-          return res.status(400).json({
-            success: false,
-            message: 'Las semanas de gestación deben estar entre 1 y 42'
-          });
-        }
+      return res.status(400).json({
+        success: false,
+        message: 'Las semanas de gestación deben estar entre 1 y 42'
+      });
+    }
         updateData.gestationWeeks = parseInt(gestationWeeks);
         updateData.dueDate = null;
         updateData.birthDate = null;
@@ -3253,15 +3253,15 @@ app.put('/api/admin/children/:childId', authenticateToken, isAdmin, async (req, 
       } else if (ageInMonths !== undefined) {
         // Legacy: usar edad en meses
         if (ageInMonths < 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'La edad en meses debe ser mayor o igual a 0'
-          });
-        }
+      return res.status(400).json({
+        success: false,
+        message: 'La edad en meses debe ser mayor o igual a 0'
+      });
+    }
         updateData.ageInMonths = parseInt(ageInMonths);
         updateData.birthDate = null;
         updateData.dueDate = null;
-        updateData.gestationWeeks = null;
+      updateData.gestationWeeks = null;
         updateData.registeredAt = new Date();
       }
     }
@@ -8256,8 +8256,8 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
     // Validar que si es un bebé no nacido, tenga fecha de parto o semanas de gestación (legacy)
     if (isUnborn) {
       if (!dueDate && (!gestationWeeks || gestationWeeks < 1 || gestationWeeks > 42)) {
-        return res.status(400).json({
-          success: false,
+      return res.status(400).json({
+        success: false,
           message: 'Para bebés no nacidos, la fecha esperada de parto es requerida (o semanas de gestación entre 1 y 42)'
         });
       }
@@ -8269,8 +8269,8 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
         const twoWeeksAgo = new Date(now.getTime() - (14 * 24 * 60 * 60 * 1000));
         
         if (due < twoWeeksAgo) {
-          return res.status(400).json({
-            success: false,
+      return res.status(400).json({
+        success: false,
             message: 'La fecha esperada de parto debe ser futura o reciente (máximo 2 semanas en el pasado)'
           });
         }
@@ -8447,11 +8447,11 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
     
     // Actualizar foto si se proporciona
     if (photoUrl !== undefined) {
-      if (photoUrl && !isValidUrl(photoUrl)) {
-        return res.status(400).json({
-          success: false,
-          message: 'URL de foto inválida'
-        });
+    if (photoUrl && !isValidUrl(photoUrl)) {
+      return res.status(400).json({
+        success: false,
+        message: 'URL de foto inválida'
+      });
       }
       updateData.photoUrl = photoUrl;
     }
@@ -8483,7 +8483,7 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
         updateData.dueDate = due;
         updateData.gestationWeeks = null;
         updateData.birthDate = null;
-        updateData.ageInMonths = null;
+      updateData.ageInMonths = null;
       } else if (gestationWeeks !== undefined) {
         // Legacy: usar semanas de gestación
         if (gestationWeeks < 1 || gestationWeeks > 42) {
@@ -8524,7 +8524,7 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
         updateData.birthDate = birth;
         updateData.ageInMonths = null;
         updateData.dueDate = null;
-        updateData.gestationWeeks = null;
+      updateData.gestationWeeks = null;
       } else if (ageInMonths !== undefined) {
         // Legacy: usar edad en meses
         if (ageInMonths < 0) {
@@ -9649,16 +9649,16 @@ const getChildCurrentInfo = (child) => {
     } 
     // Fallback a sistema antiguo (legacy)
     else if (child.gestationWeeks) {
-      const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.createdAt);
-      
-      return {
-        ...child,
-        currentGestationWeeks: currentGestationWeeks,
-        currentAgeInMonths: null,
-        registeredGestationWeeks: child.gestationWeeks,
-        daysSinceCreation: daysSinceCreation,
-        isOverdue: currentGestationWeeks >= 40
-      };
+    const currentGestationWeeks = calculateCurrentGestationWeeks(child.gestationWeeks, child.createdAt);
+    
+    return {
+      ...child,
+      currentGestationWeeks: currentGestationWeeks,
+      currentAgeInMonths: null,
+      registeredGestationWeeks: child.gestationWeeks,
+      daysSinceCreation: daysSinceCreation,
+      isOverdue: currentGestationWeeks >= 40
+    };
     }
   } else {
     // Si tiene birthDate (nuevo sistema), usar eso
@@ -9675,16 +9675,16 @@ const getChildCurrentInfo = (child) => {
     }
     // Fallback a sistema antiguo (legacy)
     else if (child.ageInMonths !== undefined && child.ageInMonths !== null) {
-      const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.createdAt);
-      
-      return {
-        ...child,
-        currentAgeInMonths: currentAgeInMonths,
-        currentGestationWeeks: null,
-        registeredAgeInMonths: child.ageInMonths,
-        daysSinceCreation: daysSinceCreation
-      };
-    }
+    const currentAgeInMonths = calculateCurrentAge(child.ageInMonths, child.createdAt);
+    
+    return {
+      ...child,
+      currentAgeInMonths: currentAgeInMonths,
+      currentGestationWeeks: null,
+      registeredAgeInMonths: child.ageInMonths,
+      daysSinceCreation: daysSinceCreation
+    };
+  }
   }
   
   // Si no hay datos válidos, retornar el child original con valores por defecto
@@ -18663,6 +18663,28 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
     }
 
     const now = new Date();
+    
+    // Convertir fechas a Timestamp de Firestore
+    let processedStartDate;
+    if (startDate) {
+      if (typeof startDate === 'object' && startDate._seconds) {
+        processedStartDate = admin.firestore.Timestamp.fromMillis(startDate._seconds * 1000);
+      } else {
+        processedStartDate = admin.firestore.Timestamp.fromDate(new Date(startDate));
+      }
+    } else {
+      processedStartDate = admin.firestore.Timestamp.fromDate(now);
+    }
+    
+    let processedEndDate = null;
+    if (endDate) {
+      if (typeof endDate === 'object' && endDate._seconds) {
+        processedEndDate = admin.firestore.Timestamp.fromMillis(endDate._seconds * 1000);
+      } else {
+        processedEndDate = admin.firestore.Timestamp.fromDate(new Date(endDate));
+      }
+    }
+    
     const bannerData = {
       title: title.trim(),
       description: description?.trim() || '',
@@ -18671,13 +18693,13 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       link: link?.trim() || null,
       order: order || 999,
       duration: duration || 5, // Duración en segundos (por defecto 5s)
-      startDate: startDate ? new Date(startDate) : now,
-      endDate: endDate ? new Date(endDate) : null,
+      startDate: processedStartDate,
+      endDate: processedEndDate,
       isActive: isActive !== undefined ? isActive : true,
       views: 0,
       clicks: 0,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+      updatedAt: admin.firestore.Timestamp.fromDate(now),
       createdBy: req.user.uid
     };
 
@@ -18738,7 +18760,7 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
     }
 
     const updateData = {
-      updatedAt: new Date()
+      updatedAt: admin.firestore.Timestamp.fromDate(new Date())
     };
 
     if (title) {
@@ -18776,11 +18798,27 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
     }
 
     if (startDate !== undefined) {
-      updateData.startDate = startDate ? new Date(startDate) : null;
+      if (startDate === null || startDate === '') {
+        updateData.startDate = null;
+      } else if (typeof startDate === 'object' && startDate._seconds) {
+        // Es un Timestamp de Firestore serializado
+        updateData.startDate = admin.firestore.Timestamp.fromMillis(startDate._seconds * 1000);
+      } else if (typeof startDate === 'string' || typeof startDate === 'number') {
+        // Es un string ISO o timestamp en milisegundos
+        updateData.startDate = admin.firestore.Timestamp.fromDate(new Date(startDate));
+      }
     }
 
     if (endDate !== undefined) {
-      updateData.endDate = endDate ? new Date(endDate) : null;
+      if (endDate === null || endDate === '') {
+        updateData.endDate = null;
+      } else if (typeof endDate === 'object' && endDate._seconds) {
+        // Es un Timestamp de Firestore serializado
+        updateData.endDate = admin.firestore.Timestamp.fromMillis(endDate._seconds * 1000);
+      } else if (typeof endDate === 'string' || typeof endDate === 'number') {
+        // Es un string ISO o timestamp en milisegundos
+        updateData.endDate = admin.firestore.Timestamp.fromDate(new Date(endDate));
+      }
     }
 
     if (isActive !== undefined) {
@@ -18886,7 +18924,7 @@ app.patch('/api/admin/banners/:id/toggle', authenticateToken, isAdmin, async (re
 
     await db.collection('banners').doc(id).update({
       isActive: newStatus,
-      updatedAt: new Date()
+      updatedAt: admin.firestore.Timestamp.fromDate(new Date())
     });
 
     console.log('✅ [ADMIN] Banner toggle:', id, newStatus ? 'ACTIVADO' : 'DESACTIVADO');
