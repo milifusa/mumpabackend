@@ -132,6 +132,44 @@ if (banner.link) {
 
 ### 2. 🔐 ENDPOINTS ADMIN (Dashboard)
 
+#### Obtener banner específico
+
+```http
+GET /api/admin/banners/:id
+Authorization: Bearer {token}
+```
+
+**Ejemplo:**
+```bash
+GET /api/admin/banners/iE4FQUaiaFEV9Abgjn4F
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "iE4FQUaiaFEV9Abgjn4F",
+    "title": "Oferta Especial",
+    "description": "50% de descuento",
+    "imageUrl": "https://...",
+    "link": "/marketplace",
+    "order": 1,
+    "duration": 5,
+    "startDate": "2025-01-15T00:00:00Z",
+    "endDate": "2025-01-31T23:59:59Z",
+    "isActive": true,
+    "views": 245,
+    "clicks": 18,
+    "createdAt": "2025-01-10T10:00:00Z",
+    "updatedAt": "2025-01-10T10:00:00Z",
+    "createdBy": "admin_uid"
+  }
+}
+```
+
+---
+
 #### Listar todos los banners
 
 ```http
@@ -636,6 +674,7 @@ const BannerForm = ({ bannerId = null, onSuccess }) => {
 | Feature | Descripción | Endpoint |
 |---------|-------------|----------|
 | **Listar activos** | Banners visibles en la app | GET `/api/banners` |
+| **Obtener uno** | Ver banner específico (admin) | GET `/api/admin/banners/:id` |
 | **Gestionar** | CRUD completo desde dashboard | GET/POST/PUT/DELETE `/api/admin/banners` |
 | **Subir imagen** | Upload a Firebase Storage | POST `/api/admin/banners/upload-image` |
 | **Orden** | Control de secuencia | Campo `order` |
