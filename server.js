@@ -18512,6 +18512,66 @@ app.get('/api/banners', async (req, res) => {
 // 🎨 ADMIN - Gestión de Banners
 // ============================================================================
 
+// Listar productos para selector de enlaces en banners (admin)
+app.get('/api/admin/banners/products-selector', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { search = '', limit = 50 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener productos disponibles
+    let query = db.collection('marketplace_products')
+      .where('status', '==', 'disponible')
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit));
+
+    const snapshot = await query.get();
+    let products = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Búsqueda por texto si se proporciona
+    if (search) {
+      const searchLower = search.toLowerCase();
+      products = products.filter(p =>
+        p.title?.toLowerCase().includes(searchLower) ||
+        p.categoryName?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Formatear para el selector
+    const productOptions = products.map(p => ({
+      id: p.id,
+      title: p.title,
+      category: p.categoryName || 'Sin categoría',
+      imageUrl: p.photos?.[0] || null,
+      link: `/marketplace/item/${p.id}`,
+      label: `🛍️ ${p.title} (${p.categoryName || 'Sin categoría'})`
+    }));
+
+    console.log('✅ [ADMIN] Productos para selector:', productOptions.length);
+
+    res.json({
+      success: true,
+      data: productOptions
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo productos para selector:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo productos',
+      error: error.message
+    });
+  }
+});
+
 // Listar todos los banners (admin)
 app.get('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
   try {

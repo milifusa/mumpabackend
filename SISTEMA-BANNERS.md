@@ -132,6 +132,72 @@ if (banner.link) {
 
 ### 2. 🔐 ENDPOINTS ADMIN (Dashboard)
 
+#### Listar productos para selector de enlaces
+
+```http
+GET /api/admin/banners/products-selector
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+| Parámetro | Tipo | Default | Descripción |
+|-----------|------|---------|-------------|
+| `search` | string | "" | Buscar por título o categoría |
+| `limit` | number | 50 | Máximo de productos |
+
+**Uso:** Para poblar un selector en el dashboard y elegir a qué producto debe llevar el banner.
+
+**Ejemplo:**
+```bash
+GET /api/admin/banners/products-selector?search=carriola&limit=20
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "VFSg46dNjaFcrHwf7DFF",
+      "title": "Carriola evenflo",
+      "category": "Carriolas",
+      "imageUrl": "https://storage.googleapis.com/.../photo.jpg",
+      "link": "/marketplace/item/VFSg46dNjaFcrHwf7DFF",
+      "label": "🛍️ Carriola evenflo (Carriolas)"
+    }
+  ]
+}
+```
+
+**Integración en el Dashboard:**
+```typescript
+// Cargar productos para el selector
+const loadProducts = async () => {
+  const response = await fetch(
+    'https://api.munpa.online/api/admin/banners/products-selector',
+    {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    }
+  );
+  const data = await response.json();
+  setProductOptions(data.data);
+};
+
+// En el formulario de banner
+<select onChange={(e) => setFormData({...formData, link: e.target.value})}>
+  <option value="">-- Selecciona un producto --</option>
+  {productOptions.map(product => (
+    <option key={product.id} value={product.link}>
+      {product.label}
+    </option>
+  ))}
+</select>
+```
+
+---
+
 #### Obtener banner específico
 
 ```http
@@ -328,6 +394,171 @@ image: [archivo de imagen]
     "imageStoragePath": "banners/1762793678_image.jpg"
   }
 }
+```
+
+---
+
+## 🔗 Tipos de Enlaces para Banners
+
+Los banners pueden tener diferentes tipos de enlaces según lo que quieras mostrar:
+
+### 1️⃣ Sin Enlace
+```json
+{
+  "link": null
+}
+```
+- El banner es solo informativo
+- No navega a ningún lado al tocarlo
+- Útil para anuncios, avisos, etc.
+
+### 2️⃣ Producto Individual
+```json
+{
+  "link": "/marketplace/item/VFSg46dNjaFcrHwf7DFF"
+}
+```
+- Lleva directamente a un producto específico
+- Formato: `/marketplace/item/{productId}`
+- Ejemplo: Banner de "Carriola en oferta" → Página del producto
+
+**Cómo obtener productos para el selector:**
+```bash
+GET /api/admin/banners/products-selector
+```
+
+### 3️⃣ Categoría del Marketplace
+```json
+{
+  "link": "/marketplace/category/carriolas"
+}
+```
+- Lleva a todos los productos de una categoría
+- Formato: `/marketplace/category/{categorySlug}`
+- Ejemplo: Banner de "Ropa de bebé" → Categoría de ropa
+
+### 4️⃣ Filtro del Marketplace
+```json
+{
+  "link": "/marketplace?type=donacion"
+}
+```
+- Lleva al marketplace con filtros aplicados
+- Formatos:
+  - `/marketplace?type=venta` - Solo ventas
+  - `/marketplace?type=donacion` - Solo donaciones
+  - `/marketplace?type=trueque` - Solo trueques
+
+### 5️⃣ Sección de la App
+```json
+{
+  "link": "/communities"
+}
+```
+- Lleva a otra sección de la app
+- Ejemplos:
+  - `/communities` - Comunidades
+  - `/profile` - Perfil del usuario
+  - `/settings` - Configuración
+  - `/home` - Inicio
+
+### 6️⃣ URL Externa (Opcional)
+```json
+{
+  "link": "https://munpa.online/promocion"
+}
+```
+- Lleva a una página web externa
+- Se abre en navegador/webview
+
+---
+
+## 🎨 Ejemplo de Selector en Dashboard
+
+```typescript
+const BannerLinkSelector = ({ value, onChange }) => {
+  const [linkType, setLinkType] = useState('none');
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+
+  useEffect(() => {
+    // Cargar productos
+    fetch('/api/admin/banners/products-selector', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => res.json())
+      .then(data => setProducts(data.data));
+
+    // Cargar categorías
+    fetch('/api/marketplace/categories')
+      .then(res => res.json())
+      .then(data => setCategories(data.data));
+  }, []);
+
+  return (
+    <div>
+      <label>Tipo de enlace:</label>
+      <select value={linkType} onChange={(e) => setLinkType(e.target.value)}>
+        <option value="none">Sin enlace</option>
+        <option value="product">Producto individual</option>
+        <option value="category">Categoría</option>
+        <option value="filter">Filtro del marketplace</option>
+        <option value="section">Sección de la app</option>
+        <option value="external">URL externa</option>
+      </select>
+
+      {linkType === 'product' && (
+        <select onChange={(e) => onChange(e.target.value)}>
+          <option value="">-- Selecciona un producto --</option>
+          {products.map(p => (
+            <option key={p.id} value={p.link}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {linkType === 'category' && (
+        <select onChange={(e) => onChange(`/marketplace/category/${e.target.value}`)}>
+          <option value="">-- Selecciona una categoría --</option>
+          {categories.map(c => (
+            <option key={c.id} value={c.slug}>
+              {c.icon} {c.name}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {linkType === 'filter' && (
+        <select onChange={(e) => onChange(e.target.value)}>
+          <option value="">-- Selecciona un filtro --</option>
+          <option value="/marketplace?type=venta">🛍️ Solo Ventas</option>
+          <option value="/marketplace?type=donacion">🎁 Solo Donaciones</option>
+          <option value="/marketplace?type=trueque">🔄 Solo Trueques</option>
+        </select>
+      )}
+
+      {linkType === 'section' && (
+        <select onChange={(e) => onChange(e.target.value)}>
+          <option value="">-- Selecciona una sección --</option>
+          <option value="/marketplace">🛍️ Marketplace</option>
+          <option value="/communities">👥 Comunidades</option>
+          <option value="/profile">👤 Perfil</option>
+          <option value="/home">🏠 Inicio</option>
+        </select>
+      )}
+
+      {linkType === 'external' && (
+        <input
+          type="url"
+          placeholder="https://ejemplo.com"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </div>
+  );
+};
 ```
 
 ---
