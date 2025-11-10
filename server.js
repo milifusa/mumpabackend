@@ -15932,8 +15932,23 @@ app.get('/api/marketplace/products', async (req, res) => {
     }
 
     // Filtrar por categoría (ahora dinámica desde Firestore)
+    // Soporta tanto slug como ID de categoría
     if (category) {
-      query = query.where('category', '==', category);
+      let categoryIdToFilter = category;
+      
+      // Si no parece ser un ID de Firestore (muy corto o tiene guiones), buscar por slug
+      if (category.length < 15 || category.includes('-')) {
+        const categoryQuery = await db.collection('marketplace_categories')
+          .where('slug', '==', category.toLowerCase())
+          .limit(1)
+          .get();
+        
+        if (!categoryQuery.empty) {
+          categoryIdToFilter = categoryQuery.docs[0].id;
+        }
+      }
+      
+      query = query.where('category', '==', categoryIdToFilter);
     }
 
     if (status && PRODUCT_STATUS.includes(status)) {
@@ -16088,8 +16103,23 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
     }
 
     // Filtrar por categoría (ahora dinámica desde Firestore)
+    // Soporta tanto slug como ID de categoría
     if (category) {
-      query = query.where('category', '==', category);
+      let categoryIdToFilter = category;
+      
+      // Si no parece ser un ID de Firestore (muy corto o tiene guiones), buscar por slug
+      if (category.length < 15 || category.includes('-')) {
+        const categoryQuery = await db.collection('marketplace_categories')
+          .where('slug', '==', category.toLowerCase())
+          .limit(1)
+          .get();
+        
+        if (!categoryQuery.empty) {
+          categoryIdToFilter = categoryQuery.docs[0].id;
+        }
+      }
+      
+      query = query.where('category', '==', categoryIdToFilter);
     }
 
     if (status && PRODUCT_STATUS.includes(status)) {
@@ -16282,18 +16312,35 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       });
     }
 
-    // Verificar que la categoría existe y está activa
-    const categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+    // Verificar que la categoría existe y está activa (buscar por slug o por ID)
+    let categoryDoc;
+    let categoryId;
     
-    if (!categoryDoc.exists) {
-      return res.status(400).json({
-        success: false,
-        message: 'Categoría inválida o no existe'
-      });
+    // Primero intentar buscar por ID
+    categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+    
+    if (categoryDoc.exists) {
+      categoryId = categoryDoc.id;
+    } else {
+      // Si no existe por ID, buscar por slug
+      const categoryQuery = await db.collection('marketplace_categories')
+        .where('slug', '==', category.toLowerCase())
+        .limit(1)
+        .get();
+      
+      if (categoryQuery.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'Categoría inválida o no existe'
+        });
+      }
+      
+      categoryDoc = categoryQuery.docs[0];
+      categoryId = categoryDoc.id;
     }
 
     const categoryData = categoryDoc.data();
-    if (!categoryData.active) {
+    if (!categoryData.isActive) {
       return res.status(400).json({
         success: false,
         message: 'La categoría no está disponible'
@@ -16403,7 +16450,9 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       
       title: title.trim(),
       description: description.trim(),
-      category,
+      category: categoryId,  // Guardar el ID real de la categoría
+      categoryName: categoryData.name,  // Guardar el nombre para facilitar consultas
+      categorySlug: categoryData.slug,  // Guardar el slug para referencia
       condition,
       photos,
       
@@ -16518,25 +16567,44 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
     }
 
     if (category) {
-      // Verificar que la categoría existe y está activa
-      const categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+      // Verificar que la categoría existe y está activa (buscar por slug o por ID)
+      let categoryDoc;
+      let categoryId;
       
-      if (!categoryDoc.exists) {
-        return res.status(400).json({
-          success: false,
-          message: 'Categoría inválida o no existe'
-        });
+      // Primero intentar buscar por ID
+      categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+      
+      if (categoryDoc.exists) {
+        categoryId = categoryDoc.id;
+      } else {
+        // Si no existe por ID, buscar por slug
+        const categoryQuery = await db.collection('marketplace_categories')
+          .where('slug', '==', category.toLowerCase())
+          .limit(1)
+          .get();
+        
+        if (categoryQuery.empty) {
+          return res.status(400).json({
+            success: false,
+            message: 'Categoría inválida o no existe'
+          });
+        }
+        
+        categoryDoc = categoryQuery.docs[0];
+        categoryId = categoryDoc.id;
       }
 
       const categoryData = categoryDoc.data();
-      if (!categoryData.active) {
+      if (!categoryData.isActive) {
         return res.status(400).json({
           success: false,
           message: 'La categoría no está disponible'
         });
       }
 
-      updateData.category = category;
+      updateData.category = categoryId;
+      updateData.categoryName = categoryData.name;
+      updateData.categorySlug = categoryData.slug;
     }
 
     if (condition) {
