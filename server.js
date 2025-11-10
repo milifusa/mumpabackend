@@ -15931,7 +15931,8 @@ app.get('/api/marketplace/products', async (req, res) => {
       query = query.where('type', '==', type);
     }
 
-    if (category && MARKETPLACE_CATEGORIES.includes(category)) {
+    // Filtrar por categoría (ahora dinámica desde Firestore)
+    if (category) {
       query = query.where('category', '==', category);
     }
 
@@ -16086,7 +16087,8 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
       query = query.where('type', '==', type);
     }
 
-    if (category && MARKETPLACE_CATEGORIES.includes(category)) {
+    // Filtrar por categoría (ahora dinámica desde Firestore)
+    if (category) {
       query = query.where('category', '==', category);
     }
 
@@ -16265,10 +16267,36 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       });
     }
 
-    if (!category || !MARKETPLACE_CATEGORIES.includes(category)) {
+    // Validar categoría dinámica desde Firestore
+    if (!category) {
       return res.status(400).json({
         success: false,
-        message: 'Categoría inválida'
+        message: 'La categoría es requerida'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la categoría existe y está activa
+    const categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+    
+    if (!categoryDoc.exists) {
+      return res.status(400).json({
+        success: false,
+        message: 'Categoría inválida o no existe'
+      });
+    }
+
+    const categoryData = categoryDoc.data();
+    if (!categoryData.active) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría no está disponible'
       });
     }
 
@@ -16490,12 +16518,24 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
     }
 
     if (category) {
-      if (!MARKETPLACE_CATEGORIES.includes(category)) {
+      // Verificar que la categoría existe y está activa
+      const categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+      
+      if (!categoryDoc.exists) {
         return res.status(400).json({
           success: false,
-          message: 'Categoría inválida'
+          message: 'Categoría inválida o no existe'
         });
       }
+
+      const categoryData = categoryDoc.data();
+      if (!categoryData.active) {
+        return res.status(400).json({
+          success: false,
+          message: 'La categoría no está disponible'
+        });
+      }
+
       updateData.category = category;
     }
 
