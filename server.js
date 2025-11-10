@@ -19121,6 +19121,364 @@ app.post('/api/banners/:id/click', async (req, res) => {
 });
 
 // ============================================================================
+// 📊 ANALYTICS - Sistema de Analytics para Recomendaciones
+// ============================================================================
+
+// Tipos de eventos válidos
+const ANALYTICS_EVENT_TYPES = [
+  'view',      // Vista de recomendación
+  'call',      // Llamada telefónica
+  'whatsapp',  // Contacto por WhatsApp
+  'email',     // Click en email
+  'website',   // Click en website
+  'map',       // Click en mapa
+  'share',     // Compartir recomendación
+  'favorite',  // Agregar a favoritos
+  'wishlist'   // Agregar a wishlist
+];
+
+// Registrar evento de analytics (público)
+app.post('/api/recommendations/:recommendationId/analytics/events', async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const {
+      eventType,
+      metadata = {},
+      userId = null,
+      source = 'app',
+      utmParams = {}
+    } = req.body;
+
+    // Validaciones
+    if (!eventType || !ANALYTICS_EVENT_TYPES.includes(eventType)) {
+      return res.status(400).json({
+        success: false,
+        message: `Tipo de evento inválido. Debe ser uno de: ${ANALYTICS_EVENT_TYPES.join(', ')}`
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la recomendación existe
+    const recommendationRef = db.collection('recommendations').doc(recommendationId);
+    const recommendationDoc = await recommendationRef.get();
+
+    if (!recommendationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendación no encontrada'
+      });
+    }
+
+    const now = new Date();
+
+    // Crear evento de analytics
+    const analyticsEvent = {
+      recommendationId,
+      eventType,
+      userId,
+      source,
+      metadata,
+      utmParams: {
+        utm_source: utmParams.utm_source || null,
+        utm_medium: utmParams.utm_medium || null,
+        utm_campaign: utmParams.utm_campaign || null,
+        utm_content: utmParams.utm_content || null,
+        utm_term: utmParams.utm_term || null
+      },
+      timestamp: admin.firestore.Timestamp.fromDate(now),
+      createdAt: admin.firestore.Timestamp.fromDate(now)
+    };
+
+    // Guardar evento
+    const eventRef = await db.collection('recommendation_analytics').add(analyticsEvent);
+
+    // Actualizar contadores en la recomendación
+    const updateData = {
+      updatedAt: admin.firestore.Timestamp.fromDate(now)
+    };
+
+    // Incrementar contador específico según el tipo de evento
+    switch (eventType) {
+      case 'view':
+        updateData['analytics.views'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'call':
+        updateData['analytics.calls'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'whatsapp':
+        updateData['analytics.whatsappClicks'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'email':
+        updateData['analytics.emailClicks'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'website':
+        updateData['analytics.websiteClicks'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'map':
+        updateData['analytics.mapClicks'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'share':
+        updateData['analytics.shares'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'favorite':
+        updateData['analytics.favorites'] = admin.firestore.FieldValue.increment(1);
+        break;
+      case 'wishlist':
+        updateData['analytics.wishlists'] = admin.firestore.FieldValue.increment(1);
+        break;
+    }
+
+    // Total de interacciones (excluye views)
+    if (eventType !== 'view') {
+      updateData['analytics.totalInteractions'] = admin.firestore.FieldValue.increment(1);
+    }
+
+    await recommendationRef.update(updateData);
+
+    console.log(`📊 [ANALYTICS] Evento registrado: ${eventType} - Recomendación: ${recommendationId}`);
+
+    res.json({
+      success: true,
+      message: 'Evento registrado exitosamente',
+      data: {
+        eventId: eventRef.id,
+        eventType,
+        timestamp: now
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ANALYTICS] Error registrando evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando evento',
+      error: error.message
+    });
+  }
+});
+
+// Obtener estadísticas de una recomendación (público)
+app.get('/api/recommendations/:recommendationId/analytics', async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const {
+      startDate,
+      endDate,
+      eventType,
+      groupBy = 'day' // day, week, month
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que la recomendación existe
+    const recommendationDoc = await db.collection('recommendations').doc(recommendationId).get();
+
+    if (!recommendationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendación no encontrada'
+      });
+    }
+
+    const recommendationData = recommendationDoc.data();
+
+    // Obtener eventos de analytics
+    let query = db.collection('recommendation_analytics')
+      .where('recommendationId', '==', recommendationId);
+
+    // Filtros opcionales
+    if (startDate) {
+      query = query.where('timestamp', '>=', admin.firestore.Timestamp.fromDate(new Date(startDate)));
+    }
+
+    if (endDate) {
+      query = query.where('timestamp', '<=', admin.firestore.Timestamp.fromDate(new Date(endDate)));
+    }
+
+    if (eventType && ANALYTICS_EVENT_TYPES.includes(eventType)) {
+      query = query.where('eventType', '==', eventType);
+    }
+
+    query = query.orderBy('timestamp', 'desc');
+
+    const snapshot = await query.get();
+    const events = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Agregar estadísticas por tipo de evento
+    const eventStats = {};
+    ANALYTICS_EVENT_TYPES.forEach(type => {
+      eventStats[type] = events.filter(e => e.eventType === type).length;
+    });
+
+    // Estadísticas agregadas de la recomendación
+    const aggregatedStats = recommendationData.analytics || {
+      views: 0,
+      calls: 0,
+      whatsappClicks: 0,
+      emailClicks: 0,
+      websiteClicks: 0,
+      mapClicks: 0,
+      shares: 0,
+      favorites: 0,
+      wishlists: 0,
+      totalInteractions: 0
+    };
+
+    // Calcular tasa de conversión (interacciones / vistas)
+    const conversionRate = aggregatedStats.views > 0
+      ? (aggregatedStats.totalInteractions / aggregatedStats.views) * 100
+      : 0;
+
+    // Fuentes de tráfico (utm_source)
+    const trafficSources = {};
+    events.forEach(event => {
+      const source = event.utmParams?.utm_source || 'direct';
+      trafficSources[source] = (trafficSources[source] || 0) + 1;
+    });
+
+    // Eventos recientes (últimos 10)
+    const recentEvents = events.slice(0, 10);
+
+    console.log(`📊 [ANALYTICS] Estadísticas obtenidas - Recomendación: ${recommendationId}`);
+
+    res.json({
+      success: true,
+      data: {
+        recommendationId,
+        aggregatedStats,
+        eventStats,
+        conversionRate: Math.round(conversionRate * 100) / 100,
+        trafficSources,
+        recentEvents,
+        totalEvents: events.length,
+        dateRange: {
+          start: startDate || null,
+          end: endDate || null
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ANALYTICS] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// Obtener estadísticas globales (admin)
+app.get('/api/admin/analytics/recommendations', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      limit = 20
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener todas las recomendaciones con analytics
+    const recommendationsSnapshot = await db.collection('recommendations')
+      .orderBy('analytics.views', 'desc')
+      .limit(parseInt(limit))
+      .get();
+
+    const recommendations = recommendationsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      title: doc.data().title,
+      category: doc.data().category,
+      analytics: doc.data().analytics || {},
+      createdAt: doc.data().createdAt
+    }));
+
+    // Estadísticas totales
+    let totalStats = {
+      views: 0,
+      calls: 0,
+      whatsappClicks: 0,
+      emailClicks: 0,
+      websiteClicks: 0,
+      mapClicks: 0,
+      shares: 0,
+      favorites: 0,
+      wishlists: 0,
+      totalInteractions: 0
+    };
+
+    recommendations.forEach(rec => {
+      const analytics = rec.analytics || {};
+      Object.keys(totalStats).forEach(key => {
+        totalStats[key] += (analytics[key] || 0);
+      });
+    });
+
+    // Recomendaciones más populares (por vistas)
+    const topByViews = [...recommendations]
+      .sort((a, b) => (b.analytics.views || 0) - (a.analytics.views || 0))
+      .slice(0, 10);
+
+    // Recomendaciones con más interacciones
+    const topByInteractions = [...recommendations]
+      .sort((a, b) => (b.analytics.totalInteractions || 0) - (a.analytics.totalInteractions || 0))
+      .slice(0, 10);
+
+    // Recomendaciones con mejor conversión
+    const topByConversion = [...recommendations]
+      .map(rec => ({
+        ...rec,
+        conversionRate: rec.analytics.views > 0
+          ? (rec.analytics.totalInteractions / rec.analytics.views) * 100
+          : 0
+      }))
+      .filter(rec => rec.analytics.views >= 10) // Mínimo 10 vistas
+      .sort((a, b) => b.conversionRate - a.conversionRate)
+      .slice(0, 10);
+
+    console.log('📊 [ADMIN] Estadísticas globales obtenidas');
+
+    res.json({
+      success: true,
+      data: {
+        totalStats,
+        totalRecommendations: recommendations.length,
+        topByViews,
+        topByInteractions,
+        topByConversion
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas globales:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas globales',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
