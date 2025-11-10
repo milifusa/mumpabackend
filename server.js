@@ -18581,6 +18581,49 @@ app.get('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+// Obtener banner específico (admin)
+app.get('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const bannerDoc = await db.collection('banners').doc(id).get();
+
+    if (!bannerDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Banner no encontrado'
+      });
+    }
+
+    const banner = {
+      id: bannerDoc.id,
+      ...bannerDoc.data()
+    };
+
+    console.log('✅ [ADMIN] Banner obtenido:', id);
+
+    res.json({
+      success: true,
+      data: banner
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo banner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo banner',
+      error: error.message
+    });
+  }
+});
+
 // Crear banner (admin)
 app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
   try {
