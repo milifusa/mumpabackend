@@ -17881,6 +17881,107 @@ app.get('/api/marketplace/categories/:id', async (req, res) => {
 });
 
 // ============================================================================
+// 🛠️ ADMIN - GESTIÓN DE PRODUCTOS
+// ============================================================================
+
+// Listar todos los productos (Admin) - con filtros y paginación
+app.get('/api/admin/marketplace/items', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 100,
+      search = '',
+      status = '',
+      type = '',
+      category = '',
+      userId = '',
+      orderBy = 'createdAt',
+      order = 'desc'
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Construir query base
+    let query = db.collection('marketplace_products');
+
+    // Aplicar filtros
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+
+    if (type) {
+      query = query.where('type', '==', type);
+    }
+
+    if (userId) {
+      query = query.where('userId', '==', userId);
+    }
+
+    // Ordenar
+    const orderDirection = order === 'asc' ? 'asc' : 'desc';
+    query = query.orderBy(orderBy, orderDirection);
+
+    // Obtener todos los productos
+    const snapshot = await query.get();
+    let products = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtro por categoría (puede ser slug o ID)
+    if (category) {
+      products = products.filter(p => 
+        p.category === category || 
+        p.categorySlug === category
+      );
+    }
+
+    // Búsqueda por texto
+    if (search) {
+      const searchLower = search.toLowerCase();
+      products = products.filter(p =>
+        p.title?.toLowerCase().includes(searchLower) ||
+        p.description?.toLowerCase().includes(searchLower) ||
+        p.userName?.toLowerCase().includes(searchLower) ||
+        p.categoryName?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Paginación
+    const total = products.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedProducts = products.slice(startIndex, endIndex);
+
+    console.log('✅ [ADMIN] Productos del marketplace obtenidos:', paginatedProducts.length);
+
+    res.json({
+      success: true,
+      data: paginatedProducts,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo productos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo productos del marketplace',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // 🛠️ ADMIN - GESTIÓN DE CATEGORÍAS
 // ============================================================================
 
