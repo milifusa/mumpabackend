@@ -19505,13 +19505,38 @@ app.get('/api/admin/analytics/recommendations', authenticateToken, isAdmin, asyn
       .limit(parseInt(limit))
       .get();
 
-    const recommendations = recommendationsSnapshot.docs.map(doc => ({
-      id: doc.id,
-      title: doc.data().title,
-      category: doc.data().category,
-      analytics: doc.data().analytics || {},
-      createdAt: doc.data().createdAt
-    }));
+    const recommendations = recommendationsSnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        title: data.title || 'Sin título',
+        description: data.description || '',
+        category: data.category || 'general',
+        categoryName: data.categoryName || data.category || 'General',
+        imageUrl: data.imageUrl || data.images?.[0] || null,
+        location: data.location || {},
+        phone: data.phone || null,
+        website: data.website || null,
+        email: data.email || null,
+        whatsapp: data.whatsapp || data.phone || null,
+        createdBy: data.createdBy || null,
+        createdByName: data.createdByName || 'Usuario',
+        analytics: data.analytics || {
+          views: 0,
+          calls: 0,
+          whatsappClicks: 0,
+          emailClicks: 0,
+          websiteClicks: 0,
+          mapClicks: 0,
+          shares: 0,
+          favorites: 0,
+          wishlists: 0,
+          totalInteractions: 0
+        },
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt
+      };
+    });
 
     // Estadísticas totales
     let totalStats = {
