@@ -19577,7 +19577,7 @@ app.get('/api/admin/analytics/recommendations', authenticateToken, isAdmin, asyn
           ? (rec.analytics.totalInteractions / rec.analytics.views) * 100
           : 0
       }))
-      .filter(rec => rec.analytics.views >= 10) // Mínimo 10 vistas
+      .filter(rec => rec.analytics.views >= 3) // Mínimo 3 vistas para conversión confiable
       .sort((a, b) => b.conversionRate - a.conversionRate)
       .slice(0, 10);
 
