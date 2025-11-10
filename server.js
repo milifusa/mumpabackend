@@ -15933,22 +15933,30 @@ app.get('/api/marketplace/products', async (req, res) => {
 
     // Filtrar por categoría (ahora dinámica desde Firestore)
     // Soporta tanto slug como ID de categoría
+    let categoryIdToFilter = null;
     if (category) {
-      let categoryIdToFilter = category;
+      categoryIdToFilter = category;
       
       // Si no parece ser un ID de Firestore (muy corto o tiene guiones), buscar por slug
       if (category.length < 15 || category.includes('-')) {
-        const categoryQuery = await db.collection('marketplace_categories')
-          .where('slug', '==', category.toLowerCase())
-          .limit(1)
-          .get();
-        
-        if (!categoryQuery.empty) {
-          categoryIdToFilter = categoryQuery.docs[0].id;
+        try {
+          const categoryQuery = await db.collection('marketplace_categories')
+            .where('slug', '==', category.toLowerCase())
+            .limit(1)
+            .get();
+          
+          if (!categoryQuery.empty) {
+            categoryIdToFilter = categoryQuery.docs[0].id;
+          }
+        } catch (error) {
+          console.warn('⚠️ Error buscando categoría por slug:', error);
         }
       }
       
-      query = query.where('category', '==', categoryIdToFilter);
+      // Solo aplicar filtro si encontramos una categoría válida
+      if (categoryIdToFilter) {
+        query = query.where('category', '==', categoryIdToFilter);
+      }
     }
 
     if (status && PRODUCT_STATUS.includes(status)) {
@@ -15962,8 +15970,9 @@ app.get('/api/marketplace/products', async (req, res) => {
       query = query.where('userId', '==', userId);
     }
 
-    // Filtro de aprobación (solo productos aprobados)
-    query = query.where('isApproved', '==', true);
+    // Filtro de aprobación (deshabilitado temporalmente para compatibilidad)
+    // Los productos antiguos sin isApproved se mostrarán
+    // TODO: En producción, habilitar: query = query.where('isApproved', '==', true);
 
     // Ordenamiento
     switch (orderBy) {
@@ -16104,22 +16113,30 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
 
     // Filtrar por categoría (ahora dinámica desde Firestore)
     // Soporta tanto slug como ID de categoría
+    let categoryIdToFilter = null;
     if (category) {
-      let categoryIdToFilter = category;
+      categoryIdToFilter = category;
       
       // Si no parece ser un ID de Firestore (muy corto o tiene guiones), buscar por slug
       if (category.length < 15 || category.includes('-')) {
-        const categoryQuery = await db.collection('marketplace_categories')
-          .where('slug', '==', category.toLowerCase())
-          .limit(1)
-          .get();
-        
-        if (!categoryQuery.empty) {
-          categoryIdToFilter = categoryQuery.docs[0].id;
+        try {
+          const categoryQuery = await db.collection('marketplace_categories')
+            .where('slug', '==', category.toLowerCase())
+            .limit(1)
+            .get();
+          
+          if (!categoryQuery.empty) {
+            categoryIdToFilter = categoryQuery.docs[0].id;
+          }
+        } catch (error) {
+          console.warn('⚠️ Error buscando categoría por slug:', error);
         }
       }
       
-      query = query.where('category', '==', categoryIdToFilter);
+      // Solo aplicar filtro si encontramos una categoría válida
+      if (categoryIdToFilter) {
+        query = query.where('category', '==', categoryIdToFilter);
+      }
     }
 
     if (status && PRODUCT_STATUS.includes(status)) {
@@ -16128,7 +16145,9 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
       query = query.where('status', '==', 'disponible');
     }
 
-    query = query.where('isApproved', '==', true);
+    // Filtro de aprobación (deshabilitado temporalmente para compatibilidad)
+    // Los productos antiguos sin isApproved se mostrarán
+    // TODO: En producción, habilitar: query = query.where('isApproved', '==', true);
 
     // Obtener todos los productos
     const snapshot = await query.get();
