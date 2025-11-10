@@ -16016,6 +16016,178 @@ app.get('/api/marketplace/products', async (req, res) => {
     });
   }
 });
+// Buscar productos cercanos (por proximidad geográfica)
+app.get('/api/marketplace/products/nearby', async (req, res) => {
+  try {
+    const { 
+      latitude,
+      longitude,
+      radius = 50,    // Radio en kilómetros (por defecto 50 km)
+      type,
+      category,
+      status,
+      minPrice,
+      maxPrice,
+      search,
+      orderBy,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren coordenadas (latitude, longitude) para la búsqueda por proximidad'
+      });
+    }
+
+    const userLat = parseFloat(latitude);
+    const userLng = parseFloat(longitude);
+    const searchRadius = parseFloat(radius);
+
+    if (isNaN(userLat) || userLat < -90 || userLat > 90) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitud inválida'
+      });
+    }
+
+    if (isNaN(userLng) || userLng < -180 || userLng > 180) {
+      return res.status(400).json({
+        success: false,
+        message: 'Longitud inválida'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Función para calcular distancia entre dos puntos (fórmula de Haversine)
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      const R = 6371; // Radio de la Tierra en km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c; // Distancia en km
+    };
+
+    let query = db.collection('marketplace_products');
+
+    // Aplicar filtros básicos
+    if (type && TRANSACTION_TYPES.includes(type)) {
+      query = query.where('type', '==', type);
+    }
+
+    if (category && MARKETPLACE_CATEGORIES.includes(category)) {
+      query = query.where('category', '==', category);
+    }
+
+    if (status && PRODUCT_STATUS.includes(status)) {
+      query = query.where('status', '==', status);
+    } else {
+      query = query.where('status', '==', 'disponible');
+    }
+
+    query = query.where('isApproved', '==', true);
+
+    // Obtener todos los productos
+    const snapshot = await query.get();
+    let products = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar por distancia y calcular distancia para cada producto
+    products = products
+      .filter(p => p.location && p.location.latitude && p.location.longitude)
+      .map(p => {
+        const distance = calculateDistance(
+          userLat, 
+          userLng, 
+          p.location.latitude, 
+          p.location.longitude
+        );
+        return { ...p, distance };
+      })
+      .filter(p => p.distance <= searchRadius);
+
+    // Filtro de precio
+    if (minPrice !== undefined) {
+      const min = parseFloat(minPrice);
+      products = products.filter(p => p.price >= min);
+    }
+
+    if (maxPrice !== undefined) {
+      const max = parseFloat(maxPrice);
+      products = products.filter(p => p.price <= max);
+    }
+
+    // Búsqueda en texto
+    if (search) {
+      const searchLower = search.toLowerCase();
+      products = products.filter(p => 
+        p.title.toLowerCase().includes(searchLower) ||
+        p.description.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Ordenamiento
+    switch (orderBy) {
+      case 'distancia':
+        products.sort((a, b) => a.distance - b.distance);
+        break;
+      case 'precio_asc':
+        products.sort((a, b) => (a.price || 0) - (b.price || 0));
+        break;
+      case 'precio_desc':
+        products.sort((a, b) => (b.price || 0) - (a.price || 0));
+        break;
+      case 'reciente':
+      default:
+        products.sort((a, b) => b.createdAt.seconds - a.createdAt.seconds);
+        break;
+    }
+
+    // Paginación
+    const total = products.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedProducts = products.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedProducts,
+      searchParams: {
+        latitude: userLat,
+        longitude: userLng,
+        radius: searchRadius
+      },
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MARKETPLACE] Error buscando productos cercanos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error buscando productos cercanos',
+      error: error.message
+    });
+  }
+});
+
 // Obtener detalle de un producto específico
 app.get('/api/marketplace/products/:id', async (req, res) => {
   try {
@@ -16139,12 +16311,49 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       }
     }
 
-    if (!location || !location.state || !location.city) {
+    // Validar ubicación con coordenadas
+    if (!location) {
       return res.status(400).json({
         success: false,
         message: 'La ubicación es requerida'
       });
     }
+
+    // Validar coordenadas
+    if (!location.latitude || !location.longitude) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las coordenadas (latitude, longitude) son requeridas'
+      });
+    }
+
+    // Validar que las coordenadas sean válidas
+    const lat = parseFloat(location.latitude);
+    const lng = parseFloat(location.longitude);
+    
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitud inválida (debe estar entre -90 y 90)'
+      });
+    }
+
+    if (isNaN(lng) || lng < -180 || lng > 180) {
+      return res.status(400).json({
+        success: false,
+        message: 'Longitud inválida (debe estar entre -180 y 180)'
+      });
+    }
+
+    // Normalizar la ubicación
+    const normalizedLocation = {
+      latitude: lat,
+      longitude: lng,
+      address: location.address || '',
+      city: location.city || '',
+      state: location.state || '',
+      country: location.country || 'México'
+    };
 
     if (!db) {
       return res.status(500).json({
@@ -16174,7 +16383,7 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       price: type === 'venta' ? parseFloat(price) : null,
       tradeFor: type === 'trueque' ? tradeFor.trim() : null,
       
-      location,
+      location: normalizedLocation,
       
       status: 'disponible',
       
@@ -16325,7 +16534,39 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
     }
 
     if (location) {
-      updateData.location = location;
+      // Validar coordenadas si se proporciona ubicación
+      if (location.latitude && location.longitude) {
+        const lat = parseFloat(location.latitude);
+        const lng = parseFloat(location.longitude);
+        
+        if (isNaN(lat) || lat < -90 || lat > 90) {
+          return res.status(400).json({
+            success: false,
+            message: 'Latitud inválida (debe estar entre -90 y 90)'
+          });
+        }
+
+        if (isNaN(lng) || lng < -180 || lng > 180) {
+          return res.status(400).json({
+            success: false,
+            message: 'Longitud inválida (debe estar entre -180 y 180)'
+          });
+        }
+
+        updateData.location = {
+          latitude: lat,
+          longitude: lng,
+          address: location.address || '',
+          city: location.city || '',
+          state: location.state || '',
+          country: location.country || 'México'
+        };
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Las coordenadas (latitude, longitude) son requeridas'
+        });
+      }
     }
 
     await db.collection('marketplace_products').doc(id).update(updateData);
