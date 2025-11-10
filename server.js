@@ -15901,6 +15901,49 @@ const PRODUCT_STATUS = [
 // 📱 ENDPOINTS PARA USUARIOS - MARKETPLACE
 // ============================================================================
 
+// 🔍 ENDPOINT DE DEBUGGING - Mostrar TODOS los productos sin filtros
+app.get('/api/marketplace/products/debug', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener TODOS los productos sin ningún filtro
+    const snapshot = await db.collection('marketplace_products')
+      .orderBy('createdAt', 'desc')
+      .limit(50)
+      .get();
+
+    const products = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      // Convertir timestamps a formato legible
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt,
+      updatedAt: doc.data().updatedAt?.toDate?.() || doc.data().updatedAt,
+    }));
+
+    console.log('🔍 [DEBUG] Total de productos en Firebase:', products.length);
+    
+    res.json({
+      success: true,
+      message: 'Endpoint de debugging - TODOS los productos sin filtros',
+      total: products.length,
+      data: products
+    });
+
+  } catch (error) {
+    console.error('❌ [DEBUG] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo productos',
+      error: error.message
+    });
+  }
+});
+
 // Obtener lista de productos con filtros
 app.get('/api/marketplace/products', async (req, res) => {
   try {
