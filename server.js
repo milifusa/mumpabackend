@@ -20100,6 +20100,12 @@ async function sendExpoNotifications(tokens, notification, data) {
       priority: 'high',
     }));
 
+    console.log('📤 [EXPO] Enviando notificación a Expo Push Service:');
+    console.log('   Título:', notification.title);
+    console.log('   Cuerpo:', notification.body);
+    console.log('   Total tokens:', tokens.length);
+    console.log('   Primer mensaje:', JSON.stringify(messages[0], null, 2));
+
     const chunks = [];
     for (let i = 0; i < messages.length; i += 100) {
       chunks.push(messages.slice(i, i + 100));
@@ -20121,16 +20127,25 @@ async function sendExpoNotifications(tokens, notification, data) {
 
       const result = await response.json();
       
+      console.log('🔍 [EXPO] Respuesta completa de Expo:', JSON.stringify(result, null, 2));
+      
       if (result.data) {
         result.data.forEach((item, index) => {
           if (item.status === 'ok') {
             successCount++;
+            console.log(`✅ [EXPO] Notificación enviada exitosamente a: ${chunk[index].to.substring(0, 30)}...`);
           } else {
             failureCount++;
             failedTokens.push(chunk[index].to);
-            console.log(`❌ [EXPO] Error enviando a token: ${item.message}`);
+            console.log(`❌ [EXPO] Error enviando notificación:`);
+            console.log(`   Token: ${chunk[index].to.substring(0, 30)}...`);
+            console.log(`   Status: ${item.status}`);
+            console.log(`   Message: ${item.message}`);
+            console.log(`   Details: ${JSON.stringify(item.details || {})}`);
           }
         });
+      } else {
+        console.log('❌ [EXPO] Respuesta sin data:', JSON.stringify(result));
       }
     }
 
