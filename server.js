@@ -17188,40 +17188,61 @@ app.get('/api/marketplace/messages/:productId', authenticateToken, async (req, r
       .map(doc => ({ id: doc.id, ...doc.data() }))
       .filter(msg => msg.senderId === uid || msg.receiverId === uid);
 
-    // Enriquecer mensajes con información actual de usuarios si falta
+    // Enriquecer mensajes con información actual de usuarios
     const usersCache = {};
+    const userIds = new Set();
     
-    for (let msg of messages) {
-      // Enriquecer información del sender si falta
-      if (!msg.senderPhoto && msg.senderId) {
-        if (!usersCache[msg.senderId]) {
-          const userDoc = await db.collection('users').doc(msg.senderId).get();
-          if (userDoc.exists) {
-            usersCache[msg.senderId] = userDoc.data();
-          }
-        }
-        if (usersCache[msg.senderId]) {
-          msg.senderName = usersCache[msg.senderId].name || msg.senderName || 'Usuario';
-          msg.senderPhoto = usersCache[msg.senderId].photoUrl || null;
-        }
-      }
+    // Recolectar todos los IDs de usuarios únicos
+    messages.forEach(msg => {
+      if (msg.senderId) userIds.add(msg.senderId);
+      if (msg.receiverId) userIds.add(msg.receiverId);
+    });
 
-      // Enriquecer información del receiver si falta
-      if (!msg.receiverPhoto && msg.receiverId) {
-        if (!usersCache[msg.receiverId]) {
-          const userDoc = await db.collection('users').doc(msg.receiverId).get();
-          if (userDoc.exists) {
-            usersCache[msg.receiverId] = userDoc.data();
-          }
+    console.log(`🔍 [MARKETPLACE] Enriqueciendo ${messages.length} mensajes con info de ${userIds.size} usuarios`);
+
+    // Obtener información de todos los usuarios de una vez
+    for (const userId of userIds) {
+      try {
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          usersCache[userId] = userDoc.data();
+          console.log(`✅ [MARKETPLACE] Usuario ${userId}: ${usersCache[userId].name}, foto: ${usersCache[userId].photoUrl ? 'Sí' : 'No'}`);
+        } else {
+          console.log(`⚠️ [MARKETPLACE] Usuario ${userId} no encontrado en Firestore`);
         }
-        if (usersCache[msg.receiverId]) {
-          msg.receiverName = usersCache[msg.receiverId].name || msg.receiverName || 'Usuario';
-          msg.receiverPhoto = usersCache[msg.receiverId].photoUrl || null;
-        }
+      } catch (error) {
+        console.error(`❌ [MARKETPLACE] Error obteniendo usuario ${userId}:`, error);
       }
     }
 
-    console.log(`✅ [MARKETPLACE] Mensajes obtenidos para producto ${productId}: ${messages.length}`);
+    // Enriquecer cada mensaje con la información actualizada
+    messages = messages.map(msg => {
+      const enrichedMsg = { ...msg };
+
+      // Enriquecer información del sender
+      if (msg.senderId && usersCache[msg.senderId]) {
+        enrichedMsg.senderName = usersCache[msg.senderId].name || 'Usuario';
+        enrichedMsg.senderPhoto = usersCache[msg.senderId].photoUrl || null;
+      } else if (msg.senderId) {
+        console.log(`⚠️ [MARKETPLACE] No se encontró info para sender: ${msg.senderId}`);
+        enrichedMsg.senderName = enrichedMsg.senderName || 'Usuario';
+        enrichedMsg.senderPhoto = null;
+      }
+
+      // Enriquecer información del receiver
+      if (msg.receiverId && usersCache[msg.receiverId]) {
+        enrichedMsg.receiverName = usersCache[msg.receiverId].name || 'Usuario';
+        enrichedMsg.receiverPhoto = usersCache[msg.receiverId].photoUrl || null;
+      } else if (msg.receiverId) {
+        console.log(`⚠️ [MARKETPLACE] No se encontró info para receiver: ${msg.receiverId}`);
+        enrichedMsg.receiverName = enrichedMsg.receiverName || 'Usuario';
+        enrichedMsg.receiverPhoto = null;
+      }
+
+      return enrichedMsg;
+    });
+
+    console.log(`✅ [MARKETPLACE] ${messages.length} mensajes enriquecidos para producto ${productId}`);
 
     res.json({
       success: true,
