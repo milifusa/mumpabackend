@@ -17206,7 +17206,8 @@ app.get('/api/marketplace/messages/:productId', authenticateToken, async (req, r
         const userDoc = await db.collection('users').doc(userId).get();
         if (userDoc.exists) {
           usersCache[userId] = userDoc.data();
-          console.log(`✅ [MARKETPLACE] Usuario ${userId}: ${usersCache[userId].name}, foto: ${usersCache[userId].photoUrl ? 'Sí' : 'No'}`);
+          const userName = usersCache[userId].displayName || usersCache[userId].name || 'Usuario';
+          console.log(`✅ [MARKETPLACE] Usuario ${userId}: ${userName}, foto: ${usersCache[userId].photoUrl ? 'Sí' : 'No'}`);
         } else {
           console.log(`⚠️ [MARKETPLACE] Usuario ${userId} no encontrado en Firestore`);
         }
@@ -17219,9 +17220,9 @@ app.get('/api/marketplace/messages/:productId', authenticateToken, async (req, r
     messages = messages.map(msg => {
       const enrichedMsg = { ...msg };
 
-      // Enriquecer información del sender
+      // Enriquecer información del sender - usar displayName o name (consistente con el resto del código)
       if (msg.senderId && usersCache[msg.senderId]) {
-        enrichedMsg.senderName = usersCache[msg.senderId].name || 'Usuario';
+        enrichedMsg.senderName = usersCache[msg.senderId].displayName || usersCache[msg.senderId].name || 'Usuario';
         enrichedMsg.senderPhoto = usersCache[msg.senderId].photoUrl || null;
       } else if (msg.senderId) {
         console.log(`⚠️ [MARKETPLACE] No se encontró info para sender: ${msg.senderId}`);
@@ -17229,9 +17230,9 @@ app.get('/api/marketplace/messages/:productId', authenticateToken, async (req, r
         enrichedMsg.senderPhoto = null;
       }
 
-      // Enriquecer información del receiver
+      // Enriquecer información del receiver - usar displayName o name (consistente con el resto del código)
       if (msg.receiverId && usersCache[msg.receiverId]) {
-        enrichedMsg.receiverName = usersCache[msg.receiverId].name || 'Usuario';
+        enrichedMsg.receiverName = usersCache[msg.receiverId].displayName || usersCache[msg.receiverId].name || 'Usuario';
         enrichedMsg.receiverPhoto = usersCache[msg.receiverId].photoUrl || null;
       } else if (msg.receiverId) {
         console.log(`⚠️ [MARKETPLACE] No se encontró info para receiver: ${msg.receiverId}`);
@@ -17297,25 +17298,49 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
 
     const productData = productDoc.data();
     const userDoc = await db.collection('users').doc(uid).get();
-    const userData = userDoc.data();
+    
+    if (!userDoc.exists) {
+      console.log(`⚠️ [MARKETPLACE] Usuario ${uid} no encontrado en Firestore`);
+    }
+    
+    const userData = userDoc.exists ? userDoc.data() : {};
+    
+    console.log(`🔍 [MARKETPLACE] Datos del sender (${uid}):`);
+    console.log(`   - Existe en Firestore: ${userDoc.exists}`);
+    console.log(`   - displayName: ${userData.displayName || 'NO TIENE'}`);
+    console.log(`   - name: ${userData.name || 'NO TIENE'}`);
+    console.log(`   - Foto: ${userData.photoUrl || 'NO TIENE'}`);
 
     // Obtener información del receiver
     const receiverDoc = await db.collection('users').doc(productData.userId).get();
     const receiverData = receiverDoc.exists ? receiverDoc.data() : {};
+    
+    console.log(`🔍 [MARKETPLACE] Datos del receiver (${productData.userId}):`);
+    console.log(`   - Existe en Firestore: ${receiverDoc.exists}`);
+    console.log(`   - displayName: ${receiverData.displayName || 'NO TIENE'}`);
+    console.log(`   - name: ${receiverData.name || 'NO TIENE'}`);
+    console.log(`   - Foto: ${receiverData.photoUrl || 'NO TIENE'}`);
 
-    // Crear mensaje
+    // Crear mensaje - usar displayName o name (consistente con el resto del código)
     const messageData = {
       productId,
       senderId: uid,
-      senderName: userData?.name || 'Usuario',
+      senderName: userData?.displayName || userData?.name || 'Usuario',
       senderPhoto: userData?.photoUrl || null,
       receiverId: productData.userId,
-      receiverName: receiverData?.name || productData.userName || 'Usuario',
+      receiverName: receiverData?.displayName || receiverData?.name || productData.userName || 'Usuario',
       receiverPhoto: receiverData?.photoUrl || null,
       message: message.trim(),
       isRead: false,
       createdAt: new Date()
     };
+    
+    console.log(`📝 [MARKETPLACE] Mensaje a guardar:`, {
+      senderName: messageData.senderName,
+      senderPhoto: messageData.senderPhoto ? 'Sí' : 'No',
+      receiverName: messageData.receiverName,
+      receiverPhoto: messageData.receiverPhoto ? 'Sí' : 'No'
+    });
 
     const messageRef = await db.collection('marketplace_messages').add(messageData);
 
@@ -17333,15 +17358,17 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
       if (receiverTokens.length > 0) {
         console.log(`📤 [MARKETPLACE] Enviando notificación push a ${productData.userId}`);
         
+        const senderFullName = userData?.displayName || userData?.name || 'Usuario';
+        
         const notification = {
-          title: `💬 Nuevo mensaje de ${userData?.name || 'Usuario'}`,
+          title: `💬 Nuevo mensaje de ${senderFullName}`,
           body: message.trim().length > 100 ? message.trim().substring(0, 100) + '...' : message.trim()
         };
 
         const notificationData = {
           type: 'new_message',
           senderId: uid,
-          senderName: userData?.name || 'Usuario',
+          senderName: senderFullName,
           senderPhoto: userData?.photoUrl || null,
           productId: productId,
           productTitle: productData.title || 'Producto',
