@@ -20035,6 +20035,118 @@ async function sendPushNotification(tokens, notification, data = {}) {
       return { success: false, message: 'No valid tokens' };
     }
 
+    // Separar tokens de Expo de tokens de FCM
+    const expoTokens = validTokens.filter(token => token.startsWith('ExponentPushToken['));
+    const fcmTokens = validTokens.filter(token => !token.startsWith('ExponentPushToken['));
+
+    console.log(`📊 [PUSH] Tokens Expo: ${expoTokens.length}, Tokens FCM: ${fcmTokens.length}`);
+
+    let totalSuccess = 0;
+    let totalFailure = 0;
+    const failedTokens = [];
+
+    // Enviar a tokens de Expo
+    if (expoTokens.length > 0) {
+      const expoResult = await sendExpoNotifications(expoTokens, notification, data);
+      totalSuccess += expoResult.successCount;
+      totalFailure += expoResult.failureCount;
+      if (expoResult.failedTokens) {
+        failedTokens.push(...expoResult.failedTokens);
+      }
+    }
+
+    // Enviar a tokens de FCM
+    if (fcmTokens.length > 0) {
+      const fcmResult = await sendFCMNotifications(fcmTokens, notification, data);
+      totalSuccess += fcmResult.successCount;
+      totalFailure += fcmResult.failureCount;
+      if (fcmResult.failedTokens) {
+        failedTokens.push(...fcmResult.failedTokens);
+      }
+    }
+
+    console.log(`✅ [PUSH] Total notificaciones enviadas: ${totalSuccess}/${validTokens.length}`);
+
+    // Limpiar tokens inválidos
+    if (failedTokens.length > 0) {
+      await cleanInvalidTokens(failedTokens);
+    }
+
+    return {
+      success: true,
+      successCount: totalSuccess,
+      failureCount: totalFailure
+    };
+
+  } catch (error) {
+    console.error('❌ [PUSH] Error enviando notificación:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Enviar notificaciones a través de Expo Push Notification Service
+async function sendExpoNotifications(tokens, notification, data) {
+  try {
+    const messages = tokens.map(token => ({
+      to: token,
+      sound: 'default',
+      title: notification.title || 'Munpa',
+      body: notification.body || '',
+      data: {
+        ...data,
+        timestamp: new Date().toISOString()
+      },
+      badge: 1,
+      priority: 'high',
+    }));
+
+    const chunks = [];
+    for (let i = 0; i < messages.length; i += 100) {
+      chunks.push(messages.slice(i, i + 100));
+    }
+
+    let successCount = 0;
+    let failureCount = 0;
+    const failedTokens = [];
+
+    for (const chunk of chunks) {
+      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(chunk),
+      });
+
+      const result = await response.json();
+      
+      if (result.data) {
+        result.data.forEach((item, index) => {
+          if (item.status === 'ok') {
+            successCount++;
+          } else {
+            failureCount++;
+            failedTokens.push(chunk[index].to);
+            console.log(`❌ [EXPO] Error enviando a token: ${item.message}`);
+          }
+        });
+      }
+    }
+
+    console.log(`✅ [EXPO] Notificaciones Expo enviadas: ${successCount}/${tokens.length}`);
+
+    return { successCount, failureCount, failedTokens };
+
+  } catch (error) {
+    console.error('❌ [EXPO] Error enviando notificaciones Expo:', error);
+    return { successCount: 0, failureCount: tokens.length, failedTokens: tokens };
+  }
+}
+
+// Enviar notificaciones a través de Firebase Cloud Messaging
+async function sendFCMNotifications(tokens, notification, data) {
+  try {
     const message = {
       notification: {
         title: notification.title || 'Munpa',
@@ -20046,7 +20158,7 @@ async function sendPushNotification(tokens, notification, data = {}) {
         click_action: data.click_action || 'FLUTTER_NOTIFICATION_CLICK',
         timestamp: new Date().toISOString()
       },
-      tokens: validTokens,
+      tokens: tokens,
       android: {
         priority: 'high',
         notification: {
@@ -20066,35 +20178,27 @@ async function sendPushNotification(tokens, notification, data = {}) {
 
     const response = await admin.messaging().sendEachForMulticast(message);
     
-    console.log(`✅ [PUSH] Notificaciones enviadas: ${response.successCount}/${validTokens.length}`);
+    console.log(`✅ [FCM] Notificaciones FCM enviadas: ${response.successCount}/${tokens.length}`);
     
+    const failedTokens = [];
     if (response.failureCount > 0) {
-      console.log(`⚠️ [PUSH] Fallos: ${response.failureCount}`);
-      
-      // Limpiar tokens inválidos
-      const failedTokens = [];
       response.responses.forEach((resp, idx) => {
         if (!resp.success) {
-          failedTokens.push(validTokens[idx]);
-          console.log(`❌ [PUSH] Token inválido: ${resp.error?.code}`);
+          failedTokens.push(tokens[idx]);
+          console.log(`❌ [FCM] Token inválido: ${resp.error?.code}`);
         }
       });
-
-      // Eliminar tokens inválidos de Firestore
-      if (failedTokens.length > 0) {
-        await cleanInvalidTokens(failedTokens);
-      }
     }
 
     return {
-      success: true,
       successCount: response.successCount,
-      failureCount: response.failureCount
+      failureCount: response.failureCount,
+      failedTokens
     };
 
   } catch (error) {
-    console.error('❌ [PUSH] Error enviando notificación:', error);
-    return { success: false, error: error.message };
+    console.error('❌ [FCM] Error enviando notificaciones FCM:', error);
+    return { successCount: 0, failureCount: tokens.length, failedTokens: tokens };
   }
 }
 
