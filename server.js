@@ -20219,6 +20219,308 @@ app.post('/api/notifications/remove-token', authenticateToken, async (req, res) 
   }
 });
 
+// Obtener notificaciones del usuario
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { page = 1, limit = 50, unreadOnly = false } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('notifications').where('userId', '==', userId);
+
+    // Filtrar solo no leídas si se especifica
+    if (unreadOnly === 'true') {
+      query = query.where('read', '==', false);
+    }
+
+    query = query.orderBy('createdAt', 'desc');
+
+    const snapshot = await query.get();
+    let notifications = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
+    }));
+
+    // Paginación
+    const total = notifications.length;
+    const unreadCount = notifications.filter(n => !n.read).length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedNotifications = notifications.slice(startIndex, endIndex);
+
+    console.log(`✅ [NOTIFICATIONS] Notificaciones obtenidas para ${userId}: ${paginatedNotifications.length}`);
+
+    res.json({
+      success: true,
+      data: paginatedNotifications,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit),
+        unreadCount
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error obteniendo notificaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo notificaciones',
+      error: error.message
+    });
+  }
+});
+
+// Marcar notificación como leída
+app.patch('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.uid;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const notificationRef = db.collection('notifications').doc(id);
+    const notificationDoc = await notificationRef.get();
+
+    if (!notificationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notificación no encontrada'
+      });
+    }
+
+    const notificationData = notificationDoc.data();
+
+    // Verificar que la notificación pertenece al usuario
+    if (notificationData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para modificar esta notificación'
+      });
+    }
+
+    await notificationRef.update({
+      read: true,
+      readAt: admin.firestore.Timestamp.fromDate(new Date())
+    });
+
+    console.log(`✅ [NOTIFICATIONS] Notificación marcada como leída: ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Notificación marcada como leída'
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error marcando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marcando notificación',
+      error: error.message
+    });
+  }
+});
+
+// Marcar todas las notificaciones como leídas
+app.patch('/api/notifications/read-all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('notifications')
+      .where('userId', '==', userId)
+      .where('read', '==', false)
+      .get();
+
+    if (snapshot.empty) {
+      return res.json({
+        success: true,
+        message: 'No hay notificaciones sin leer'
+      });
+    }
+
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+      batch.update(doc.ref, {
+        read: true,
+        readAt: admin.firestore.Timestamp.fromDate(new Date())
+      });
+    });
+
+    await batch.commit();
+
+    console.log(`✅ [NOTIFICATIONS] ${snapshot.size} notificaciones marcadas como leídas para: ${userId}`);
+
+    res.json({
+      success: true,
+      message: `${snapshot.size} notificaciones marcadas como leídas`
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error marcando todas como leídas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marcando notificaciones',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar notificación
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.uid;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const notificationRef = db.collection('notifications').doc(id);
+    const notificationDoc = await notificationRef.get();
+
+    if (!notificationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notificación no encontrada'
+      });
+    }
+
+    const notificationData = notificationDoc.data();
+
+    // Verificar que la notificación pertenece al usuario
+    if (notificationData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para eliminar esta notificación'
+      });
+    }
+
+    await notificationRef.delete();
+
+    console.log(`✅ [NOTIFICATIONS] Notificación eliminada: ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Notificación eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error eliminando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando notificación',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar todas las notificaciones leídas
+app.delete('/api/notifications/read-all', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('notifications')
+      .where('userId', '==', userId)
+      .where('read', '==', true)
+      .get();
+
+    if (snapshot.empty) {
+      return res.json({
+        success: true,
+        message: 'No hay notificaciones leídas para eliminar'
+      });
+    }
+
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+
+    await batch.commit();
+
+    console.log(`✅ [NOTIFICATIONS] ${snapshot.size} notificaciones eliminadas para: ${userId}`);
+
+    res.json({
+      success: true,
+      message: `${snapshot.size} notificaciones eliminadas exitosamente`
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error eliminando notificaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando notificaciones',
+      error: error.message
+    });
+  }
+});
+
+// Obtener contador de notificaciones sin leer
+app.get('/api/notifications/unread-count', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('notifications')
+      .where('userId', '==', userId)
+      .where('read', '==', false)
+      .get();
+
+    const count = snapshot.size;
+
+    res.json({
+      success: true,
+      data: {
+        unreadCount: count
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error obteniendo contador:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo contador',
+      error: error.message
+    });
+  }
+});
+
 // Enviar notificación cuando hay un nuevo mensaje
 app.post('/api/notifications/new-message', authenticateToken, async (req, res) => {
   try {

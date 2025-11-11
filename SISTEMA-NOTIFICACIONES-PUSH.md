@@ -233,7 +233,32 @@ class NotificationService {
 
 ---
 
-## 📡 API - Endpoints
+## 📡 API - Endpoints (19 endpoints)
+
+### **Para la App (9 endpoints):**
+
+1. `POST /api/notifications/register-token` - Registrar token FCM
+2. `POST /api/notifications/remove-token` - Eliminar token
+3. `GET /api/notifications` - Ver notificaciones
+4. `PATCH /api/notifications/:id/read` - Marcar como leída
+5. `PATCH /api/notifications/read-all` - Marcar todas como leídas
+6. `DELETE /api/notifications/:id` - Eliminar notificación
+7. `DELETE /api/notifications/read-all` - Eliminar todas las leídas
+8. `GET /api/notifications/unread-count` - Contador de no leídas
+9. `POST /api/notifications/new-message` - Enviar notificación de mensaje
+10. `POST /api/notifications/transaction` - Enviar notificación de compra
+
+### **Para el Dashboard (9 endpoints):**
+
+11. `POST /api/admin/notifications/send` - Enviar a usuarios específicos
+12. `POST /api/admin/notifications/broadcast` - Broadcast a todos
+13. `POST /api/admin/notifications/schedule` - Programar notificación
+14. `GET /api/admin/notifications/scheduled` - Ver programadas
+15. `DELETE /api/admin/notifications/scheduled/:id` - Cancelar programada
+16. `GET /api/admin/notifications/history` - Ver historial
+17. `GET /api/admin/notifications/stats` - Estadísticas
+
+---
 
 ### 1. Registrar Token FCM
 
@@ -285,7 +310,142 @@ Authorization: Bearer {token}
 
 ---
 
-### 3. Notificación de Nuevo Mensaje
+### 3. Obtener Notificaciones del Usuario
+
+```http
+GET /api/notifications?page=1&limit=50&unreadOnly=false
+Authorization: Bearer {token}
+```
+
+**Query Parameters:**
+- `page` (number) - Número de página (default: 1)
+- `limit` (number) - Notificaciones por página (default: 50)
+- `unreadOnly` (boolean) - Solo no leídas (default: false)
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "notif_123",
+      "userId": "user_456",
+      "type": "new_message",
+      "title": "💬 Nuevo mensaje de María",
+      "body": "¿Aún está disponible la carriola?",
+      "imageUrl": null,
+      "data": {
+        "type": "new_message",
+        "senderId": "user_789",
+        "productId": "prod_123",
+        "screen": "ChatScreen"
+      },
+      "read": false,
+      "createdAt": "2025-11-11T10:30:00.000Z"
+    }
+  ],
+  "pagination": {
+    "total": 25,
+    "page": 1,
+    "limit": 50,
+    "totalPages": 1,
+    "unreadCount": 8
+  }
+}
+```
+
+---
+
+### 4. Marcar Notificación como Leída
+
+```http
+PATCH /api/notifications/:id/read
+Authorization: Bearer {token}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Notificación marcada como leída"
+}
+```
+
+---
+
+### 5. Marcar Todas como Leídas
+
+```http
+PATCH /api/notifications/read-all
+Authorization: Bearer {token}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "8 notificaciones marcadas como leídas"
+}
+```
+
+---
+
+### 6. Eliminar Notificación
+
+```http
+DELETE /api/notifications/:id
+Authorization: Bearer {token}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "Notificación eliminada exitosamente"
+}
+```
+
+---
+
+### 7. Eliminar Todas las Leídas
+
+```http
+DELETE /api/notifications/read-all
+Authorization: Bearer {token}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "message": "15 notificaciones eliminadas exitosamente"
+}
+```
+
+---
+
+### 8. Obtener Contador de No Leídas
+
+```http
+GET /api/notifications/unread-count
+Authorization: Bearer {token}
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "data": {
+    "unreadCount": 8
+  }
+}
+```
+
+**Uso:** Para mostrar el badge en el ícono de notificaciones.
+
+---
+
+### 9. Notificación de Nuevo Mensaje
 
 ```http
 POST /api/notifications/new-message
@@ -342,7 +502,7 @@ async function sendMessage(message) {
 
 ---
 
-### 4. Notificación de Compra/Transacción
+### 10. Notificación de Compra/Transacción
 
 ```http
 POST /api/notifications/transaction
@@ -564,6 +724,370 @@ Authorization: Bearer {admin_token}
     "unread": 1320,
     "last24h": 234,
     "last7days": 1567
+  }
+}
+```
+
+---
+
+## 💻 Integración en la App
+
+### Pantalla de Notificaciones (Flutter)
+
+```dart
+// NotificationsScreen.dart
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+class NotificationsScreen extends StatefulWidget {
+  @override
+  _NotificationsScreenState createState() => _NotificationsScreenState();
+}
+
+class _NotificationsScreenState extends State<NotificationsScreen> {
+  List<dynamic> notifications = [];
+  int unreadCount = 0;
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadNotifications();
+    loadUnreadCount();
+  }
+
+  // Cargar notificaciones
+  Future<void> loadNotifications() async {
+    setState(() => isLoading = true);
+    
+    try {
+      final response = await http.get(
+        Uri.parse('https://api.munpa.online/api/notifications?page=1&limit=50'),
+        headers: {
+          'Authorization': 'Bearer ${await getAuthToken()}',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          notifications = data['data'];
+          unreadCount = data['pagination']['unreadCount'];
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      print('Error cargando notificaciones: $e');
+      setState(() => isLoading = false);
+    }
+  }
+
+  // Cargar contador de no leídas
+  Future<void> loadUnreadCount() async {
+    try {
+      final response = await http.get(
+        Uri.parse('https://api.munpa.online/api/notifications/unread-count'),
+        headers: {
+          'Authorization': 'Bearer ${await getAuthToken()}',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          unreadCount = data['data']['unreadCount'];
+        });
+      }
+    } catch (e) {
+      print('Error cargando contador: $e');
+    }
+  }
+
+  // Marcar como leída
+  Future<void> markAsRead(String notificationId) async {
+    try {
+      await http.patch(
+        Uri.parse('https://api.munpa.online/api/notifications/$notificationId/read'),
+        headers: {
+          'Authorization': 'Bearer ${await getAuthToken()}',
+        },
+      );
+      
+      loadNotifications(); // Recargar lista
+    } catch (e) {
+      print('Error marcando como leída: $e');
+    }
+  }
+
+  // Marcar todas como leídas
+  Future<void> markAllAsRead() async {
+    try {
+      await http.patch(
+        Uri.parse('https://api.munpa.online/api/notifications/read-all'),
+        headers: {
+          'Authorization': 'Bearer ${await getAuthToken()}',
+        },
+      );
+      
+      loadNotifications();
+    } catch (e) {
+      print('Error marcando todas: $e');
+    }
+  }
+
+  // Eliminar notificación
+  Future<void> deleteNotification(String notificationId) async {
+    try {
+      await http.delete(
+        Uri.parse('https://api.munpa.online/api/notifications/$notificationId'),
+        headers: {
+          'Authorization': 'Bearer ${await getAuthToken()}',
+        },
+      );
+      
+      loadNotifications();
+    } catch (e) {
+      print('Error eliminando: $e');
+    }
+  }
+
+  // Eliminar todas las leídas
+  Future<void> deleteAllRead() async {
+    try {
+      await http.delete(
+        Uri.parse('https://api.munpa.online/api/notifications/read-all'),
+        headers: {
+          'Authorization': 'Bearer ${await getAuthToken()}',
+        },
+      );
+      
+      loadNotifications();
+    } catch (e) {
+      print('Error eliminando: $e');
+    }
+  }
+
+  // Navegar según el tipo de notificación
+  void handleNotificationTap(dynamic notification) {
+    // Marcar como leída
+    if (!notification['read']) {
+      markAsRead(notification['id']);
+    }
+
+    // Navegar según el tipo
+    final data = notification['data'];
+    final type = data['type'];
+    final screen = data['screen'];
+
+    switch (type) {
+      case 'new_message':
+        Navigator.pushNamed(
+          context,
+          '/chat',
+          arguments: {
+            'chatId': data['chatId'],
+            'productId': data['productId'],
+          },
+        );
+        break;
+
+      case 'purchase':
+      case 'reservation':
+      case 'interest':
+        Navigator.pushNamed(context, '/my-products');
+        break;
+
+      case 'admin_notification':
+      case 'broadcast':
+        if (screen != null && screen.isNotEmpty) {
+          Navigator.pushNamed(context, '/${screen.toLowerCase()}');
+        }
+        break;
+
+      default:
+        Navigator.pushNamed(context, '/home');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Notificaciones'),
+        actions: [
+          // Badge con contador
+          if (unreadCount > 0)
+            Padding(
+              padding: EdgeInsets.only(right: 16),
+              child: Center(
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$unreadCount',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+          
+          // Menú de opciones
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'mark_all') {
+                markAllAsRead();
+              } else if (value == 'delete_all') {
+                deleteAllRead();
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'mark_all',
+                child: Text('Marcar todas como leídas'),
+              ),
+              PopupMenuItem(
+                value: 'delete_all',
+                child: Text('Eliminar todas las leídas'),
+              ),
+            ],
+          ),
+        ],
+      ),
+      body: isLoading
+          ? Center(child: CircularProgressIndicator())
+          : notifications.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.notifications_none, size: 64, color: Colors.grey),
+                      SizedBox(height: 16),
+                      Text(
+                        'No tienes notificaciones',
+                        style: TextStyle(fontSize: 18, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: loadNotifications,
+                  child: ListView.builder(
+                    itemCount: notifications.length,
+                    itemBuilder: (context, index) {
+                      final notification = notifications[index];
+                      final isUnread = !notification['read'];
+
+                      return Dismissible(
+                        key: Key(notification['id']),
+                        background: Container(
+                          color: Colors.red,
+                          alignment: Alignment.centerRight,
+                          padding: EdgeInsets.only(right: 16),
+                          child: Icon(Icons.delete, color: Colors.white),
+                        ),
+                        direction: DismissDirection.endToStart,
+                        onDismissed: (direction) {
+                          deleteNotification(notification['id']);
+                        },
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isUnread ? Colors.blue : Colors.grey[300],
+                            child: Icon(
+                              _getIconForType(notification['type']),
+                              color: Colors.white,
+                            ),
+                          ),
+                          title: Text(
+                            notification['title'],
+                            style: TextStyle(
+                              fontWeight: isUnread ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(height: 4),
+                              Text(
+                                notification['body'],
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                _formatDate(notification['createdAt']),
+                                style: TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                          trailing: isUnread
+                              ? Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue,
+                                    shape: BoxShape.circle,
+                                  ),
+                                )
+                              : null,
+                          onTap: () => handleNotificationTap(notification),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+    );
+  }
+
+  IconData _getIconForType(String type) {
+    switch (type) {
+      case 'new_message':
+        return Icons.message;
+      case 'purchase':
+        return Icons.shopping_cart;
+      case 'reservation':
+        return Icons.bookmark;
+      case 'interest':
+        return Icons.favorite;
+      case 'admin_notification':
+      case 'broadcast':
+        return Icons.campaign;
+      default:
+        return Icons.notifications;
+    }
+  }
+
+  String _formatDate(dynamic date) {
+    try {
+      DateTime dateTime;
+      if (date is String) {
+        dateTime = DateTime.parse(date);
+      } else if (date is Map && date['_seconds'] != null) {
+        dateTime = DateTime.fromMillisecondsSinceEpoch(date['_seconds'] * 1000);
+      } else {
+        return '';
+      }
+
+      final now = DateTime.now();
+      final difference = now.difference(dateTime);
+
+      if (difference.inDays > 7) {
+        return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
+      } else if (difference.inDays > 0) {
+        return 'Hace ${difference.inDays} día${difference.inDays > 1 ? 's' : ''}';
+      } else if (difference.inHours > 0) {
+        return 'Hace ${difference.inHours} hora${difference.inHours > 1 ? 's' : ''}';
+      } else if (difference.inMinutes > 0) {
+        return 'Hace ${difference.inMinutes} minuto${difference.inMinutes > 1 ? 's' : ''}';
+      } else {
+        return 'Ahora';
+      }
+    } catch (e) {
+      return '';
+    }
   }
 }
 ```
