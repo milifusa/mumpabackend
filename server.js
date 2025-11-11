@@ -17326,6 +17326,57 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
 
     console.log('✅ [MARKETPLACE] Mensaje enviado:', messageRef.id);
 
+    // Enviar notificación push al destinatario
+    try {
+      const receiverTokens = receiverData?.fcmTokens || [];
+      
+      if (receiverTokens.length > 0) {
+        console.log(`📤 [MARKETPLACE] Enviando notificación push a ${productData.userId}`);
+        
+        const notification = {
+          title: `💬 Nuevo mensaje de ${userData?.name || 'Usuario'}`,
+          body: message.trim().length > 100 ? message.trim().substring(0, 100) + '...' : message.trim()
+        };
+
+        const notificationData = {
+          type: 'new_message',
+          senderId: uid,
+          senderName: userData?.name || 'Usuario',
+          senderPhoto: userData?.photoUrl || null,
+          productId: productId,
+          productTitle: productData.title || 'Producto',
+          screen: 'ChatScreen',
+          chatId: `${productId}_${uid}_${productData.userId}`
+        };
+
+        const pushResult = await sendPushNotification(receiverTokens, notification, notificationData);
+        
+        if (pushResult.success) {
+          console.log(`✅ [MARKETPLACE] Notificación enviada: ${pushResult.successCount} exitosas, ${pushResult.failureCount} fallidas`);
+        } else {
+          console.log(`⚠️ [MARKETPLACE] No se pudo enviar notificación: ${pushResult.error || pushResult.message}`);
+        }
+
+        // Guardar notificación en Firestore
+        await db.collection('notifications').add({
+          userId: productData.userId,
+          type: 'new_message',
+          title: notification.title,
+          body: notification.body,
+          data: notificationData,
+          read: false,
+          createdAt: admin.firestore.Timestamp.fromDate(new Date())
+        });
+        
+        console.log('✅ [MARKETPLACE] Notificación guardada en Firestore');
+      } else {
+        console.log('⚠️ [MARKETPLACE] El destinatario no tiene tokens FCM registrados');
+      }
+    } catch (notificationError) {
+      console.error('❌ [MARKETPLACE] Error enviando notificación push:', notificationError);
+      // No fallar el envío del mensaje si falla la notificación
+    }
+
     res.json({
       success: true,
       message: 'Mensaje enviado exitosamente',
