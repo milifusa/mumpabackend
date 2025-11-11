@@ -17310,12 +17310,47 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
     console.log(`   - displayName: ${userData.displayName || 'NO TIENE'}`);
     console.log(`   - name: ${userData.name || 'NO TIENE'}`);
     console.log(`   - Foto: ${userData.photoUrl || 'NO TIENE'}`);
+    console.log(`   - Es dueño del producto: ${uid === productData.userId}`);
+
+    // Determinar quién es el receptor del mensaje
+    let receiverId;
+    
+    // Si el que envía es el dueño del producto, buscar al otro usuario en los mensajes previos
+    if (uid === productData.userId) {
+      console.log(`📨 [MARKETPLACE] El sender es el dueño del producto, buscando al otro usuario...`);
+      
+      // Buscar mensajes previos de este producto donde el sender NO sea el dueño
+      const previousMessagesSnapshot = await db.collection('marketplace_messages')
+        .where('productId', '==', productId)
+        .where('senderId', '!=', uid)
+        .orderBy('senderId')
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .get();
+      
+      if (!previousMessagesSnapshot.empty) {
+        receiverId = previousMessagesSnapshot.docs[0].data().senderId;
+        console.log(`✅ [MARKETPLACE] Receiver encontrado: ${receiverId}`);
+      } else {
+        // Si no hay mensajes previos, puede ser que el dueño esté iniciando la conversación
+        // (caso raro, pero posible). En este caso, no hay a quién enviar notificación.
+        console.log(`⚠️ [MARKETPLACE] El dueño está enviando el primer mensaje, no hay receptor conocido`);
+        return res.status(400).json({
+          success: false,
+          message: 'No se puede iniciar una conversación como dueño del producto'
+        });
+      }
+    } else {
+      // Si el que envía NO es el dueño, el receptor es el dueño del producto
+      receiverId = productData.userId;
+      console.log(`✅ [MARKETPLACE] El receiver es el dueño del producto: ${receiverId}`);
+    }
 
     // Obtener información del receiver
-    const receiverDoc = await db.collection('users').doc(productData.userId).get();
+    const receiverDoc = await db.collection('users').doc(receiverId).get();
     const receiverData = receiverDoc.exists ? receiverDoc.data() : {};
     
-    console.log(`🔍 [MARKETPLACE] Datos del receiver (${productData.userId}):`);
+    console.log(`🔍 [MARKETPLACE] Datos del receiver (${receiverId}):`);
     console.log(`   - Existe en Firestore: ${receiverDoc.exists}`);
     console.log(`   - displayName: ${receiverData.displayName || 'NO TIENE'}`);
     console.log(`   - name: ${receiverData.name || 'NO TIENE'}`);
@@ -17327,7 +17362,7 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
       senderId: uid,
       senderName: userData?.displayName || userData?.name || 'Usuario',
       senderPhoto: userData?.photoUrl || null,
-      receiverId: productData.userId,
+      receiverId: receiverId,
       receiverName: receiverData?.displayName || receiverData?.name || productData.userName || 'Usuario',
       receiverPhoto: receiverData?.photoUrl || null,
       message: message.trim(),
@@ -17353,10 +17388,14 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
 
     // Enviar notificación push al destinatario
     try {
-      const receiverTokens = receiverData?.fcmTokens || [];
-      
-      if (receiverTokens.length > 0) {
-        console.log(`📤 [MARKETPLACE] Enviando notificación push a ${productData.userId}`);
+      // Verificar que el receiver no sea el mismo que el sender
+      if (uid === receiverId) {
+        console.log(`⚠️ [MARKETPLACE] No se envía notificación: sender y receiver son el mismo usuario (${uid})`);
+      } else {
+        const receiverTokens = receiverData?.fcmTokens || [];
+        
+        if (receiverTokens.length > 0) {
+          console.log(`📤 [MARKETPLACE] Enviando notificación push a ${receiverId}`);
         
         const senderFullName = userData?.displayName || userData?.name || 'Usuario';
         
@@ -17373,7 +17412,7 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
           productId: productId,
           productTitle: productData.title || 'Producto',
           screen: 'ChatScreen',
-          chatId: `${productId}_${uid}_${productData.userId}`
+          chatId: `${productId}_${uid}_${receiverId}`
         };
 
         const pushResult = await sendPushNotification(receiverTokens, notification, notificationData);
@@ -17386,7 +17425,7 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
 
         // Guardar notificación en Firestore
         await db.collection('notifications').add({
-          userId: productData.userId,
+          userId: receiverId,
           type: 'new_message',
           title: notification.title,
           body: notification.body,
@@ -17396,8 +17435,9 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
         });
         
         console.log('✅ [MARKETPLACE] Notificación guardada en Firestore');
-      } else {
-        console.log('⚠️ [MARKETPLACE] El destinatario no tiene tokens FCM registrados');
+        } else {
+          console.log('⚠️ [MARKETPLACE] El destinatario no tiene tokens FCM registrados');
+        }
       }
     } catch (notificationError) {
       console.error('❌ [MARKETPLACE] Error enviando notificación push:', notificationError);
