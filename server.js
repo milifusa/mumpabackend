@@ -17981,6 +17981,414 @@ app.get('/api/admin/marketplace/items', authenticateToken, isAdmin, async (req, 
   }
 });
 
+// Ver detalles completos de un producto (Admin)
+app.get('/api/admin/marketplace/items/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const productDoc = await db.collection('marketplace_products').doc(id).get();
+
+    if (!productDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Producto no encontrado'
+      });
+    }
+
+    const product = {
+      id: productDoc.id,
+      ...productDoc.data()
+    };
+
+    // Obtener información del usuario vendedor
+    let userInfo = null;
+    if (product.userId) {
+      const userDoc = await db.collection('users').doc(product.userId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        userInfo = {
+          id: product.userId,
+          name: userData.name,
+          email: userData.email,
+          phone: userData.phone,
+          photoUrl: userData.photoUrl,
+          createdAt: userData.createdAt
+        };
+      }
+    }
+
+    console.log('✅ [ADMIN] Detalles del producto obtenidos:', id);
+
+    res.json({
+      success: true,
+      data: {
+        product,
+        user: userInfo
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo detalles del producto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalles del producto',
+      error: error.message
+    });
+  }
+});
+
+// Aprobar/Rechazar producto (Admin)
+app.patch('/api/admin/marketplace/items/:id/approve', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isApproved, reason = '' } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const productDoc = await db.collection('marketplace_products').doc(id).get();
+
+    if (!productDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Producto no encontrado'
+      });
+    }
+
+    await db.collection('marketplace_products').doc(id).update({
+      isApproved,
+      moderationReason: reason,
+      moderatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+      moderatedBy: req.user.uid,
+      updatedAt: admin.firestore.Timestamp.fromDate(new Date())
+    });
+
+    console.log(`✅ [ADMIN] Producto ${isApproved ? 'aprobado' : 'rechazado'}:`, id);
+
+    res.json({
+      success: true,
+      message: `Producto ${isApproved ? 'aprobado' : 'rechazado'} exitosamente`
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error moderando producto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error moderando producto',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar producto (Admin)
+app.delete('/api/admin/marketplace/items/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const productDoc = await db.collection('marketplace_products').doc(id).get();
+
+    if (!productDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Producto no encontrado'
+      });
+    }
+
+    // Marcar como eliminado en lugar de borrar
+    await db.collection('marketplace_products').doc(id).update({
+      status: 'eliminado',
+      deletedAt: admin.firestore.Timestamp.fromDate(new Date()),
+      deletedBy: req.user.uid,
+      updatedAt: admin.firestore.Timestamp.fromDate(new Date())
+    });
+
+    console.log('✅ [ADMIN] Producto eliminado:', id);
+
+    res.json({
+      success: true,
+      message: 'Producto eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando producto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando producto',
+      error: error.message
+    });
+  }
+});
+
+// Listar mensajes/chats del marketplace (Admin)
+app.get('/api/admin/marketplace/messages', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      productId = '',
+      userId = '',
+      orderBy = 'createdAt',
+      order = 'desc'
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('marketplace_messages');
+
+    if (productId) {
+      query = query.where('productId', '==', productId);
+    }
+
+    if (userId) {
+      query = query.where('participants', 'array-contains', userId);
+    }
+
+    const orderDirection = order === 'asc' ? 'asc' : 'desc';
+    query = query.orderBy(orderBy, orderDirection);
+
+    const snapshot = await query.get();
+    let messages = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Paginación
+    const total = messages.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedMessages = messages.slice(startIndex, endIndex);
+
+    console.log('✅ [ADMIN] Mensajes obtenidos:', paginatedMessages.length);
+
+    res.json({
+      success: true,
+      data: paginatedMessages,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo mensajes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo mensajes',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas del marketplace (Admin)
+app.get('/api/admin/marketplace/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Estadísticas de productos
+    const productsSnapshot = await db.collection('marketplace_products').get();
+    const products = productsSnapshot.docs.map(doc => doc.data());
+
+    const productStats = {
+      total: products.length,
+      disponible: products.filter(p => p.status === 'disponible').length,
+      vendido: products.filter(p => p.status === 'vendido').length,
+      reservado: products.filter(p => p.status === 'reservado').length,
+      eliminado: products.filter(p => p.status === 'eliminado').length,
+      venta: products.filter(p => p.type === 'venta').length,
+      donacion: products.filter(p => p.type === 'donacion').length,
+      trueque: products.filter(p => p.type === 'trueque').length,
+      pendientesAprobacion: products.filter(p => !p.isApproved).length,
+      reportados: products.filter(p => p.isReported).length
+    };
+
+    // Top vendedores
+    const sellerCounts = {};
+    products.forEach(p => {
+      if (p.userId) {
+        sellerCounts[p.userId] = (sellerCounts[p.userId] || 0) + 1;
+      }
+    });
+
+    const topSellersIds = Object.entries(sellerCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([userId]) => userId);
+
+    const topSellers = [];
+    for (const userId of topSellersIds) {
+      const userDoc = await db.collection('users').doc(userId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        topSellers.push({
+          userId,
+          name: userData.name,
+          email: userData.email,
+          photoUrl: userData.photoUrl,
+          productsCount: sellerCounts[userId]
+        });
+      }
+    }
+
+    // Categorías más populares
+    const categoryCounts = {};
+    products.forEach(p => {
+      const catName = p.categoryName || 'Sin categoría';
+      categoryCounts[catName] = (categoryCounts[catName] || 0) + 1;
+    });
+
+    const topCategories = Object.entries(categoryCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([category, count]) => ({ category, count }));
+
+    console.log('✅ [ADMIN] Estadísticas del marketplace obtenidas');
+
+    res.json({
+      success: true,
+      data: {
+        productStats,
+        topSellers,
+        topCategories
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// Listar usuarios vendedores (Admin)
+app.get('/api/admin/marketplace/sellers', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      search = ''
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener productos para contar por usuario
+    const productsSnapshot = await db.collection('marketplace_products').get();
+    const products = productsSnapshot.docs.map(doc => doc.data());
+
+    // Contar productos por usuario
+    const userProductCounts = {};
+    products.forEach(p => {
+      if (p.userId) {
+        if (!userProductCounts[p.userId]) {
+          userProductCounts[p.userId] = {
+            total: 0,
+            disponible: 0,
+            vendido: 0
+          };
+        }
+        userProductCounts[p.userId].total++;
+        if (p.status === 'disponible') userProductCounts[p.userId].disponible++;
+        if (p.status === 'vendido') userProductCounts[p.userId].vendido++;
+      }
+    });
+
+    // Obtener información de usuarios
+    const sellers = [];
+    for (const [userId, stats] of Object.entries(userProductCounts)) {
+      const userDoc = await db.collection('users').doc(userId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        sellers.push({
+          id: userId,
+          name: userData.name,
+          email: userData.email,
+          phone: userData.phone,
+          photoUrl: userData.photoUrl,
+          createdAt: userData.createdAt,
+          stats
+        });
+      }
+    }
+
+    // Búsqueda
+    let filteredSellers = sellers;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredSellers = sellers.filter(s =>
+        s.name?.toLowerCase().includes(searchLower) ||
+        s.email?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Ordenar por número de productos
+    filteredSellers.sort((a, b) => b.stats.total - a.stats.total);
+
+    // Paginación
+    const total = filteredSellers.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedSellers = filteredSellers.slice(startIndex, endIndex);
+
+    console.log('✅ [ADMIN] Vendedores obtenidos:', paginatedSellers.length);
+
+    res.json({
+      success: true,
+      data: paginatedSellers,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo vendedores:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo vendedores',
+      error: error.message
+    });
+  }
+});
+
 // ============================================================================
 // 🛠️ ADMIN - GESTIÓN DE CATEGORÍAS
 // ============================================================================
