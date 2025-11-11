@@ -20178,6 +20178,54 @@ app.post('/api/notifications/register-token', authenticateToken, async (req, res
   }
 });
 
+// Verificar tokens FCM registrados (debug)
+app.get('/api/notifications/check-tokens', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const userDoc = await db.collection('users').doc(userId).get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    const userData = userDoc.data();
+    const tokens = userData.fcmTokens || [];
+
+    console.log(`🔍 [DEBUG] Tokens FCM para ${userId}:`, tokens.length);
+
+    res.json({
+      success: true,
+      data: {
+        userId,
+        tokensCount: tokens.length,
+        tokens: tokens,
+        hasTokens: tokens.length > 0,
+        lastTokenUpdate: userData.lastTokenUpdate,
+        platform: userData.platform
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [NOTIFICATIONS] Error verificando tokens:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando tokens',
+      error: error.message
+    });
+  }
+});
+
 // Eliminar token FCM (logout o desinstalación)
 app.post('/api/notifications/remove-token', authenticateToken, async (req, res) => {
   try {
@@ -20905,19 +20953,32 @@ app.post('/api/admin/notifications/broadcast', authenticateToken, isAdmin, async
     // Recolectar todos los tokens
     let allTokens = [];
     const userIds = [];
+    let usersWithTokens = 0;
+    let usersWithoutTokens = 0;
 
     snapshot.docs.forEach(doc => {
       const userData = doc.data();
       if (userData.fcmTokens && userData.fcmTokens.length > 0) {
         allTokens = allTokens.concat(userData.fcmTokens);
         userIds.push(doc.id);
+        usersWithTokens++;
+      } else {
+        usersWithoutTokens++;
       }
     });
+
+    console.log(`📊 [BROADCAST] Total usuarios: ${snapshot.size}, Con tokens: ${usersWithTokens}, Sin tokens: ${usersWithoutTokens}`);
+    console.log(`📱 [BROADCAST] Total tokens FCM recolectados: ${allTokens.length}`);
 
     if (allTokens.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Ningún usuario tiene tokens registrados'
+        message: `Ningún usuario tiene tokens registrados. ${snapshot.size} usuarios encontrados pero ninguno tiene la app instalada o FCM configurado.`,
+        stats: {
+          totalUsers: snapshot.size,
+          usersWithTokens: 0,
+          usersWithoutTokens: snapshot.size
+        }
       });
     }
 
@@ -20973,6 +21034,7 @@ app.post('/api/admin/notifications/broadcast', authenticateToken, isAdmin, async
     await Promise.all(batchPromises);
 
     console.log(`✅ [ADMIN] Broadcast enviado a ${userIds.length} usuarios`);
+    console.log(`📤 [PUSH] Notificaciones enviadas: ${totalSuccess}/${allTokens.length} exitosas, ${totalFailure} fallidas`);
 
     res.json({
       success: true,
@@ -20981,7 +21043,9 @@ app.post('/api/admin/notifications/broadcast', authenticateToken, isAdmin, async
         usersCount: userIds.length,
         tokensCount: allTokens.length,
         successCount: totalSuccess,
-        failureCount: totalFailure
+        failureCount: totalFailure,
+        usersWithTokens,
+        usersWithoutTokens
       }
     });
 
