@@ -20013,6 +20013,927 @@ app.get('/api/admin/analytics/recommendations', authenticateToken, isAdmin, asyn
 });
 
 // ============================================================================
+// 🔔 SISTEMA DE NOTIFICACIONES PUSH - FIREBASE CLOUD MESSAGING (FCM)
+// ============================================================================
+
+// Función helper para enviar notificaciones push
+async function sendPushNotification(tokens, notification, data = {}) {
+  try {
+    if (!tokens || tokens.length === 0) {
+      console.log('⚠️ [PUSH] No hay tokens para enviar notificación');
+      return { success: false, message: 'No tokens provided' };
+    }
+
+    // Asegurar que tokens sea un array
+    const tokenArray = Array.isArray(tokens) ? tokens : [tokens];
+    
+    // Filtrar tokens válidos
+    const validTokens = tokenArray.filter(token => token && typeof token === 'string' && token.length > 0);
+    
+    if (validTokens.length === 0) {
+      console.log('⚠️ [PUSH] No hay tokens válidos');
+      return { success: false, message: 'No valid tokens' };
+    }
+
+    const message = {
+      notification: {
+        title: notification.title || 'Munpa',
+        body: notification.body || '',
+        imageUrl: notification.imageUrl || null
+      },
+      data: {
+        ...data,
+        click_action: data.click_action || 'FLUTTER_NOTIFICATION_CLICK',
+        timestamp: new Date().toISOString()
+      },
+      tokens: validTokens,
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'munpa_notifications'
+        }
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: 'default',
+            badge: 1
+          }
+        }
+      }
+    };
+
+    const response = await admin.messaging().sendEachForMulticast(message);
+    
+    console.log(`✅ [PUSH] Notificaciones enviadas: ${response.successCount}/${validTokens.length}`);
+    
+    if (response.failureCount > 0) {
+      console.log(`⚠️ [PUSH] Fallos: ${response.failureCount}`);
+      
+      // Limpiar tokens inválidos
+      const failedTokens = [];
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          failedTokens.push(validTokens[idx]);
+          console.log(`❌ [PUSH] Token inválido: ${resp.error?.code}`);
+        }
+      });
+
+      // Eliminar tokens inválidos de Firestore
+      if (failedTokens.length > 0) {
+        await cleanInvalidTokens(failedTokens);
+      }
+    }
+
+    return {
+      success: true,
+      successCount: response.successCount,
+      failureCount: response.failureCount
+    };
+
+  } catch (error) {
+    console.error('❌ [PUSH] Error enviando notificación:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Limpiar tokens inválidos
+async function cleanInvalidTokens(invalidTokens) {
+  try {
+    const usersRef = db.collection('users');
+    const snapshot = await usersRef.where('fcmTokens', 'array-contains-any', invalidTokens.slice(0, 10)).get();
+    
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => {
+      const userData = doc.data();
+      const validTokens = userData.fcmTokens?.filter(token => !invalidTokens.includes(token)) || [];
+      batch.update(doc.ref, { fcmTokens: validTokens });
+    });
+    
+    await batch.commit();
+    console.log(`🧹 [PUSH] Tokens inválidos limpiados: ${invalidTokens.length}`);
+  } catch (error) {
+    console.error('❌ [PUSH] Error limpiando tokens:', error);
+  }
+}
+
+// Registrar/actualizar token FCM del dispositivo
+app.post('/api/notifications/register-token', authenticateToken, async (req, res) => {
+  try {
+    const { token, platform } = req.body;
+    const userId = req.user.uid;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token FCM requerido'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    const userData = userDoc.data();
+    const currentTokens = userData.fcmTokens || [];
+
+    // Agregar token si no existe
+    if (!currentTokens.includes(token)) {
+      await userRef.update({
+        fcmTokens: admin.firestore.FieldValue.arrayUnion(token),
+        lastTokenUpdate: admin.firestore.Timestamp.fromDate(new Date()),
+        platform: platform || 'unknown'
+      });
+      console.log('✅ [PUSH] Token registrado para:', userId);
+    } else {
+      console.log('ℹ️ [PUSH] Token ya existe para:', userId);
+    }
+
+    res.json({
+      success: true,
+      message: 'Token registrado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [PUSH] Error registrando token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando token',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar token FCM (logout o desinstalación)
+app.post('/api/notifications/remove-token', authenticateToken, async (req, res) => {
+  try {
+    const { token } = req.body;
+    const userId = req.user.uid;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token FCM requerido'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    await db.collection('users').doc(userId).update({
+      fcmTokens: admin.firestore.FieldValue.arrayRemove(token)
+    });
+
+    console.log('✅ [PUSH] Token eliminado para:', userId);
+
+    res.json({
+      success: true,
+      message: 'Token eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [PUSH] Error eliminando token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando token',
+      error: error.message
+    });
+  }
+});
+
+// Enviar notificación cuando hay un nuevo mensaje
+app.post('/api/notifications/new-message', authenticateToken, async (req, res) => {
+  try {
+    const { receiverId, senderName, message, productId, productTitle } = req.body;
+
+    if (!receiverId || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'receiverId y message son requeridos'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener tokens del receptor
+    const receiverDoc = await db.collection('users').doc(receiverId).get();
+    if (!receiverDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario receptor no encontrado'
+      });
+    }
+
+    const receiverData = receiverDoc.data();
+    const tokens = receiverData.fcmTokens || [];
+
+    if (tokens.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Usuario no tiene tokens registrados'
+      });
+    }
+
+    // Enviar notificación
+    const notification = {
+      title: `💬 Nuevo mensaje de ${senderName}`,
+      body: message.length > 100 ? message.substring(0, 100) + '...' : message,
+      imageUrl: null
+    };
+
+    const data = {
+      type: 'new_message',
+      senderId: req.user.uid,
+      senderName: senderName || 'Usuario',
+      productId: productId || '',
+      productTitle: productTitle || '',
+      screen: 'ChatScreen',
+      chatId: `${req.user.uid}_${receiverId}_${productId}`
+    };
+
+    const result = await sendPushNotification(tokens, notification, data);
+
+    // Guardar notificación en Firestore
+    await db.collection('notifications').add({
+      userId: receiverId,
+      type: 'new_message',
+      title: notification.title,
+      body: notification.body,
+      data: data,
+      read: false,
+      createdAt: admin.firestore.Timestamp.fromDate(new Date())
+    });
+
+    res.json({
+      success: true,
+      message: 'Notificación enviada',
+      result
+    });
+
+  } catch (error) {
+    console.error('❌ [PUSH] Error enviando notificación de mensaje:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando notificación',
+      error: error.message
+    });
+  }
+});
+
+// Enviar notificación de compra/venta
+app.post('/api/notifications/transaction', authenticateToken, async (req, res) => {
+  try {
+    const { sellerId, buyerName, productTitle, transactionType } = req.body;
+
+    if (!sellerId || !productTitle) {
+      return res.status(400).json({
+        success: false,
+        message: 'sellerId y productTitle son requeridos'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener tokens del vendedor
+    const sellerDoc = await db.collection('users').doc(sellerId).get();
+    if (!sellerDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario vendedor no encontrado'
+      });
+    }
+
+    const sellerData = sellerDoc.data();
+    const tokens = sellerData.fcmTokens || [];
+
+    if (tokens.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Vendedor no tiene tokens registrados'
+      });
+    }
+
+    // Preparar notificación según el tipo
+    let notification;
+    let data;
+
+    switch (transactionType) {
+      case 'purchase':
+        notification = {
+          title: '🎉 ¡Venta realizada!',
+          body: `${buyerName} compró tu producto: ${productTitle}`,
+          imageUrl: null
+        };
+        data = {
+          type: 'purchase',
+          buyerId: req.user.uid,
+          buyerName: buyerName || 'Usuario',
+          productTitle,
+          screen: 'MyProductsScreen'
+        };
+        break;
+
+      case 'reservation':
+        notification = {
+          title: '📌 Producto reservado',
+          body: `${buyerName} reservó tu producto: ${productTitle}`,
+          imageUrl: null
+        };
+        data = {
+          type: 'reservation',
+          buyerId: req.user.uid,
+          buyerName: buyerName || 'Usuario',
+          productTitle,
+          screen: 'MyProductsScreen'
+        };
+        break;
+
+      case 'interest':
+        notification = {
+          title: '👀 Alguien está interesado',
+          body: `${buyerName} mostró interés en: ${productTitle}`,
+          imageUrl: null
+        };
+        data = {
+          type: 'interest',
+          userId: req.user.uid,
+          userName: buyerName || 'Usuario',
+          productTitle,
+          screen: 'MyProductsScreen'
+        };
+        break;
+
+      default:
+        notification = {
+          title: '📦 Actualización de producto',
+          body: `Hay una actualización sobre: ${productTitle}`,
+          imageUrl: null
+        };
+        data = {
+          type: 'transaction',
+          productTitle,
+          screen: 'MyProductsScreen'
+        };
+    }
+
+    const result = await sendPushNotification(tokens, notification, data);
+
+    // Guardar notificación en Firestore
+    await db.collection('notifications').add({
+      userId: sellerId,
+      type: transactionType || 'transaction',
+      title: notification.title,
+      body: notification.body,
+      data: data,
+      read: false,
+      createdAt: admin.firestore.Timestamp.fromDate(new Date())
+    });
+
+    res.json({
+      success: true,
+      message: 'Notificación enviada',
+      result
+    });
+
+  } catch (error) {
+    console.error('❌ [PUSH] Error enviando notificación de transacción:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando notificación',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// 🛠️ ADMIN - ENVIAR NOTIFICACIONES DESDE EL DASHBOARD
+// ============================================================================
+
+// Enviar notificación a usuarios específicos
+app.post('/api/admin/notifications/send', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { userIds, title, body, imageUrl, data, screen } = req.body;
+
+    if (!title || !body) {
+      return res.status(400).json({
+        success: false,
+        message: 'Título y mensaje son requeridos'
+      });
+    }
+
+    if (!userIds || userIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe especificar al menos un usuario'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener tokens de los usuarios
+    let allTokens = [];
+    for (const userId of userIds) {
+      const userDoc = await db.collection('users').doc(userId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        if (userData.fcmTokens && userData.fcmTokens.length > 0) {
+          allTokens = allTokens.concat(userData.fcmTokens);
+        }
+      }
+    }
+
+    if (allTokens.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ningún usuario tiene tokens registrados'
+      });
+    }
+
+    const notification = {
+      title,
+      body,
+      imageUrl: imageUrl || null
+    };
+
+    const notificationData = {
+      type: 'admin_notification',
+      screen: screen || 'HomeScreen',
+      ...(data || {})
+    };
+
+    const result = await sendPushNotification(allTokens, notification, notificationData);
+
+    // Guardar notificación para cada usuario
+    const batch = db.batch();
+    userIds.forEach(userId => {
+      const notifRef = db.collection('notifications').doc();
+      batch.set(notifRef, {
+        userId,
+        type: 'admin_notification',
+        title,
+        body,
+        imageUrl: imageUrl || null,
+        data: notificationData,
+        read: false,
+        sentBy: req.user.uid,
+        createdAt: admin.firestore.Timestamp.fromDate(new Date())
+      });
+    });
+    await batch.commit();
+
+    console.log(`✅ [ADMIN] Notificación enviada a ${userIds.length} usuarios`);
+
+    res.json({
+      success: true,
+      message: `Notificación enviada a ${userIds.length} usuarios`,
+      result
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error enviando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando notificación',
+      error: error.message
+    });
+  }
+});
+
+// Enviar notificación a todos los usuarios (broadcast)
+app.post('/api/admin/notifications/broadcast', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { title, body, imageUrl, data, screen, segment } = req.body;
+
+    if (!title || !body) {
+      return res.status(400).json({
+        success: false,
+        message: 'Título y mensaje son requeridos'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Construir query según segmento
+    let query = db.collection('users');
+
+    // Aplicar filtros de segmentación
+    if (segment) {
+      if (segment.hasChildren !== undefined) {
+        query = query.where('hasChildren', '==', segment.hasChildren);
+      }
+      if (segment.city) {
+        query = query.where('city', '==', segment.city);
+      }
+      if (segment.state) {
+        query = query.where('state', '==', segment.state);
+      }
+    }
+
+    const snapshot = await query.get();
+    
+    if (snapshot.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se encontraron usuarios con los filtros especificados'
+      });
+    }
+
+    // Recolectar todos los tokens
+    let allTokens = [];
+    const userIds = [];
+
+    snapshot.docs.forEach(doc => {
+      const userData = doc.data();
+      if (userData.fcmTokens && userData.fcmTokens.length > 0) {
+        allTokens = allTokens.concat(userData.fcmTokens);
+        userIds.push(doc.id);
+      }
+    });
+
+    if (allTokens.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ningún usuario tiene tokens registrados'
+      });
+    }
+
+    const notification = {
+      title,
+      body,
+      imageUrl: imageUrl || null
+    };
+
+    const notificationData = {
+      type: 'broadcast',
+      screen: screen || 'HomeScreen',
+      ...(data || {})
+    };
+
+    // Enviar en lotes de 500 (límite de FCM)
+    const batchSize = 500;
+    let totalSuccess = 0;
+    let totalFailure = 0;
+
+    for (let i = 0; i < allTokens.length; i += batchSize) {
+      const tokenBatch = allTokens.slice(i, i + batchSize);
+      const result = await sendPushNotification(tokenBatch, notification, notificationData);
+      totalSuccess += result.successCount || 0;
+      totalFailure += result.failureCount || 0;
+    }
+
+    // Guardar notificación para cada usuario (en lotes)
+    const batchPromises = [];
+    for (let i = 0; i < userIds.length; i += 500) {
+      const userBatch = userIds.slice(i, i + 500);
+      const batch = db.batch();
+      
+      userBatch.forEach(userId => {
+        const notifRef = db.collection('notifications').doc();
+        batch.set(notifRef, {
+          userId,
+          type: 'broadcast',
+          title,
+          body,
+          imageUrl: imageUrl || null,
+          data: notificationData,
+          read: false,
+          sentBy: req.user.uid,
+          segment: segment || null,
+          createdAt: admin.firestore.Timestamp.fromDate(new Date())
+        });
+      });
+      
+      batchPromises.push(batch.commit());
+    }
+
+    await Promise.all(batchPromises);
+
+    console.log(`✅ [ADMIN] Broadcast enviado a ${userIds.length} usuarios`);
+
+    res.json({
+      success: true,
+      message: `Notificación enviada a ${userIds.length} usuarios`,
+      stats: {
+        usersCount: userIds.length,
+        tokensCount: allTokens.length,
+        successCount: totalSuccess,
+        failureCount: totalFailure
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error enviando broadcast:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando broadcast',
+      error: error.message
+    });
+  }
+});
+
+// Programar notificación para envío futuro
+app.post('/api/admin/notifications/schedule', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { title, body, imageUrl, data, screen, userIds, segment, scheduledFor } = req.body;
+
+    if (!title || !body) {
+      return res.status(400).json({
+        success: false,
+        message: 'Título y mensaje son requeridos'
+      });
+    }
+
+    if (!scheduledFor) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fecha de envío programada es requerida'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const scheduledDate = new Date(scheduledFor);
+    if (scheduledDate <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'La fecha programada debe ser futura'
+      });
+    }
+
+    // Guardar notificación programada
+    const scheduledNotification = {
+      title,
+      body,
+      imageUrl: imageUrl || null,
+      data: data || {},
+      screen: screen || 'HomeScreen',
+      userIds: userIds || null,
+      segment: segment || null,
+      scheduledFor: admin.firestore.Timestamp.fromDate(scheduledDate),
+      status: 'pending',
+      createdBy: req.user.uid,
+      createdAt: admin.firestore.Timestamp.fromDate(new Date())
+    };
+
+    const docRef = await db.collection('scheduled_notifications').add(scheduledNotification);
+
+    console.log(`✅ [ADMIN] Notificación programada para: ${scheduledDate}`);
+
+    res.json({
+      success: true,
+      message: 'Notificación programada exitosamente',
+      id: docRef.id,
+      scheduledFor: scheduledDate
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error programando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error programando notificación',
+      error: error.message
+    });
+  }
+});
+
+// Listar notificaciones programadas
+app.get('/api/admin/notifications/scheduled', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { status = 'pending', page = 1, limit = 20 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('scheduled_notifications');
+
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+
+    query = query.orderBy('scheduledFor', 'desc');
+
+    const snapshot = await query.get();
+    let notifications = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Paginación
+    const total = notifications.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedNotifications = notifications.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedNotifications,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo notificaciones programadas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo notificaciones programadas',
+      error: error.message
+    });
+  }
+});
+
+// Cancelar notificación programada
+app.delete('/api/admin/notifications/scheduled/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    await db.collection('scheduled_notifications').doc(id).update({
+      status: 'cancelled',
+      cancelledBy: req.user.uid,
+      cancelledAt: admin.firestore.Timestamp.fromDate(new Date())
+    });
+
+    console.log(`✅ [ADMIN] Notificación programada cancelada: ${id}`);
+
+    res.json({
+      success: true,
+      message: 'Notificación cancelada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error cancelando notificación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cancelando notificación',
+      error: error.message
+    });
+  }
+});
+
+// Obtener historial de notificaciones enviadas
+app.get('/api/admin/notifications/history', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, type = '' } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('notifications');
+
+    if (type) {
+      query = query.where('type', '==', type);
+    }
+
+    query = query.orderBy('createdAt', 'desc');
+
+    const snapshot = await query.get();
+    let notifications = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Paginación
+    const total = notifications.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedNotifications = notifications.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedNotifications,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo historial:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo historial',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas de notificaciones
+app.get('/api/admin/notifications/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const notificationsSnapshot = await db.collection('notifications').get();
+    const notifications = notificationsSnapshot.docs.map(doc => doc.data());
+
+    const stats = {
+      total: notifications.length,
+      byType: {},
+      read: notifications.filter(n => n.read).length,
+      unread: notifications.filter(n => !n.read).length,
+      last24h: notifications.filter(n => {
+        const createdAt = n.createdAt?.toDate() || new Date(0);
+        const dayAgo = new Date();
+        dayAgo.setDate(dayAgo.getDate() - 1);
+        return createdAt >= dayAgo;
+      }).length,
+      last7days: notifications.filter(n => {
+        const createdAt = n.createdAt?.toDate() || new Date(0);
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        return createdAt >= weekAgo;
+      }).length
+    };
+
+    // Contar por tipo
+    notifications.forEach(n => {
+      const type = n.type || 'other';
+      stats.byType[type] = (stats.byType[type] || 0) + 1;
+    });
+
+    res.json({
+      success: true,
+      data: stats
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
