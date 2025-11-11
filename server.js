@@ -17184,9 +17184,44 @@ app.get('/api/marketplace/messages/:productId', authenticateToken, async (req, r
       .orderBy('createdAt', 'asc')
       .get();
 
-    const messages = messagesSnapshot.docs
+    let messages = messagesSnapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data() }))
       .filter(msg => msg.senderId === uid || msg.receiverId === uid);
+
+    // Enriquecer mensajes con información actual de usuarios si falta
+    const usersCache = {};
+    
+    for (let msg of messages) {
+      // Enriquecer información del sender si falta
+      if (!msg.senderPhoto && msg.senderId) {
+        if (!usersCache[msg.senderId]) {
+          const userDoc = await db.collection('users').doc(msg.senderId).get();
+          if (userDoc.exists) {
+            usersCache[msg.senderId] = userDoc.data();
+          }
+        }
+        if (usersCache[msg.senderId]) {
+          msg.senderName = usersCache[msg.senderId].name || msg.senderName || 'Usuario';
+          msg.senderPhoto = usersCache[msg.senderId].photoUrl || null;
+        }
+      }
+
+      // Enriquecer información del receiver si falta
+      if (!msg.receiverPhoto && msg.receiverId) {
+        if (!usersCache[msg.receiverId]) {
+          const userDoc = await db.collection('users').doc(msg.receiverId).get();
+          if (userDoc.exists) {
+            usersCache[msg.receiverId] = userDoc.data();
+          }
+        }
+        if (usersCache[msg.receiverId]) {
+          msg.receiverName = usersCache[msg.receiverId].name || msg.receiverName || 'Usuario';
+          msg.receiverPhoto = usersCache[msg.receiverId].photoUrl || null;
+        }
+      }
+    }
+
+    console.log(`✅ [MARKETPLACE] Mensajes obtenidos para producto ${productId}: ${messages.length}`);
 
     res.json({
       success: true,
@@ -17243,13 +17278,19 @@ app.post('/api/marketplace/messages', authenticateToken, async (req, res) => {
     const userDoc = await db.collection('users').doc(uid).get();
     const userData = userDoc.data();
 
+    // Obtener información del receiver
+    const receiverDoc = await db.collection('users').doc(productData.userId).get();
+    const receiverData = receiverDoc.exists ? receiverDoc.data() : {};
+
     // Crear mensaje
     const messageData = {
       productId,
       senderId: uid,
       senderName: userData?.name || 'Usuario',
+      senderPhoto: userData?.photoUrl || null,
       receiverId: productData.userId,
-      receiverName: productData.userName,
+      receiverName: receiverData?.name || productData.userName || 'Usuario',
+      receiverPhoto: receiverData?.photoUrl || null,
       message: message.trim(),
       isRead: false,
       createdAt: new Date()
