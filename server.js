@@ -20232,25 +20232,49 @@ app.get('/api/notifications', authenticateToken, async (req, res) => {
       });
     }
 
-    let query = db.collection('notifications').where('userId', '==', userId);
+    // Obtener todas las notificaciones del usuario
+    const snapshot = await db.collection('notifications')
+      .where('userId', '==', userId)
+      .get();
 
-    // Filtrar solo no leídas si se especifica
-    if (unreadOnly === 'true') {
-      query = query.where('read', '==', false);
+    // Si está vacío, devolver array vacío
+    if (snapshot.empty) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: 0,
+          unreadCount: 0
+        }
+      });
     }
 
-    query = query.orderBy('createdAt', 'desc');
-
-    const snapshot = await query.get();
     let notifications = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
       createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
     }));
 
+    // Filtrar solo no leídas si se especifica
+    if (unreadOnly === 'true') {
+      notifications = notifications.filter(n => !n.read);
+    }
+
+    // Ordenar por fecha de creación (más reciente primero)
+    notifications.sort((a, b) => {
+      const dateA = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt || 0);
+      const dateB = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt || 0);
+      return dateB - dateA;
+    });
+
+    // Calcular contador de no leídas antes de paginar
+    const unreadCount = snapshot.docs.filter(doc => !doc.data().read).length;
+
     // Paginación
     const total = notifications.length;
-    const unreadCount = notifications.filter(n => !n.read).length;
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedNotifications = notifications.slice(startIndex, endIndex);
@@ -21044,7 +21068,7 @@ app.post('/api/admin/notifications/schedule', authenticateToken, isAdmin, async 
 // Listar notificaciones programadas
 app.get('/api/admin/notifications/scheduled', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { status = 'pending', page = 1, limit = 20 } = req.query;
+    const { status = '', page = 1, limit = 20 } = req.query;
 
     if (!db) {
       return res.status(500).json({
@@ -21053,25 +21077,49 @@ app.get('/api/admin/notifications/scheduled', authenticateToken, isAdmin, async 
       });
     }
 
-    let query = db.collection('scheduled_notifications');
-
-    if (status) {
-      query = query.where('status', '==', status);
+    // Obtener todas las notificaciones programadas
+    const snapshot = await db.collection('scheduled_notifications').get();
+    
+    // Si la colección está vacía, devolver array vacío
+    if (snapshot.empty) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: 0
+        }
+      });
     }
 
-    query = query.orderBy('scheduledFor', 'desc');
-
-    const snapshot = await query.get();
     let notifications = snapshot.docs.map(doc => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
+      scheduledFor: doc.data().scheduledFor?.toDate?.() || doc.data().scheduledFor,
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
     }));
+
+    // Filtrar por status si se especifica
+    if (status) {
+      notifications = notifications.filter(n => n.status === status);
+    }
+
+    // Ordenar por fecha programada (más reciente primero)
+    notifications.sort((a, b) => {
+      const dateA = a.scheduledFor instanceof Date ? a.scheduledFor : new Date(a.scheduledFor);
+      const dateB = b.scheduledFor instanceof Date ? b.scheduledFor : new Date(b.scheduledFor);
+      return dateB - dateA;
+    });
 
     // Paginación
     const total = notifications.length;
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedNotifications = notifications.slice(startIndex, endIndex);
+
+    console.log(`✅ [ADMIN] Notificaciones programadas obtenidas: ${paginatedNotifications.length}`);
 
     res.json({
       success: true,
@@ -21141,25 +21189,48 @@ app.get('/api/admin/notifications/history', authenticateToken, isAdmin, async (r
       });
     }
 
-    let query = db.collection('notifications');
-
-    if (type) {
-      query = query.where('type', '==', type);
+    // Obtener todas las notificaciones
+    const snapshot = await db.collection('notifications').get();
+    
+    // Si está vacío, devolver array vacío
+    if (snapshot.empty) {
+      return res.json({
+        success: true,
+        data: [],
+        pagination: {
+          total: 0,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: 0
+        }
+      });
     }
 
-    query = query.orderBy('createdAt', 'desc');
-
-    const snapshot = await query.get();
     let notifications = snapshot.docs.map(doc => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
     }));
+
+    // Filtrar por tipo si se especifica
+    if (type) {
+      notifications = notifications.filter(n => n.type === type);
+    }
+
+    // Ordenar por fecha de creación (más reciente primero)
+    notifications.sort((a, b) => {
+      const dateA = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt);
+      const dateB = b.createdAt instanceof Date ? b.createdAt : new Date(b.createdAt);
+      return dateB - dateA;
+    });
 
     // Paginación
     const total = notifications.length;
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedNotifications = notifications.slice(startIndex, endIndex);
+
+    console.log(`✅ [ADMIN] Historial de notificaciones obtenido: ${paginatedNotifications.length}`);
 
     res.json({
       success: true,
