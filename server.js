@@ -12733,6 +12733,81 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
     
     console.log('✅ [POST] Publicación creada exitosamente:', postRef.id);
 
+    // Enviar notificaciones push a todos los miembros de la comunidad (excepto al autor)
+    try {
+      const authorDoc = await db.collection('users').doc(uid).get();
+      const authorData = authorDoc.exists ? authorDoc.data() : {};
+      const authorName = authorData.displayName || authorData.name || 'Un miembro';
+      const communityName = communityData.name || 'la comunidad';
+
+      // Obtener tokens de todos los miembros excepto el autor
+      const membersToNotify = communityData.members.filter(memberId => memberId !== uid);
+      
+      if (membersToNotify.length > 0) {
+        console.log(`📤 [COMMUNITY] Enviando notificación de nueva publicación a ${membersToNotify.length} miembros`);
+        
+        const tokensPromises = membersToNotify.map(async (memberId) => {
+          try {
+            const memberDoc = await db.collection('users').doc(memberId).get();
+            if (memberDoc.exists) {
+              const memberData = memberDoc.data();
+              return { userId: memberId, tokens: memberData.fcmTokens || [] };
+            }
+          } catch (error) {
+            console.warn(`⚠️ [COMMUNITY] Error obteniendo tokens del miembro ${memberId}:`, error.message);
+          }
+          return { userId: memberId, tokens: [] };
+        });
+        
+        const usersWithTokens = await Promise.all(tokensPromises);
+        const allTokens = usersWithTokens.flatMap(u => u.tokens);
+        
+        if (allTokens.length > 0) {
+          const notification = {
+            title: `📢 ${authorName} publicó en ${communityName}`,
+            body: content.trim().length > 100 ? content.trim().substring(0, 100) + '...' : content.trim()
+          };
+
+          const notificationData = {
+            type: 'community_post',
+            postId: postRef.id,
+            communityId: communityId,
+            communityName: communityName,
+            authorId: uid,
+            authorName: authorName,
+            screen: 'CommunityPostScreen'
+          };
+
+          const pushResult = await sendPushNotification(allTokens, notification, notificationData);
+          console.log(`✅ [COMMUNITY] Notificaciones enviadas: ${pushResult.successCount} exitosas, ${pushResult.failureCount} fallidas`);
+
+          // Guardar notificaciones en Firestore para cada usuario
+          const batch = db.batch();
+          usersWithTokens.forEach(userWithTokens => {
+            if (userWithTokens.tokens.length > 0) {
+              const notifRef = db.collection('notifications').doc();
+              batch.set(notifRef, {
+                userId: userWithTokens.userId,
+                type: 'community_post',
+                title: notification.title,
+                body: notification.body,
+                data: notificationData,
+                read: false,
+                createdAt: admin.firestore.Timestamp.fromDate(new Date())
+              });
+            }
+          });
+          await batch.commit();
+          console.log(`✅ [COMMUNITY] ${membersToNotify.length} notificaciones guardadas en Firestore`);
+        } else {
+          console.log('⚠️ [COMMUNITY] Ningún miembro tiene tokens FCM registrados');
+        }
+      }
+    } catch (notificationError) {
+      console.error('❌ [COMMUNITY] Error enviando notificaciones de nueva publicación:', notificationError);
+      // No fallar la creación de la publicación si falla la notificación
+    }
+
     res.json({
       success: true,
       message: 'Publicación creada exitosamente',
@@ -12963,6 +13038,69 @@ app.post('/api/posts/:postId/comments', authenticateToken, async (req, res) => {
     });
 
     console.log('✅ [COMMENT] Comentario creado exitosamente:', commentRef.id);
+
+    // Enviar notificación push al autor de la publicación (si no es él mismo)
+    try {
+      const postData = postDoc.data();
+      const postAuthorId = postData.authorId;
+
+      if (postAuthorId && postAuthorId !== uid) {
+        console.log(`📤 [COMMENT] Enviando notificación al autor de la publicación: ${postAuthorId}`);
+
+        // Obtener información del comentarista
+        const commenterDoc = await db.collection('users').doc(uid).get();
+        const commenterData = commenterDoc.exists ? commenterDoc.data() : {};
+        const commenterName = commenterData.displayName || commenterData.name || 'Alguien';
+
+        // Obtener tokens del autor de la publicación
+        const postAuthorDoc = await db.collection('users').doc(postAuthorId).get();
+        if (postAuthorDoc.exists) {
+          const postAuthorData = postAuthorDoc.data();
+          const authorTokens = postAuthorData.fcmTokens || [];
+
+          if (authorTokens.length > 0) {
+            const notification = {
+              title: `💬 ${commenterName} comentó tu publicación`,
+              body: content.trim().length > 100 ? content.trim().substring(0, 100) + '...' : content.trim()
+            };
+
+            const notificationData = {
+              type: 'post_comment',
+              postId: postId,
+              commentId: commentRef.id,
+              commenterId: uid,
+              commenterName: commenterName,
+              screen: 'PostDetailScreen'
+            };
+
+            const pushResult = await sendPushNotification(authorTokens, notification, notificationData);
+            console.log(`✅ [COMMENT] Notificación enviada: ${pushResult.successCount} exitosas, ${pushResult.failureCount} fallidas`);
+
+            // Guardar notificación en Firestore
+            await db.collection('notifications').add({
+              userId: postAuthorId,
+              type: 'post_comment',
+              title: notification.title,
+              body: notification.body,
+              data: notificationData,
+              read: false,
+              createdAt: admin.firestore.Timestamp.fromDate(new Date())
+            });
+
+            console.log('✅ [COMMENT] Notificación guardada en Firestore');
+          } else {
+            console.log('⚠️ [COMMENT] El autor de la publicación no tiene tokens FCM registrados');
+          }
+        } else {
+          console.log(`⚠️ [COMMENT] Autor de la publicación ${postAuthorId} no encontrado`);
+        }
+      } else {
+        console.log('ℹ️ [COMMENT] No se envía notificación: el autor comentó su propia publicación');
+      }
+    } catch (notificationError) {
+      console.error('❌ [COMMENT] Error enviando notificación de comentario:', notificationError);
+      // No fallar la creación del comentario si falla la notificación
+    }
 
     res.json({
       success: true,
