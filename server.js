@@ -9042,6 +9042,570 @@ app.delete('/api/auth/children/:childId', authenticateToken, async (req, res) =>
   }
 });
 
+// ============================================================================
+// 🤝 SISTEMA DE COMPARTIR HIJOS
+// ============================================================================
+
+// Generar link de invitación para compartir un hijo
+app.post('/api/auth/children/:childId/share', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { role = 'otro', expiresInDays = 7 } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo existe y pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+    if (childData.parentId !== uid && !childData.sharedWith?.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para compartir este hijo'
+      });
+    }
+
+    // Validar rol
+    const validRoles = ['padre', 'madre', 'cuidadora', 'familiar', 'otro'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rol inválido. Debe ser: padre, madre, cuidadora, familiar u otro'
+      });
+    }
+
+    // Generar token único
+    const crypto = require('crypto');
+    const token = crypto.randomBytes(32).toString('hex');
+
+    // Calcular fecha de expiración
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + parseInt(expiresInDays));
+
+    // Guardar invitación
+    const invitationData = {
+      token,
+      childId,
+      childName: childData.name,
+      invitedBy: uid,
+      role,
+      status: 'pending',
+      createdAt: new Date(),
+      expiresAt
+    };
+
+    await db.collection('childInvitations').add(invitationData);
+
+    console.log(`✅ [SHARE] Invitación creada para hijo ${childId} por ${uid}`);
+
+    // Generar link
+    const invitationLink = `munpa://share-child/${token}`;
+
+    res.json({
+      success: true,
+      message: 'Invitación creada exitosamente',
+      data: {
+        token,
+        invitationLink,
+        expiresAt: expiresAt.toISOString(),
+        childName: childData.name,
+        role
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error creando invitación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando invitación',
+      error: error.message
+    });
+  }
+});
+
+// Ver invitaciones pendientes del usuario
+app.get('/api/auth/children/invitations', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener invitaciones pendientes (no es necesario que sean específicas del usuario, 
+    // cualquiera con el link puede aceptar)
+    const invitationsSnapshot = await db.collection('childInvitations')
+      .where('status', '==', 'pending')
+      .where('expiresAt', '>', new Date())
+      .get();
+
+    const invitations = [];
+    for (const doc of invitationsSnapshot.docs) {
+      const data = doc.data();
+      
+      // Obtener info del usuario que invitó
+      let inviterName = 'Usuario';
+      try {
+        const inviterDoc = await db.collection('users').doc(data.invitedBy).get();
+        if (inviterDoc.exists) {
+          const inviterData = inviterDoc.data();
+          inviterName = inviterData.displayName || inviterData.name || 'Usuario';
+        }
+      } catch (error) {
+        console.warn('⚠️ [SHARE] Error obteniendo info del invitador:', error);
+      }
+
+      invitations.push({
+        id: doc.id,
+        token: data.token,
+        childName: data.childName,
+        invitedBy: data.invitedBy,
+        inviterName,
+        role: data.role,
+        status: data.status,
+        createdAt: data.createdAt,
+        expiresAt: data.expiresAt
+      });
+    }
+
+    res.json({
+      success: true,
+      data: invitations
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error obteniendo invitaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo invitaciones',
+      error: error.message
+    });
+  }
+});
+
+// Aceptar invitación (desde el link)
+app.post('/api/auth/children/invitations/:token/accept', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { token } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Buscar invitación por token
+    const invitationsSnapshot = await db.collection('childInvitations')
+      .where('token', '==', token)
+      .limit(1)
+      .get();
+
+    if (invitationsSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invitación no encontrada'
+      });
+    }
+
+    const invitationDoc = invitationsSnapshot.docs[0];
+    const invitationData = invitationDoc.data();
+
+    // Validar que no esté expirada
+    if (invitationData.expiresAt.toDate() < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta invitación ha expirado'
+      });
+    }
+
+    // Validar que no esté ya aceptada o rechazada
+    if (invitationData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Esta invitación ya fue ${invitationData.status === 'accepted' ? 'aceptada' : 'rechazada'}`
+      });
+    }
+
+    // Validar que no sea el mismo usuario que creó la invitación
+    if (invitationData.invitedBy === uid) {
+      return res.status(400).json({
+        success: false,
+        message: 'No puedes aceptar tu propia invitación'
+      });
+    }
+
+    // Obtener el hijo
+    const childDoc = await db.collection('children').doc(invitationData.childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'El hijo ya no existe'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    // Verificar que el usuario no tenga ya acceso
+    if (childData.parentId === uid || childData.sharedWith?.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya tienes acceso a este hijo'
+      });
+    }
+
+    // Agregar al usuario a la lista de compartidos
+    await db.collection('children').doc(invitationData.childId).update({
+      sharedWith: admin.firestore.FieldValue.arrayUnion(uid),
+      updatedAt: new Date()
+    });
+
+    // Actualizar invitación
+    await invitationDoc.ref.update({
+      status: 'accepted',
+      acceptedBy: uid,
+      acceptedAt: new Date()
+    });
+
+    // Obtener info del usuario para logging
+    const userDoc = await db.collection('users').doc(uid).get();
+    const userName = userDoc.exists ? (userDoc.data().displayName || userDoc.data().name || 'Usuario') : 'Usuario';
+
+    console.log(`✅ [SHARE] ${userName} (${uid}) aceptó invitación para hijo ${invitationData.childId}`);
+
+    res.json({
+      success: true,
+      message: 'Invitación aceptada exitosamente',
+      data: {
+        childId: invitationData.childId,
+        childName: invitationData.childName,
+        role: invitationData.role
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error aceptando invitación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error aceptando invitación',
+      error: error.message
+    });
+  }
+});
+
+// Rechazar invitación
+app.post('/api/auth/children/invitations/:token/reject', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { token } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Buscar invitación por token
+    const invitationsSnapshot = await db.collection('childInvitations')
+      .where('token', '==', token)
+      .limit(1)
+      .get();
+
+    if (invitationsSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invitación no encontrada'
+      });
+    }
+
+    const invitationDoc = invitationsSnapshot.docs[0];
+    const invitationData = invitationDoc.data();
+
+    // Validar que esté pendiente
+    if (invitationData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `Esta invitación ya fue ${invitationData.status === 'accepted' ? 'aceptada' : 'rechazada'}`
+      });
+    }
+
+    // Actualizar invitación
+    await invitationDoc.ref.update({
+      status: 'rejected',
+      rejectedBy: uid,
+      rejectedAt: new Date()
+    });
+
+    console.log(`✅ [SHARE] Usuario ${uid} rechazó invitación para hijo ${invitationData.childId}`);
+
+    res.json({
+      success: true,
+      message: 'Invitación rechazada'
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error rechazando invitación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rechazando invitación',
+      error: error.message
+    });
+  }
+});
+
+// Ver con quién se comparte un hijo
+app.get('/api/auth/children/:childId/shared-with', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo existe y el usuario tiene acceso
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+    if (childData.parentId !== uid && !childData.sharedWith?.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para ver esta información'
+      });
+    }
+
+    // Obtener lista de usuarios con quienes se comparte
+    const sharedWithUsers = childData.sharedWith || [];
+    const usersInfo = [];
+
+    // Agregar el padre/madre principal
+    try {
+      const parentDoc = await db.collection('users').doc(childData.parentId).get();
+      if (parentDoc.exists) {
+        const parentData = parentDoc.data();
+        usersInfo.push({
+          userId: childData.parentId,
+          name: parentData.displayName || parentData.name || 'Usuario',
+          photoUrl: parentData.photoUrl || null,
+          role: 'principal',
+          isPrincipal: true
+        });
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo info del padre:', error);
+    }
+
+    // Agregar los usuarios compartidos
+    for (const userId of sharedWithUsers) {
+      try {
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          
+          // Buscar el rol en las invitaciones aceptadas
+          let role = 'otro';
+          const invitationSnapshot = await db.collection('childInvitations')
+            .where('childId', '==', childId)
+            .where('acceptedBy', '==', userId)
+            .where('status', '==', 'accepted')
+            .limit(1)
+            .get();
+          
+          if (!invitationSnapshot.empty) {
+            role = invitationSnapshot.docs[0].data().role;
+          }
+
+          usersInfo.push({
+            userId,
+            name: userData.displayName || userData.name || 'Usuario',
+            photoUrl: userData.photoUrl || null,
+            role,
+            isPrincipal: false
+          });
+        }
+      } catch (error) {
+        console.warn(`⚠️ [SHARE] Error obteniendo info del usuario ${userId}:`, error);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: usersInfo
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error obteniendo usuarios compartidos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo usuarios compartidos',
+      error: error.message
+    });
+  }
+});
+
+// Dejar de compartir con un usuario
+app.delete('/api/auth/children/:childId/shared-with/:userId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, userId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el hijo existe
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    // Solo el padre principal puede dejar de compartir
+    if (childData.parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el padre/madre principal puede dejar de compartir'
+      });
+    }
+
+    // No puede eliminar al padre principal
+    if (userId === childData.parentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No puedes eliminar al padre/madre principal'
+      });
+    }
+
+    // Remover usuario de la lista
+    await db.collection('children').doc(childId).update({
+      sharedWith: admin.firestore.FieldValue.arrayRemove(userId),
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ [SHARE] Se dejó de compartir hijo ${childId} con usuario ${userId}`);
+
+    res.json({
+      success: true,
+      message: 'Se dejó de compartir exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error dejando de compartir:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error dejando de compartir',
+      error: error.message
+    });
+  }
+});
+
+// Verificar invitación por token (para mostrar info antes de aceptar/rechazar)
+app.get('/api/auth/children/invitations/:token', authenticateToken, async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Buscar invitación por token
+    const invitationsSnapshot = await db.collection('childInvitations')
+      .where('token', '==', token)
+      .limit(1)
+      .get();
+
+    if (invitationsSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invitación no encontrada'
+      });
+    }
+
+    const invitationData = invitationsSnapshot.docs[0].data();
+
+    // Obtener info del usuario que invitó
+    let inviterName = 'Usuario';
+    let inviterPhoto = null;
+    try {
+      const inviterDoc = await db.collection('users').doc(invitationData.invitedBy).get();
+      if (inviterDoc.exists) {
+        const inviterData = inviterDoc.data();
+        inviterName = inviterData.displayName || inviterData.name || 'Usuario';
+        inviterPhoto = inviterData.photoUrl || null;
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo info del invitador:', error);
+    }
+
+    // Obtener info del hijo
+    const childDoc = await db.collection('children').doc(invitationData.childId).get();
+    let childPhotoUrl = null;
+    if (childDoc.exists) {
+      childPhotoUrl = childDoc.data().photoUrl || null;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        childName: invitationData.childName,
+        childPhotoUrl,
+        inviterName,
+        inviterPhoto,
+        role: invitationData.role,
+        status: invitationData.status,
+        createdAt: invitationData.createdAt,
+        expiresAt: invitationData.expiresAt,
+        isExpired: invitationData.expiresAt.toDate() < new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error obteniendo invitación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo invitación',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para verificar token
 app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
   try {
