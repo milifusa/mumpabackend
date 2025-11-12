@@ -16320,10 +16320,23 @@ app.get('/api/marketplace/products/:id', async (req, res) => {
       });
     }
 
-    const product = {
+    const productData = productDoc.data();
+    
+    // Enriquecer con información actualizada del vendedor
+    const sellerDoc = await db.collection('users').doc(productData.userId).get();
+    let enrichedProduct = {
       id: productDoc.id,
-      ...productDoc.data()
+      ...productData
     };
+    
+    if (sellerDoc.exists) {
+      const sellerData = sellerDoc.data();
+      enrichedProduct.userName = sellerData.displayName || sellerData.name || productData.userName || 'Usuario';
+      enrichedProduct.userPhoto = sellerData.photoUrl || productData.userPhoto || null;
+      console.log(`✅ [MARKETPLACE] Producto ${id} enriquecido con info del vendedor: ${enrichedProduct.userName}`);
+    } else {
+      console.log(`⚠️ [MARKETPLACE] Vendedor ${productData.userId} no encontrado para producto ${id}`);
+    }
 
     // Incrementar contador de vistas
     await db.collection('marketplace_products').doc(id).update({
@@ -16332,7 +16345,7 @@ app.get('/api/marketplace/products/:id', async (req, res) => {
 
     res.json({
       success: true,
-      data: product
+      data: enrichedProduct
     });
 
   } catch (error) {
@@ -16524,7 +16537,7 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
     const now = new Date();
     const productData = {
       userId: uid,
-      userName: userData?.name || 'Usuario',
+      userName: userData?.displayName || userData?.name || 'Usuario',
       userPhoto: userData?.photoUrl || null,
       
       title: title.trim(),
