@@ -4118,20 +4118,76 @@ app.patch('/api/admin/categories/reorder', authenticateToken, isAdmin, async (re
 // Obtener todos los recomendados activos (para la app)
 app.get('/api/recommendations', authenticateToken, async (req, res) => {
   try {
-    const { categoryId } = req.query;
+    const { categoryId, page = 1, limit = 20 } = req.query;
     
-    console.log('⭐ [APP] Obteniendo recomendados', categoryId ? `para categoría: ${categoryId}` : '');
+    const pageNumber = parseInt(page);
+    const limitNumber = parseInt(limit);
+    
+    console.log('⭐ [APP] Obteniendo recomendados', categoryId ? `para categoría: ${categoryId}` : '', `(página ${pageNumber}, límite ${limitNumber})`);
 
+    // Construir query para contar totales
+    let countQuery = db.collection('recommendations')
+      .where('isActive', '==', true);
+
+    if (categoryId) {
+      countQuery = countQuery.where('categoryId', '==', categoryId);
+    }
+
+    // Obtener total de documentos
+    const countSnapshot = await countQuery.get();
+    const total = countSnapshot.size;
+
+    console.log(`📊 [APP] Total de recomendaciones: ${total}`);
+
+    // Construir query paginada
     let query = db.collection('recommendations')
       .where('isActive', '==', true);
 
+    // Si hay filtro de categoría, agregarlo
     if (categoryId) {
       query = query.where('categoryId', '==', categoryId);
     }
 
-    const snapshot = await query.get();
+    // Agregar ordenamiento y paginación
+    try {
+      query = query
+        .orderBy('createdAt', 'desc')
+        .limit(limitNumber)
+        .offset((pageNumber - 1) * limitNumber);
+      
+      var snapshot = await query.get();
+    } catch (indexError) {
+      // Si falla por falta de índice, usar paginación en memoria
+      console.warn('⚠️ [APP] Índice compuesto no disponible, usando paginación en memoria');
+      
+      let simpleQuery = db.collection('recommendations')
+        .where('isActive', '==', true);
+      
+      if (categoryId) {
+        simpleQuery = simpleQuery.where('categoryId', '==', categoryId);
+      }
+      
+      const allDocs = await simpleQuery.get();
+      
+      // Ordenar en memoria
+      const sortedDocs = allDocs.docs.sort((a, b) => {
+        const aTime = a.data().createdAt?.toDate() || new Date(0);
+        const bTime = b.data().createdAt?.toDate() || new Date(0);
+        return bTime - aTime;
+      });
+      
+      // Paginar en memoria
+      const startIndex = (pageNumber - 1) * limitNumber;
+      const endIndex = startIndex + limitNumber;
+      var paginatedDocs = sortedDocs.slice(startIndex, endIndex);
+      
+      // Crear objeto compatible con snapshot
+      snapshot = { docs: paginatedDocs };
+    }
 
-    const recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
+    const paginatedDocs = snapshot.docs;
+
+    const recommendations = await Promise.all(paginatedDocs.map(async (doc) => {
       const data = doc.data();
       
       // Obtener información de la categoría
@@ -4180,9 +4236,19 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
       };
     }));
 
+    console.log(`✅ [APP] Devolviendo ${recommendations.length} recomendaciones de ${total} totales`);
+
     res.json({
       success: true,
-      data: recommendations
+      data: recommendations,
+      pagination: {
+        total,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(total / limitNumber),
+        hasNextPage: pageNumber * limitNumber < total,
+        hasPreviousPage: pageNumber > 1
+      }
     });
 
   } catch (error) {
