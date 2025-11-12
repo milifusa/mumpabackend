@@ -16002,15 +16002,20 @@ app.get('/api/marketplace/products', async (req, res) => {
       }
     }
 
+    console.log('🔍 [MARKETPLACE] Filtros recibidos:', { status, userId, category, condition, transactionType });
+    
     if (status && PRODUCT_STATUS.includes(status)) {
       query = query.where('status', '==', status);
+      console.log('✅ [MARKETPLACE] Filtrando por status:', status);
     } else {
       // Por defecto, solo mostrar productos disponibles
       query = query.where('status', '==', 'disponible');
+      console.log('✅ [MARKETPLACE] Filtrando por status por defecto: disponible');
     }
 
     if (userId) {
       query = query.where('userId', '==', userId);
+      console.log('✅ [MARKETPLACE] Filtrando por userId:', userId);
     }
 
     // Filtro de aprobación (deshabilitado temporalmente para compatibilidad)
@@ -16058,11 +16063,23 @@ app.get('/api/marketplace/products', async (req, res) => {
       );
     }
 
+    // Logging de productos encontrados
+    console.log(`📊 [MARKETPLACE] Productos encontrados: ${products.length}`);
+    if (products.length > 0) {
+      const statusCounts = products.reduce((acc, p) => {
+        acc[p.status] = (acc[p.status] || 0) + 1;
+        return acc;
+      }, {});
+      console.log('📊 [MARKETPLACE] Distribución por status:', statusCounts);
+    }
+    
     // Paginación
     const total = products.length;
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + parseInt(limit);
     const paginatedProducts = products.slice(startIndex, endIndex);
+
+    console.log(`📄 [MARKETPLACE] Devolviendo página ${page}: ${paginatedProducts.length} productos (de ${total} totales)`);
 
     res.json({
       success: true,
@@ -16883,11 +16900,20 @@ app.patch('/api/marketplace/products/:id/status', authenticateToken, async (req,
     await db.collection('marketplace_products').doc(id).update(updateData);
 
     console.log('✅ [MARKETPLACE] Estado actualizado:', id, '->', status);
+    console.log('📝 [MARKETPLACE] Datos actualizados:', JSON.stringify(updateData, null, 2));
+    
+    // Verificar que se guardó correctamente
+    const updatedDoc = await db.collection('marketplace_products').doc(id).get();
+    const updatedData = updatedDoc.data();
+    console.log('🔍 [MARKETPLACE] Verificación - Status en BD:', updatedData.status);
 
     res.json({
       success: true,
       message: 'Estado actualizado exitosamente',
-      data: updateData
+      data: {
+        ...updateData,
+        currentStatus: updatedData.status // Incluir el status actual de la BD
+      }
     });
 
   } catch (error) {
