@@ -4149,13 +4149,14 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
     }
 
     // Agregar ordenamiento y paginación
+    let snapshot;
     try {
       query = query
         .orderBy('createdAt', 'desc')
         .limit(limitNumber)
         .offset((pageNumber - 1) * limitNumber);
       
-      var snapshot = await query.get();
+      snapshot = await query.get();
     } catch (indexError) {
       // Si falla por falta de índice, usar paginación en memoria
       console.warn('⚠️ [APP] Índice compuesto no disponible, usando paginación en memoria');
@@ -4179,15 +4180,13 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
       // Paginar en memoria
       const startIndex = (pageNumber - 1) * limitNumber;
       const endIndex = startIndex + limitNumber;
-      var paginatedDocs = sortedDocs.slice(startIndex, endIndex);
+      const paginatedDocs = sortedDocs.slice(startIndex, endIndex);
       
       // Crear objeto compatible con snapshot
       snapshot = { docs: paginatedDocs };
     }
 
-    const paginatedDocs = snapshot.docs;
-
-    const recommendations = await Promise.all(paginatedDocs.map(async (doc) => {
+    const recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
       const data = doc.data();
       
       // Obtener información de la categoría
