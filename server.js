@@ -16002,7 +16002,7 @@ app.get('/api/marketplace/products', async (req, res) => {
       }
     }
 
-    console.log('🔍 [MARKETPLACE] Filtros recibidos:', { status, userId, category, condition, transactionType });
+    console.log('🔍 [MARKETPLACE] Filtros recibidos:', { status, userId, category, type, minPrice, maxPrice, search, orderBy });
     
     if (status && PRODUCT_STATUS.includes(status)) {
       query = query.where('status', '==', status);
