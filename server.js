@@ -19959,6 +19959,8 @@ app.post('/api/admin/marketplace/categories/init-defaults', authenticateToken, i
 // Obtener banners activos (público)
 app.get('/api/banners', async (req, res) => {
   try {
+    const { section } = req.query; // Filtrar por sección: home, marketplace, products, etc.
+
     if (!db) {
       return res.status(500).json({
         success: false,
@@ -19968,11 +19970,18 @@ app.get('/api/banners', async (req, res) => {
 
     const now = new Date();
 
-    // Obtener banners activos y dentro del rango de fechas
-    const snapshot = await db.collection('banners')
-      .where('isActive', '==', true)
-      .orderBy('order', 'asc')
-      .get();
+    // Obtener banners activos
+    let query = db.collection('banners')
+      .where('isActive', '==', true);
+
+    // Filtrar por sección si se proporciona
+    if (section) {
+      query = query.where('section', '==', section);
+    }
+
+    query = query.orderBy('order', 'asc');
+
+    const snapshot = await query.get();
 
     let banners = snapshot.docs.map(doc => ({
       id: doc.id,
@@ -19986,7 +19995,7 @@ app.get('/api/banners', async (req, res) => {
       return now >= startDate && now <= endDate;
     });
 
-    console.log('📰 [BANNERS] Banners activos:', banners.length);
+    console.log(`📰 [BANNERS] Banners activos${section ? ` para sección "${section}"` : ''}: ${banners.length}`);
 
     res.json({
       success: true,
@@ -20074,7 +20083,8 @@ app.get('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       page = 1,
       limit = 20,
       search = '',
-      includeInactive = 'true'
+      includeInactive = 'true',
+      section
     } = req.query;
 
     if (!db) {
@@ -20089,6 +20099,11 @@ app.get('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
     // Filtrar por estado activo
     if (includeInactive === 'false') {
       query = query.where('isActive', '==', true);
+    }
+
+    // Filtrar por sección si se proporciona
+    if (section) {
+      query = query.where('section', '==', section);
     }
 
     // Ordenar
@@ -20192,7 +20207,8 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       duration,
       startDate,
       endDate,
-      isActive
+      isActive,
+      section
     } = req.body;
 
     // Validaciones
@@ -20207,6 +20223,15 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'La imagen es requerida'
+      });
+    }
+
+    // Validar sección
+    const validSections = ['home', 'marketplace', 'products', 'comunidades', 'recomendaciones'];
+    if (section && !validSections.includes(section)) {
+      return res.status(400).json({
+        success: false,
+        message: `Sección inválida. Debe ser: ${validSections.join(', ')}`
       });
     }
 
@@ -20246,6 +20271,7 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       imageUrl,
       imageStoragePath: imageStoragePath || null,
       link: link?.trim() || null,
+      section: section || 'home', // Por defecto: home
       order: order || 999,
       duration: duration || 5, // Duración en segundos (por defecto 5s)
       startDate: processedStartDate,
@@ -20291,6 +20317,7 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
       imageUrl,
       imageStoragePath,
       link,
+      section,
       order,
       duration,
       startDate,
@@ -20342,6 +20369,17 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
 
     if (link !== undefined) {
       updateData.link = link?.trim() || null;
+    }
+
+    if (section !== undefined) {
+      const validSections = ['home', 'marketplace', 'products', 'comunidades', 'recomendaciones'];
+      if (section && !validSections.includes(section)) {
+        return res.status(400).json({
+          success: false,
+          message: `Sección inválida. Debe ser: ${validSections.join(', ')}`
+        });
+      }
+      updateData.section = section || 'home';
     }
 
     if (order !== undefined) {
