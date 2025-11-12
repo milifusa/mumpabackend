@@ -20731,8 +20731,8 @@ app.patch('/api/notifications/:id/read', authenticateToken, async (req, res) => 
   }
 });
 
-// Marcar todas las notificaciones como leídas
-app.patch('/api/notifications/read-all', authenticateToken, async (req, res) => {
+// Marcar todas las notificaciones como leídas (con alias para compatibilidad)
+const markAllNotificationsAsReadHandler = async (req, res) => {
   try {
     const userId = req.user.uid;
 
@@ -20780,7 +20780,11 @@ app.patch('/api/notifications/read-all', authenticateToken, async (req, res) => 
       error: error.message
     });
   }
-});
+};
+
+// Registrar ambas rutas para compatibilidad
+app.patch('/api/notifications/read-all', authenticateToken, markAllNotificationsAsReadHandler);
+app.patch('/api/notifications/mark-all-read', authenticateToken, markAllNotificationsAsReadHandler);
 
 // Eliminar notificación
 app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
