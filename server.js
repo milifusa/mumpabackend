@@ -4462,6 +4462,366 @@ app.patch('/api/admin/categories/reorder', authenticateToken, isAdmin, async (re
 // 🔗 SISTEMA DE COMPARTIR - Links para Posts, Recomendaciones y Listas
 // ============================================================================
 
+// ===== ENDPOINTS PÚBLICOS PARA LINKS COMPARTIDOS =====
+
+// Ver post compartido (público - sin autenticación)
+app.get('/post/:postId', async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Obtener info del autor
+    let authorName = 'Usuario';
+    try {
+      const authorDoc = await db.collection('users').doc(postData.authorId).get();
+      if (authorDoc.exists) {
+        const authorData = authorDoc.data();
+        authorName = authorData.displayName || authorData.name || 'Usuario';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo autor:', error);
+    }
+
+    // Obtener info de la comunidad
+    let communityName = 'Munpa';
+    try {
+      const communityDoc = await db.collection('communities').doc(postData.communityId).get();
+      if (communityDoc.exists) {
+        communityName = communityDoc.data().name || 'Munpa';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo comunidad:', error);
+    }
+
+    // Generar HTML para mostrar
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${authorName} en ${communityName} - Munpa</title>
+    <meta property="og:title" content="${authorName} en ${communityName}">
+    <meta property="og:description" content="${postData.content.substring(0, 200)}">
+    ${postData.imageUrl ? `<meta property="og:image" content="${postData.imageUrl}">` : ''}
+    <meta property="og:type" content="article">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .logo {
+            font-size: 32px;
+            margin-right: 12px;
+        }
+        .title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .community {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .author {
+            font-weight: 600;
+            color: #6366f1;
+            margin-bottom: 16px;
+        }
+        .content {
+            font-size: 16px;
+            line-height: 1.6;
+            color: #333;
+            margin-bottom: 20px;
+            white-space: pre-wrap;
+        }
+        .image {
+            width: 100%;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .button {
+            display: inline-block;
+            background: #6366f1;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .button:hover {
+            background: #4f46e5;
+        }
+        .stats {
+            color: #666;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+    </style>
+    <script>
+        // Intentar abrir en la app
+        window.onload = function() {
+            const deepLink = 'munpa://post/${postId}';
+            window.location.href = deepLink;
+            
+            // Si no abre en 2 segundos, quedarse en la web
+            setTimeout(() => {}, 2000);
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">👶</div>
+            <div class="title">Munpa</div>
+        </div>
+        <div class="community">📢 ${communityName}</div>
+        <div class="author">Por ${authorName}</div>
+        ${postData.imageUrl ? `<img src="${postData.imageUrl}" alt="Imagen del post" class="image">` : ''}
+        <div class="content">${postData.content}</div>
+        <div class="stats">
+            ❤️ ${postData.likeCount || 0} likes · 💬 ${postData.commentCount || 0} comentarios
+        </div>
+        <br>
+        <a href="munpa://post/${postId}" class="button">Abrir en Munpa</a>
+    </div>
+</body>
+</html>
+    `;
+
+    res.send(html);
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error mostrando post:', error);
+    res.status(500).send(`
+      <html>
+        <body style="font-family: Arial; padding: 20px; text-align: center;">
+          <h2>😕 Ups, algo salió mal</h2>
+          <p>No pudimos cargar esta publicación.</p>
+          <a href="https://munpa.online" style="color: #6366f1;">Ir a Munpa</a>
+        </body>
+      </html>
+    `);
+  }
+});
+
+// Ver recomendación compartida (público)
+app.get('/recommendation/:recommendationId', async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const recommendationDoc = await db.collection('recommendations').doc(recommendationId).get();
+
+    if (!recommendationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendación no encontrada'
+      });
+    }
+
+    const recData = recommendationDoc.data();
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${recData.name || 'Recomendación'} - Munpa</title>
+    <meta property="og:title" content="${recData.name}">
+    <meta property="og:description" content="${recData.description?.substring(0, 200) || 'Lugar recomendado'}">
+    ${recData.imageUrl ? `<meta property="og:image" content="${recData.imageUrl}">` : ''}
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .logo { font-size: 32px; margin-bottom: 16px; }
+        .title { font-size: 24px; font-weight: bold; color: #333; margin-bottom: 8px; }
+        .category { color: #6366f1; font-size: 14px; margin-bottom: 16px; }
+        .image { width: 100%; border-radius: 8px; margin-bottom: 20px; }
+        .description { font-size: 16px; line-height: 1.6; color: #555; margin-bottom: 20px; }
+        .info { color: #666; font-size: 14px; margin: 8px 0; }
+        .button { display: inline-block; background: #6366f1; color: white; padding: 12px 24px;
+                 border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 16px; }
+        .button:hover { background: #4f46e5; }
+    </style>
+    <script>
+        window.onload = function() {
+            window.location.href = 'munpa://recommendation/${recommendationId}';
+            setTimeout(() => {}, 2000);
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">👶 Munpa</div>
+        <div class="title">${recData.name || 'Recomendación'}</div>
+        <div class="category">📍 ${recData.categoryName || 'Lugar'}</div>
+        ${recData.imageUrl ? `<img src="${recData.imageUrl}" alt="${recData.name}" class="image">` : ''}
+        <div class="description">${recData.description || 'Lugar recomendado en Munpa'}</div>
+        ${recData.address ? `<div class="info">📍 ${recData.address}</div>` : ''}
+        ${recData.phone ? `<div class="info">📞 ${recData.phone}</div>` : ''}
+        <div class="info">⭐ ${recData.averageRating || 0} (${recData.totalReviews || 0} reseñas)</div>
+        <a href="munpa://recommendation/${recommendationId}" class="button">Abrir en Munpa</a>
+    </div>
+</body>
+</html>
+    `;
+
+    res.send(html);
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error mostrando recomendación:', error);
+    res.status(500).send('<html><body style="padding:20px;text-align:center;"><h2>Error al cargar</h2></body></html>');
+  }
+});
+
+// Ver producto del marketplace compartido (público)
+app.get('/marketplace/product/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const productDoc = await db.collection('marketplace_products').doc(productId).get();
+
+    if (!productDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Producto no encontrado'
+      });
+    }
+
+    const productData = productDoc.data();
+    
+    let priceText = '';
+    if (productData.type === 'venta' && productData.price) {
+      priceText = `<div class="price">$${productData.price.toLocaleString('es-MX')}</div>`;
+    } else if (productData.type === 'donacion') {
+      priceText = '<div class="price" style="color: #10b981;">¡Gratis!</div>';
+    } else if (productData.type === 'trueque') {
+      priceText = '<div class="price" style="color: #f59e0b;">Intercambio</div>';
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${productData.title} - Munpa Marketplace</title>
+    <meta property="og:title" content="${productData.title}">
+    <meta property="og:description" content="${productData.description?.substring(0, 200) || ''}">
+    ${productData.photos?.[0] ? `<meta property="og:image" content="${productData.photos[0]}">` : ''}
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0;
+               padding: 20px; background: #f5f5f5; display: flex; justify-content: center; min-height: 100vh; }
+        .container { max-width: 600px; background: white; border-radius: 12px; padding: 24px;
+                     box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .logo { font-size: 32px; margin-bottom: 16px; }
+        .title { font-size: 24px; font-weight: bold; color: #333; margin-bottom: 8px; }
+        .price { font-size: 28px; font-weight: bold; color: #6366f1; margin-bottom: 16px; }
+        .image { width: 100%; border-radius: 8px; margin-bottom: 20px; }
+        .description { font-size: 16px; line-height: 1.6; color: #555; margin-bottom: 20px; }
+        .info { color: #666; font-size: 14px; margin: 8px 0; }
+        .button { display: inline-block; background: #6366f1; color: white; padding: 12px 24px;
+                 border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 16px; }
+    </style>
+    <script>
+        window.onload = function() {
+            window.location.href = 'munpa://marketplace/product/${productId}';
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🛍️ Munpa Marketplace</div>
+        <div class="title">${productData.title}</div>
+        ${priceText}
+        ${productData.photos?.[0] ? `<img src="${productData.photos[0]}" alt="${productData.title}" class="image">` : ''}
+        <div class="description">${productData.description || ''}</div>
+        <div class="info">📦 ${productData.condition || 'Condición no especificada'}</div>
+        <div class="info">📍 ${productData.location?.city || ''}, ${productData.location?.state || ''}</div>
+        <a href="munpa://marketplace/product/${productId}" class="button">Ver en Munpa</a>
+    </div>
+</body>
+</html>
+    `;
+
+    res.send(html);
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error mostrando producto:', error);
+    res.status(500).send('<html><body style="padding:20px;text-align:center;"><h2>Error al cargar</h2></body></html>');
+  }
+});
+
+// ===== ENDPOINTS PARA GENERAR LINKS =====
+
 // Compartir post de comunidad
 app.get('/api/posts/:postId/share', authenticateToken, async (req, res) => {
   try {
