@@ -14262,6 +14262,7 @@ app.get('/api/communities/:communityId/posts', authenticateToken, async (req, re
         imageUrl: postData.imageUrl,
         authorId: postData.authorId,
         authorName: authorName,
+        attachedLists: postData.attachedLists || [], // Listas adjuntas
         likes: postData.likes || [],
         likeCount: postData.likeCount || 0,
         commentCount: postData.commentCount || 0,
