@@ -4111,6 +4111,379 @@ app.patch('/api/admin/categories/reorder', authenticateToken, isAdmin, async (re
   }
 });
 
+// ============================================================================
+// 🔗 SISTEMA DE COMPARTIR - Links para Posts, Recomendaciones y Listas
+// ============================================================================
+
+// Compartir post de comunidad
+app.get('/api/posts/:postId/share', authenticateToken, async (req, res) => {
+  try {
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Obtener info del autor
+    let authorName = 'Usuario';
+    try {
+      const authorDoc = await db.collection('users').doc(postData.authorId).get();
+      if (authorDoc.exists) {
+        const authorData = authorDoc.data();
+        authorName = authorData.displayName || authorData.name || 'Usuario';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo autor:', error);
+    }
+
+    // Obtener info de la comunidad
+    let communityName = 'Munpa';
+    try {
+      const communityDoc = await db.collection('communities').doc(postData.communityId).get();
+      if (communityDoc.exists) {
+        communityName = communityDoc.data().name || 'Munpa';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo comunidad:', error);
+    }
+
+    // Generar links
+    const shareUrl = `munpa://post/${postId}`;
+    const webUrl = `https://munpa.online/post/${postId}`;
+
+    const shareData = {
+      shareUrl,
+      webUrl,
+      title: `${authorName} en ${communityName}`,
+      description: postData.content?.substring(0, 200) || 'Ver publicación en Munpa',
+      imageUrl: postData.imageUrl || null,
+      metadata: {
+        postId,
+        authorName,
+        communityName,
+        communityId: postData.communityId,
+        likes: postData.likeCount || 0,
+        comments: postData.commentCount || 0
+      }
+    };
+
+    console.log(`✅ [SHARE] Link generado para post: ${postId}`);
+
+    res.json({
+      success: true,
+      data: shareData
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error generando link de post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando link para compartir',
+      error: error.message
+    });
+  }
+});
+
+// Compartir recomendación
+app.get('/api/recommendations/:recommendationId/share', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener la recomendación
+    const recommendationDoc = await db.collection('recommendations').doc(recommendationId).get();
+
+    if (!recommendationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recomendación no encontrada'
+      });
+    }
+
+    const recommendationData = recommendationDoc.data();
+
+    // Obtener info de la categoría
+    let categoryName = 'Lugar';
+    try {
+      if (recommendationData.categoryId) {
+        const categoryDoc = await db.collection('categories').doc(recommendationData.categoryId).get();
+        if (categoryDoc.exists) {
+          categoryName = categoryDoc.data().name || 'Lugar';
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo categoría:', error);
+    }
+
+    // Generar links
+    const shareUrl = `munpa://recommendation/${recommendationId}`;
+    const webUrl = `https://munpa.online/recommendation/${recommendationId}`;
+
+    const shareData = {
+      shareUrl,
+      webUrl,
+      title: recommendationData.name || 'Recomendación en Munpa',
+      description: recommendationData.description?.substring(0, 200) || `${categoryName} recomendado en Munpa`,
+      imageUrl: recommendationData.imageUrl || null,
+      metadata: {
+        recommendationId,
+        categoryName,
+        categoryId: recommendationData.categoryId,
+        address: recommendationData.address,
+        phone: recommendationData.phone,
+        averageRating: recommendationData.averageRating || 0,
+        totalReviews: recommendationData.totalReviews || 0,
+        verified: recommendationData.verified || false
+      }
+    };
+
+    console.log(`✅ [SHARE] Link generado para recomendación: ${recommendationId}`);
+
+    res.json({
+      success: true,
+      data: shareData
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error generando link de recomendación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando link para compartir',
+      error: error.message
+    });
+  }
+});
+
+// Compartir producto del marketplace
+app.get('/api/marketplace/products/:productId/share', authenticateToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el producto
+    const productDoc = await db.collection('marketplace_products').doc(productId).get();
+
+    if (!productDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Producto no encontrado'
+      });
+    }
+
+    const productData = productDoc.data();
+
+    // Generar links
+    const shareUrl = `munpa://marketplace/product/${productId}`;
+    const webUrl = `https://munpa.online/marketplace/product/${productId}`;
+
+    let description = productData.description?.substring(0, 200) || '';
+    
+    // Agregar precio si es venta
+    if (productData.type === 'venta' && productData.price) {
+      description = `$${productData.price.toLocaleString('es-MX')} - ${description}`;
+    } else if (productData.type === 'donacion') {
+      description = `¡Gratis! ${description}`;
+    } else if (productData.type === 'trueque') {
+      description = `Intercambio - ${description}`;
+    }
+
+    const shareData = {
+      shareUrl,
+      webUrl,
+      title: productData.title || 'Producto en Munpa Marketplace',
+      description,
+      imageUrl: productData.photos?.[0] || null,
+      metadata: {
+        productId,
+        categoryName: productData.categoryName,
+        condition: productData.condition,
+        type: productData.type,
+        price: productData.price,
+        location: {
+          city: productData.location?.city,
+          state: productData.location?.state
+        },
+        userName: productData.userName,
+        status: productData.status
+      }
+    };
+
+    console.log(`✅ [SHARE] Link generado para producto: ${productId}`);
+
+    res.json({
+      success: true,
+      data: shareData
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error generando link de producto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando link para compartir',
+      error: error.message
+    });
+  }
+});
+
+// Compartir lista de favoritos del marketplace
+app.get('/api/marketplace/favorites/share', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener favoritos del usuario
+    const favoritesSnapshot = await db.collection('marketplace_favorites')
+      .where('userId', '==', uid)
+      .limit(10) // Primeros 10 para el preview
+      .get();
+
+    const favoriteCount = favoritesSnapshot.size;
+
+    // Obtener info del usuario
+    let userName = 'Usuario';
+    try {
+      const userDoc = await db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        userName = userData.displayName || userData.name || 'Usuario';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo usuario:', error);
+    }
+
+    // Generar links
+    const shareUrl = `munpa://marketplace/favorites/${uid}`;
+    const webUrl = `https://munpa.online/marketplace/favorites/${uid}`;
+
+    const shareData = {
+      shareUrl,
+      webUrl,
+      title: `Favoritos de ${userName} en Munpa`,
+      description: `Descubre ${favoriteCount} productos favoritos de ${userName} en Munpa Marketplace`,
+      imageUrl: null, // Podríamos agregar una imagen compuesta de los favoritos
+      metadata: {
+        userId: uid,
+        userName,
+        favoriteCount
+      }
+    };
+
+    console.log(`✅ [SHARE] Link generado para lista de favoritos de: ${uid}`);
+
+    res.json({
+      success: true,
+      data: shareData
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error generando link de favoritos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando link para compartir',
+      error: error.message
+    });
+  }
+});
+
+// Compartir lista de recomendaciones favoritas
+app.get('/api/recommendations/favorites/share', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener favoritos del usuario
+    const favoritesSnapshot = await db.collection('recommendationFavorites')
+      .where('userId', '==', uid)
+      .limit(10) // Primeros 10 para el preview
+      .get();
+
+    const favoriteCount = favoritesSnapshot.size;
+
+    // Obtener info del usuario
+    let userName = 'Usuario';
+    try {
+      const userDoc = await db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        userName = userData.displayName || userData.name || 'Usuario';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo usuario:', error);
+    }
+
+    // Generar links
+    const shareUrl = `munpa://recommendations/favorites/${uid}`;
+    const webUrl = `https://munpa.online/recommendations/favorites/${uid}`;
+
+    const shareData = {
+      shareUrl,
+      webUrl,
+      title: `Lugares favoritos de ${userName}`,
+      description: `Descubre ${favoriteCount} lugares recomendados por ${userName} en Munpa`,
+      imageUrl: null,
+      metadata: {
+        userId: uid,
+        userName,
+        favoriteCount
+      }
+    };
+
+    console.log(`✅ [SHARE] Link generado para favoritos de recomendaciones de: ${uid}`);
+
+    res.json({
+      success: true,
+      data: shareData
+    });
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error generando link de favoritos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando link para compartir',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE RECOMENDADOS ==========
 
 // ===== ENDPOINTS PARA LA APP (SOLO LECTURA) =====
