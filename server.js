@@ -1559,6 +1559,128 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ==========================================
+// 🔐 LOGIN CON GOOGLE (Social Sign-In)
+// ==========================================
+
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    if (!auth || !db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Firebase no está configurado',
+        error: 'Auth service not available',
+        firebaseStatus: firebaseStatus
+      });
+    }
+
+    if (!idToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'idToken de Google es requerido'
+      });
+    }
+
+    console.log('🔐 [GOOGLE] Verificando token de Google...');
+
+    // Verificar el token de Google con Firebase Admin
+    let decodedToken;
+    try {
+      decodedToken = await auth.verifyIdToken(idToken);
+      console.log('✅ [GOOGLE] Token verificado exitosamente para:', decodedToken.email);
+    } catch (error) {
+      console.error('❌ [GOOGLE] Error verificando token:', error.message);
+      return res.status(401).json({
+        success: false,
+        message: 'Token de Google inválido',
+        error: error.message
+      });
+    }
+
+    const { uid, email, name, picture } = decodedToken;
+
+    // Verificar si el usuario ya existe en Firestore
+    const userDocRef = db.collection('users').doc(uid);
+    const userDoc = await userDocRef.get();
+
+    let userData;
+
+    if (userDoc.exists) {
+      // Usuario existente
+      userData = userDoc.data();
+      console.log('✅ [GOOGLE] Usuario existente encontrado:', email);
+
+      // Verificar que esté activo
+      if (!userData.isActive) {
+        return res.status(401).json({
+          success: false,
+          message: 'Usuario inactivo'
+        });
+      }
+
+      // Actualizar última conexión y foto si cambió
+      await userDocRef.update({
+        lastLogin: new Date(),
+        photoUrl: picture || userData.photoUrl,
+        updatedAt: new Date()
+      });
+
+      console.log('✅ [GOOGLE] Datos del usuario actualizados');
+    } else {
+      // Usuario nuevo - crear perfil
+      console.log('📝 [GOOGLE] Creando nuevo usuario desde Google:', email);
+
+      userData = {
+        email,
+        displayName: name || email.split('@')[0],
+        name: name || email.split('@')[0],
+        photoUrl: picture || null,
+        provider: 'google',
+        gender: null,
+        childrenCount: 0,
+        isPregnant: false,
+        gestationWeeks: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastLogin: new Date(),
+        isActive: true,
+        fcmTokens: []
+      };
+
+      await userDocRef.set(userData);
+      console.log('✅ [GOOGLE] Usuario creado en Firestore');
+    }
+
+    // Generar custom token para la app
+    const customToken = await auth.createCustomToken(uid);
+    console.log('✅ [GOOGLE] Custom token generado');
+
+    res.json({
+      success: true,
+      message: 'Login con Google exitoso',
+      data: {
+        uid,
+        email,
+        displayName: userData.displayName || name,
+        photoUrl: userData.photoUrl || picture,
+        customToken,
+        isNewUser: !userDoc.exists
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [GOOGLE] Error en login con Google:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al autenticar con Google',
+      error: error.message,
+      firebaseStatus: firebaseStatus
+    });
+  }
+});
+
+// ==========================================
 // 🔐 LOGIN PARA DASHBOARD ADMIN (retorna JWT)
 // ==========================================
 
