@@ -3530,7 +3530,7 @@ app.get('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
 // Crear nuevo post
 app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { content, imageUrl, communityId } = req.body;
+    const { content, imageUrl, communityId, attachedLists = [] } = req.body;
     
     console.log('➕ [ADMIN] Creando nuevo post');
 
@@ -3557,6 +3557,37 @@ app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
       });
     }
 
+    // Validar y verificar que las listas existen
+    const validatedLists = [];
+    if (attachedLists && Array.isArray(attachedLists) && attachedLists.length > 0) {
+      console.log(`📋 [ADMIN] Validando ${attachedLists.length} listas adjuntas`);
+      
+      for (const listId of attachedLists) {
+        try {
+          const listDoc = await db.collection('lists').doc(listId).get();
+          
+          if (!listDoc.exists) {
+            console.warn(`⚠️ [ADMIN] Lista no encontrada: ${listId}`);
+            continue;
+          }
+
+          const listData = listDoc.data();
+          validatedLists.push({
+            id: listId,
+            title: listData.title,
+            description: listData.description || '',
+            imageUrl: listData.imageUrl || null,
+            isPublic: listData.isPublic,
+            totalItems: listData.totalItems || 0,
+            completedItems: listData.completedItems || 0
+          });
+          console.log(`✅ [ADMIN] Lista validada: ${listData.title}`);
+        } catch (error) {
+          console.error(`❌ [ADMIN] Error validando lista ${listId}:`, error.message);
+        }
+      }
+    }
+
     const postData = {
       content,
       authorId: req.user.uid,
@@ -3570,6 +3601,12 @@ app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
     // Solo agregar imageUrl si se proporciona
     if (imageUrl) {
       postData.imageUrl = imageUrl;
+    }
+
+    // Agregar listas adjuntas si hay
+    if (validatedLists.length > 0) {
+      postData.attachedLists = validatedLists;
+      console.log(`📋 [ADMIN] ${validatedLists.length} listas adjuntadas al post`);
     }
 
     const postRef = await db.collection('posts').add(postData);
@@ -13873,7 +13910,7 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
   try {
     const { uid } = req.user;
     const { communityId } = req.params;
-    const { content, imageUrl } = req.body;
+    const { content, imageUrl, attachedLists = [] } = req.body;
 
     if (!db) {
       return res.status(500).json({
@@ -13916,6 +13953,43 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
       });
     }
 
+    // Validar y verificar que las listas existen y pertenecen al usuario o son públicas
+    const validatedLists = [];
+    if (attachedLists && Array.isArray(attachedLists) && attachedLists.length > 0) {
+      console.log(`📋 [POST] Validando ${attachedLists.length} listas adjuntas`);
+      
+      for (const listId of attachedLists) {
+        try {
+          const listDoc = await db.collection('lists').doc(listId).get();
+          
+          if (!listDoc.exists) {
+            console.warn(`⚠️ [POST] Lista no encontrada: ${listId}`);
+            continue;
+          }
+
+          const listData = listDoc.data();
+          
+          // Verificar que la lista sea del usuario o sea pública
+          if (listData.creatorId === uid || listData.isPublic) {
+            validatedLists.push({
+              id: listId,
+              title: listData.title,
+              description: listData.description || '',
+              imageUrl: listData.imageUrl || null,
+              isPublic: listData.isPublic,
+              totalItems: listData.totalItems || 0,
+              completedItems: listData.completedItems || 0
+            });
+            console.log(`✅ [POST] Lista validada: ${listData.title}`);
+          } else {
+            console.warn(`⚠️ [POST] Lista ${listId} no es del usuario ni es pública`);
+          }
+        } catch (error) {
+          console.error(`❌ [POST] Error validando lista ${listId}:`, error.message);
+        }
+      }
+    }
+
     // Crear la publicación
     const postData = {
       communityId: communityId,
@@ -13931,6 +14005,12 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
     // Solo agregar imageUrl si existe y no es undefined
     if (imageUrl) {
       postData.imageUrl = imageUrl;
+    }
+
+    // Agregar listas adjuntas si hay
+    if (validatedLists.length > 0) {
+      postData.attachedLists = validatedLists;
+      console.log(`📋 [POST] ${validatedLists.length} listas adjuntadas al post`);
     }
 
     const postRef = await db.collection('posts').add(postData);
