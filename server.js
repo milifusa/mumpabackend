@@ -3592,6 +3592,7 @@ app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
       content,
       authorId: req.user.uid,
       communityId,
+      isPinned: false,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       likes: [],
@@ -3837,6 +3838,57 @@ app.delete('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, r
     res.status(500).json({
       success: false,
       message: 'Error eliminando post',
+      error: error.message
+    });
+  }
+});
+
+// Fijar/Desfijar post (Pin/Unpin)
+app.patch('/api/admin/posts/:postId/pin', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const { isPinned } = req.body;
+    
+    if (isPinned === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'El campo isPinned es requerido'
+      });
+    }
+
+    console.log(`📌 [ADMIN] ${isPinned ? 'Fijando' : 'Desfijando'} post:`, postId);
+
+    const postRef = db.collection('posts').doc(postId);
+    const postDoc = await postRef.get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Post no encontrado'
+      });
+    }
+
+    await postRef.update({
+      isPinned: isPinned,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(`✅ [ADMIN] Post ${isPinned ? 'fijado' : 'desfijado'} exitosamente`);
+
+    res.json({
+      success: true,
+      message: `Post ${isPinned ? 'fijado' : 'desfijado'} exitosamente`,
+      data: {
+        id: postId,
+        isPinned: isPinned
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error fijando/desfijando post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al fijar/desfijar post',
       error: error.message
     });
   }
@@ -14091,6 +14143,7 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
       communityId: communityId,
       authorId: uid,
       content: content.trim(),
+      isPinned: false,
       likes: [],
       likeCount: 0,
       commentCount: 0,
@@ -14276,6 +14329,7 @@ app.get('/api/communities/:communityId/posts', authenticateToken, async (req, re
         authorId: postData.authorId,
         authorName: authorName,
         attachedLists: postData.attachedLists || [], // Listas adjuntas
+        isPinned: postData.isPinned || false, // Post fijado
         likes: postData.likes || [],
         likeCount: postData.likeCount || 0,
         commentCount: postData.commentCount || 0,
@@ -14284,6 +14338,20 @@ app.get('/api/communities/:communityId/posts', authenticateToken, async (req, re
         updatedAt: postData.updatedAt
       });
     }
+
+    // Ordenar: posts fijados primero, luego por fecha
+    posts.sort((a, b) => {
+      // Si uno está pinneado y el otro no, el pinneado va primero
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      
+      // Si ambos tienen el mismo estado de pin, ordenar por fecha
+      const dateA = a.createdAt?.toDate?.() || a.createdAt;
+      const dateB = b.createdAt?.toDate?.() || b.createdAt;
+      return dateB - dateA;
+    });
+
+    console.log(`📌 [POSTS] ${posts.filter(p => p.isPinned).length} posts fijados de ${posts.length} totales`);
 
     res.json({
       success: true,
