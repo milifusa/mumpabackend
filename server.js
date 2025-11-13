@@ -3457,6 +3457,86 @@ app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
       postCount: admin.firestore.FieldValue.increment(1)
     });
 
+    console.log('✅ [ADMIN] Post creado exitosamente:', postRef.id);
+
+    // Enviar notificaciones push a todos los miembros de la comunidad
+    try {
+      const communityData = communityDoc.data();
+      const authorDoc = await db.collection('users').doc(req.user.uid).get();
+      const authorData = authorDoc.exists ? authorDoc.data() : {};
+      const authorName = authorData.displayName || authorData.name || 'Administrador';
+      const communityName = communityData.name || 'la comunidad';
+
+      // Obtener tokens de todos los miembros (incluyendo al admin autor, si es miembro)
+      const membersToNotify = communityData.members || [];
+      
+      if (membersToNotify.length > 0) {
+        console.log(`📤 [ADMIN] Enviando notificación de nueva publicación a ${membersToNotify.length} miembros`);
+        
+        const tokensPromises = membersToNotify.map(async (memberId) => {
+          try {
+            const memberDoc = await db.collection('users').doc(memberId).get();
+            if (memberDoc.exists) {
+              const memberData = memberDoc.data();
+              return { userId: memberId, tokens: memberData.fcmTokens || [] };
+            }
+          } catch (error) {
+            console.warn(`⚠️ [ADMIN] Error obteniendo tokens del miembro ${memberId}:`, error.message);
+          }
+          return { userId: memberId, tokens: [] };
+        });
+        
+        const usersWithTokens = await Promise.all(tokensPromises);
+        const allTokens = usersWithTokens.flatMap(u => u.tokens);
+        
+        if (allTokens.length > 0) {
+          const notification = {
+            title: `📢 ${authorName} publicó en ${communityName}`,
+            body: content.length > 100 ? content.substring(0, 100) + '...' : content
+          };
+
+          const notificationData = {
+            type: 'community_post',
+            postId: postRef.id,
+            communityId: communityId,
+            communityName: communityName,
+            authorId: req.user.uid,
+            authorName: authorName,
+            screen: 'CommunityPostScreen'
+          };
+
+          const pushResult = await sendPushNotification(allTokens, notification, notificationData);
+          console.log(`✅ [ADMIN] Notificaciones enviadas: ${pushResult.successCount} exitosas, ${pushResult.failureCount} fallidas`);
+
+          // Guardar notificaciones en Firestore para cada usuario
+          const batch = db.batch();
+          usersWithTokens.forEach(userWithTokens => {
+            if (userWithTokens.tokens.length > 0) {
+              const notifRef = db.collection('notifications').doc();
+              batch.set(notifRef, {
+                userId: userWithTokens.userId,
+                type: 'community_post',
+                title: notification.title,
+                body: notification.body,
+                data: notificationData,
+                read: false,
+                createdAt: admin.firestore.Timestamp.fromDate(new Date())
+              });
+            }
+          });
+          await batch.commit();
+          console.log(`✅ [ADMIN] ${membersToNotify.length} notificaciones guardadas en Firestore`);
+        } else {
+          console.log('⚠️ [ADMIN] Ningún miembro tiene tokens FCM registrados');
+        }
+      } else {
+        console.log('⚠️ [ADMIN] La comunidad no tiene miembros para notificar');
+      }
+    } catch (notificationError) {
+      console.error('❌ [ADMIN] Error enviando notificaciones de nueva publicación:', notificationError);
+      // No fallar la creación del post si falla la notificación
+    }
+
     res.json({
       success: true,
       message: 'Post creado exitosamente',
