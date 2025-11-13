@@ -3742,16 +3742,19 @@ app.put('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, res)
 
     // Actualizar listas adjuntas si se envían
     if (attachedLists !== undefined) {
-      if (attachedLists === null || attachedLists.length === 0) {
+      console.log(`📋 [ADMIN] attachedLists recibido:`, attachedLists);
+      
+      if (attachedLists === null || (Array.isArray(attachedLists) && attachedLists.length === 0)) {
         // Remover listas si se envía null o array vacío
         updateData.attachedLists = admin.firestore.FieldValue.delete();
         console.log('🗑️ [ADMIN] Removiendo listas adjuntas del post');
-      } else {
+      } else if (Array.isArray(attachedLists)) {
         // Validar y verificar que las listas existen
         const validatedLists = [];
         console.log(`📋 [ADMIN] Validando ${attachedLists.length} listas adjuntas`);
         
         for (const listId of attachedLists) {
+          console.log(`🔍 [ADMIN] Buscando lista: ${listId}`);
           try {
             const listDoc = await db.collection('lists').doc(listId).get();
             
@@ -3778,20 +3781,30 @@ app.put('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, res)
         
         if (validatedLists.length > 0) {
           updateData.attachedLists = validatedLists;
-          console.log(`📋 [ADMIN] ${validatedLists.length} listas actualizadas en el post`);
+          console.log(`📋 [ADMIN] ${validatedLists.length} listas serán actualizadas en el post`);
+        } else {
+          console.warn(`⚠️ [ADMIN] Ninguna lista fue validada. No se actualizarán listas.`);
         }
       }
     }
 
+    console.log(`💾 [ADMIN] Actualizando post con datos:`, JSON.stringify(updateData, null, 2));
     await postRef.update(updateData);
+
+    // Obtener el documento actualizado
+    const updatedPostDoc = await postRef.get();
+    const updatedData = updatedPostDoc.data();
+
+    console.log(`✅ [ADMIN] Post actualizado. attachedLists:`, updatedData.attachedLists);
 
     res.json({
       success: true,
       message: 'Post actualizado exitosamente',
       data: {
         id: postId,
-        ...postDoc.data(),
-        ...updateData
+        ...updatedData,
+        createdAt: updatedData.createdAt?.toDate?.(),
+        updatedAt: updatedData.updatedAt?.toDate?.()
       }
     });
 
