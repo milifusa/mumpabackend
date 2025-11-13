@@ -3719,7 +3719,7 @@ app.post('/api/admin/posts', authenticateToken, isAdmin, async (req, res) => {
 app.put('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { postId } = req.params;
-    const { content, imageUrl } = req.body;
+    const { content, imageUrl, attachedLists } = req.body;
     
     console.log('✏️ [ADMIN] Editando post:', postId);
 
@@ -3739,6 +3739,49 @@ app.put('/api/admin/posts/:postId', authenticateToken, isAdmin, async (req, res)
 
     if (content !== undefined) updateData.content = content;
     if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+
+    // Actualizar listas adjuntas si se envían
+    if (attachedLists !== undefined) {
+      if (attachedLists === null || attachedLists.length === 0) {
+        // Remover listas si se envía null o array vacío
+        updateData.attachedLists = admin.firestore.FieldValue.delete();
+        console.log('🗑️ [ADMIN] Removiendo listas adjuntas del post');
+      } else {
+        // Validar y verificar que las listas existen
+        const validatedLists = [];
+        console.log(`📋 [ADMIN] Validando ${attachedLists.length} listas adjuntas`);
+        
+        for (const listId of attachedLists) {
+          try {
+            const listDoc = await db.collection('lists').doc(listId).get();
+            
+            if (!listDoc.exists) {
+              console.warn(`⚠️ [ADMIN] Lista no encontrada: ${listId}`);
+              continue;
+            }
+
+            const listData = listDoc.data();
+            validatedLists.push({
+              id: listId,
+              title: listData.title,
+              description: listData.description || '',
+              imageUrl: listData.imageUrl || null,
+              isPublic: listData.isPublic,
+              totalItems: listData.totalItems || 0,
+              completedItems: listData.completedItems || 0
+            });
+            console.log(`✅ [ADMIN] Lista validada: ${listData.title}`);
+          } catch (error) {
+            console.error(`❌ [ADMIN] Error validando lista ${listId}:`, error.message);
+          }
+        }
+        
+        if (validatedLists.length > 0) {
+          updateData.attachedLists = validatedLists;
+          console.log(`📋 [ADMIN] ${validatedLists.length} listas actualizadas en el post`);
+        }
+      }
+    }
 
     await postRef.update(updateData);
 
