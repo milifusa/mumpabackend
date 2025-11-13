@@ -12891,7 +12891,7 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
 app.get('/api/user/lists', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { type = 'all' } = req.query; // 'all', 'public', 'private'
+    const { type = 'all', includeItems = 'false' } = req.query; // 'all', 'public', 'private'
 
     if (!db) {
       return res.status(500).json({
@@ -12911,17 +12911,27 @@ app.get('/api/user/lists', authenticateToken, async (req, res) => {
 
     const listsSnapshot = await query.orderBy('updatedAt', 'desc').get();
 
+    const shouldIncludeItems = includeItems === 'true';
     const lists = [];
+    
     listsSnapshot.forEach(doc => {
       const data = doc.data();
+      
+      // Por defecto, solo devolver primeros 5 items como preview
+      let itemsPreview = [];
+      if (shouldIncludeItems && data.items && data.items.length > 0) {
+        itemsPreview = data.items.slice(0, 5);
+      }
+      
       lists.push({
         id: doc.id,
         title: data.title,
         description: data.description,
         imageUrl: data.imageUrl || null,
         isPublic: data.isPublic,
-        isOwner: data.creatorId === uid, // ← NUEVO: indicar si es el propietario
-        items: data.items || [],
+        isOwner: data.creatorId === uid,
+        items: itemsPreview, // Solo preview de items
+        hasMoreItems: data.items && data.items.length > 5,
         completedItems: data.completedItems || 0,
         totalItems: data.totalItems || 0,
         stars: data.stars || 0,
@@ -12971,14 +12981,19 @@ app.get('/api/lists/public', authenticateToken, async (req, res) => {
     const lists = [];
     listsSnapshot.forEach(doc => {
       const data = doc.data();
+      
+      // Solo incluir preview de primeros 5 items
+      const itemsPreview = data.items && data.items.length > 0 ? data.items.slice(0, 5) : [];
+      
       lists.push({
         id: doc.id,
         title: data.title,
         description: data.description,
         imageUrl: data.imageUrl || null,
         creatorId: data.creatorId,
-        isOwner: data.creatorId === uid, // ← NUEVO: indicar si es el propietario
-        items: data.items || [],
+        isOwner: data.creatorId === uid,
+        items: itemsPreview, // Solo preview
+        hasMoreItems: data.items && data.items.length > 5,
         completedItems: data.completedItems || 0,
         totalItems: data.totalItems || 0,
         stars: data.stars || 0,
@@ -13751,6 +13766,7 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
     const { listId } = req.params;
+    const { page = 1, limit = 20, includeStats = 'true' } = req.query;
 
     if (!db) {
       return res.status(500).json({
@@ -13788,11 +13804,21 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
       hasStarred = !userStar.empty;
     }
 
-    // Obtener calificaciones y comentarios para cada item
+    // Paginar items
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+
+    const allItems = listData.items || [];
+    const paginatedItems = allItems.slice(startIndex, endIndex);
+    const shouldIncludeStats = includeStats === 'true';
+
+    // Obtener calificaciones y comentarios para cada item (solo los paginados)
     let itemsWithStats = [];
-    if (listData.items && listData.items.length > 0) {
+    if (paginatedItems.length > 0 && shouldIncludeStats) {
       itemsWithStats = await Promise.all(
-        listData.items.map(async (item) => {
+        paginatedItems.map(async (item) => {
           // Si el item no tiene ID, retornar sin stats
           if (!item.id) {
             console.warn('⚠️ [LISTS] Item sin ID encontrado:', item);
@@ -13834,7 +13860,14 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
           };
         })
       );
+    } else {
+      itemsWithStats = paginatedItems;
     }
+
+    const totalPages = Math.ceil(allItems.length / limitNum);
+    const hasMore = pageNum < totalPages;
+
+    console.log(`📋 [LISTS] Lista ${listId}: página ${pageNum} de ${totalPages} (${paginatedItems.length}/${allItems.length} items)`);
 
     res.json({
       success: true,
@@ -13846,16 +13879,23 @@ app.get('/api/lists/:listId', authenticateToken, async (req, res) => {
         imageUrl: listData.imageUrl || null,
         isPublic: listData.isPublic,
         creatorId: listData.creatorId,
-        isOwner: listData.creatorId === uid, // ← NUEVO: indicar si es el propietario
-        items: itemsWithStats, // ← NUEVO: items con estadísticas
+        isOwner: listData.creatorId === uid,
+        items: itemsWithStats,
         completedItems: listData.completedItems || 0,
         totalItems: listData.totalItems || 0,
         stars: listData.stars || 0,
         comments: listData.comments || 0,
         hasStarred: hasStarred,
-        isCreator: listData.creatorId === uid, // Mantener por compatibilidad
+        isCreator: listData.creatorId === uid,
         createdAt: listData.createdAt,
         updatedAt: listData.updatedAt
+      },
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        itemsPerPage: limitNum,
+        totalItems: allItems.length,
+        hasMore: hasMore
       }
     });
 
