@@ -11,5 +11,14 @@
       "src": "/(.*)",
       "dest": "/server.js"
     }
-  ]
+  ],
+  "crons": [
+    {
+      "path": "/api/notifications/daily-reminders",
+      "schedule": "0 9 * * *"
+    }
+  ],
+  "env": {
+    "CRON_SECRET": "@cron-secret"
+  }
 }
