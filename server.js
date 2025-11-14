@@ -9643,27 +9643,69 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
       });
     }
 
-    const childrenSnapshot = await db.collection('children')
+    // Obtener hijos propios (como padre principal)
+    const ownChildrenSnapshot = await db.collection('children')
       .where('parentId', '==', uid)
       .orderBy('createdAt', 'desc')
       .get();
 
+    // Obtener hijos compartidos (donde el usuario está en sharedWith)
+    const sharedChildrenSnapshot = await db.collection('children')
+      .where('sharedWith', 'array-contains', uid)
+      .get();
+
     const children = [];
-    childrenSnapshot.forEach(doc => {
-      const childData = doc.data();
-      const currentInfo = getChildCurrentInfo(childData);
-      
-      children.push({
-        id: doc.id,
-        ...childData,
-        // Información calculada automáticamente
-        currentAgeInMonths: currentInfo.currentAgeInMonths,
-        currentGestationWeeks: currentInfo.currentGestationWeeks,
-        registeredAgeInMonths: currentInfo.registeredAgeInMonths,
-        registeredGestationWeeks: currentInfo.registeredGestationWeeks,
-        daysSinceCreation: currentInfo.daysSinceCreation,
-        isOverdue: currentInfo.isOverdue || false
-      });
+    const childIds = new Set(); // Para evitar duplicados
+
+    // Procesar hijos propios
+    ownChildrenSnapshot.forEach(doc => {
+      if (!childIds.has(doc.id)) {
+        childIds.add(doc.id);
+        const childData = doc.data();
+        const currentInfo = getChildCurrentInfo(childData);
+        
+        children.push({
+          id: doc.id,
+          ...childData,
+          isShared: false, // Este es hijo propio
+          // Información calculada automáticamente
+          currentAgeInMonths: currentInfo.currentAgeInMonths,
+          currentGestationWeeks: currentInfo.currentGestationWeeks,
+          registeredAgeInMonths: currentInfo.registeredAgeInMonths,
+          registeredGestationWeeks: currentInfo.registeredGestationWeeks,
+          daysSinceCreation: currentInfo.daysSinceCreation,
+          isOverdue: currentInfo.isOverdue || false
+        });
+      }
+    });
+
+    // Procesar hijos compartidos
+    sharedChildrenSnapshot.forEach(doc => {
+      if (!childIds.has(doc.id)) {
+        childIds.add(doc.id);
+        const childData = doc.data();
+        const currentInfo = getChildCurrentInfo(childData);
+        
+        children.push({
+          id: doc.id,
+          ...childData,
+          isShared: true, // Este es hijo compartido
+          // Información calculada automáticamente
+          currentAgeInMonths: currentInfo.currentAgeInMonths,
+          currentGestationWeeks: currentInfo.currentGestationWeeks,
+          registeredAgeInMonths: currentInfo.registeredAgeInMonths,
+          registeredGestationWeeks: currentInfo.registeredGestationWeeks,
+          daysSinceCreation: currentInfo.daysSinceCreation,
+          isOverdue: currentInfo.isOverdue || false
+        });
+      }
+    });
+
+    // Ordenar por createdAt desc
+    children.sort((a, b) => {
+      const dateA = a.createdAt?.toDate?.() || a.createdAt || new Date(0);
+      const dateB = b.createdAt?.toDate?.() || b.createdAt || new Date(0);
+      return dateB - dateA;
     });
 
     res.json({
@@ -9676,6 +9718,64 @@ app.get('/api/auth/children', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al obtener hijos',
+      error: error.message
+    });
+  }
+});
+
+// DEBUG: Endpoint para verificar hijos compartidos
+app.get('/api/auth/children/debug', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    // Obtener hijos propios
+    const ownChildren = await db.collection('children')
+      .where('parentId', '==', uid)
+      .get();
+
+    // Obtener hijos compartidos
+    const sharedChildren = await db.collection('children')
+      .where('sharedWith', 'array-contains', uid)
+      .get();
+
+    // Obtener todos los hijos para ver el array sharedWith
+    const allChildrenSnapshot = await db.collection('children').get();
+    const allChildrenWithSharedInfo = allChildrenSnapshot.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name,
+      parentId: doc.data().parentId,
+      sharedWith: doc.data().sharedWith || []
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        currentUserId: uid,
+        ownChildrenCount: ownChildren.size,
+        ownChildren: ownChildren.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name,
+          parentId: doc.data().parentId,
+          sharedWith: doc.data().sharedWith || []
+        })),
+        sharedChildrenCount: sharedChildren.size,
+        sharedChildren: sharedChildren.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name,
+          parentId: doc.data().parentId,
+          sharedWith: doc.data().sharedWith || []
+        })),
+        allChildren: allChildrenWithSharedInfo.filter(c => 
+          c.parentId === uid || c.sharedWith.includes(uid)
+        )
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [DEBUG] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en debug',
       error: error.message
     });
   }
@@ -12168,24 +12268,55 @@ app.get('/api/auth/children/current-info', authenticateToken, async (req, res) =
       });
     }
 
-    // Obtener todos los hijos del usuario
-    const childrenSnapshot = await db.collection('children')
+    // Obtener hijos propios
+    const ownChildrenSnapshot = await db.collection('children')
       .where('parentId', '==', uid)
       .get();
 
+    // Obtener hijos compartidos
+    const sharedChildrenSnapshot = await db.collection('children')
+      .where('sharedWith', 'array-contains', uid)
+      .get();
+
     const children = [];
-    childrenSnapshot.forEach(doc => {
-      const childData = doc.data();
-      const currentInfo = getChildCurrentInfo(childData);
-      
-              children.push({
+    const childIds = new Set();
+
+    // Procesar hijos propios
+    ownChildrenSnapshot.forEach(doc => {
+      if (!childIds.has(doc.id)) {
+        childIds.add(doc.id);
+        const childData = doc.data();
+        const currentInfo = getChildCurrentInfo(childData);
+        
+        children.push({
           id: doc.id,
           ...currentInfo,
+          isShared: false,
           // Información adicional calculada
           createdDate: childData.createdAt,
           daysSinceCreation: currentInfo.daysSinceCreation,
           isOverdue: currentInfo.isOverdue || false
         });
+      }
+    });
+
+    // Procesar hijos compartidos
+    sharedChildrenSnapshot.forEach(doc => {
+      if (!childIds.has(doc.id)) {
+        childIds.add(doc.id);
+        const childData = doc.data();
+        const currentInfo = getChildCurrentInfo(childData);
+        
+        children.push({
+          id: doc.id,
+          ...currentInfo,
+          isShared: true,
+          // Información adicional calculada
+          createdDate: childData.createdAt,
+          daysSinceCreation: currentInfo.daysSinceCreation,
+          isOverdue: currentInfo.isOverdue || false
+        });
+      }
     });
 
     res.json({
@@ -24469,9 +24600,8 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
           continue; // Usuario sin hijos asignados
         }
 
-        // Enviar notificación para el hijo más pequeño (más relevante)
-        let youngestChild = null;
-        let youngestAge = 999;
+        // Recopilar TODOS los hijos elegibles (< 24 meses) con sus recordatorios
+        const eligibleChildren = [];
 
         for (const childDoc of allChildren) {
           const childData = childDoc.data();
@@ -24483,60 +24613,83 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
             const ageInDays = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24));
             const ageInMonths = Math.floor(ageInDays / 30);
 
-            if (ageInMonths < youngestAge && ageInMonths <= 24) { // Solo hasta 2 años
-              youngestAge = ageInMonths;
-              youngestChild = {
-                ...childData,
-                id: childDoc.id,
-                ageInMonths,
-                ageInDays
-              };
-            } else if (ageInMonths > 24) {
+            if (ageInMonths <= 24) { // Solo hasta 2 años
+              const fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+              
+              if (fallbackReminder) {
+                eligibleChildren.push({
+                  ...childData,
+                  id: childDoc.id,
+                  ageInMonths,
+                  ageInDays,
+                  fallbackReminder
+                });
+              }
+            } else {
               console.log(`⏭️ [DAILY] Niño ${childData.name} tiene ${ageInMonths} meses (> 24), saltando`);
             }
           }
         }
 
-        if (!youngestChild) {
-          childrenTooOld++;
-          continue; // No hay hijos con edad calculable o todos son > 24 meses
-        }
-
-        // Obtener recordatorio del día (fallback)
-        const fallbackReminder = getDailyReminder(youngestChild.ageInMonths, youngestChild.ageInDays);
-
-        if (!fallbackReminder) {
-          noReminderForAge++;
-          console.log(`⏭️ [DAILY] No hay recordatorio para ${youngestChild.name} (${youngestChild.ageInMonths} meses, ${youngestChild.ageInDays} días)`);
-          continue; // No hay recordatorio para hoy
-        }
-
-        // Generar mensaje personalizado con ChatGPT
-        const gptReminder = await generatePersonalizedReminder(
-          youngestChild,
-          fallbackReminder.type,
-          youngestChild.ageInMonths,
-          youngestChild.ageInDays
-        );
-
-        // Usar GPT si está disponible, sino usar fallback
-        const reminder = gptReminder || fallbackReminder;
-        let title = reminder.title || fallbackReminder.title;
-        let message = reminder.message || fallbackReminder.message;
-        
-        // Asegurar que el mensaje incluya el nombre del bebé
-        const childName = youngestChild.name || 'tu bebé';
-        message = message.replace(/tu bebé|el bebé/gi, childName);
-        
-        // Agregar nombre del bebé al título si no está presente
-        if (childName !== 'tu bebé' && !title.toLowerCase().includes(childName.toLowerCase())) {
-          // Para tips y milestones, personalizar el título
-          if (fallbackReminder.type === 'tip') {
-            title = `👶 Consejo para ${childName}`;
-          } else if (fallbackReminder.type === 'milestone') {
-            title = `🎉 ¡${childName} cumple ${youngestChild.ageInMonths} meses!`;
+        if (eligibleChildren.length === 0) {
+          if (allChildren.length > 0) {
+            childrenTooOld++;
           }
-          // Para vacunas, mantener el título original (ya es descriptivo)
+          continue; // No hay hijos elegibles
+        }
+
+        // Generar mensajes para cada hijo
+        const childReminders = [];
+        for (const child of eligibleChildren) {
+          const gptReminder = await generatePersonalizedReminder(
+            child,
+            child.fallbackReminder.type,
+            child.ageInMonths,
+            child.ageInDays
+          );
+
+          const reminder = gptReminder || child.fallbackReminder;
+          let message = reminder.message || child.fallbackReminder.message;
+          const childName = child.name || 'tu bebé';
+          message = message.replace(/tu bebé|el bebé/gi, childName);
+
+          childReminders.push({
+            child,
+            reminder,
+            message,
+            childName
+          });
+        }
+
+        // Crear título y mensaje combinado
+        let title, message;
+        if (eligibleChildren.length === 1) {
+          // Un solo hijo: mensaje personalizado
+          const { child, reminder, message: childMessage, childName } = childReminders[0];
+          
+          if (childName !== 'tu bebé') {
+            if (child.fallbackReminder.type === 'tip') {
+              title = `👶 Consejo para ${childName}`;
+            } else if (child.fallbackReminder.type === 'milestone') {
+              title = `🎉 ¡${childName} cumple ${child.ageInMonths} meses!`;
+            } else {
+              title = reminder.title || child.fallbackReminder.title;
+            }
+          } else {
+            title = reminder.title || child.fallbackReminder.title;
+          }
+          
+          message = childMessage;
+        } else {
+          // Múltiples hijos: combinar en un mensaje
+          const childNames = childReminders.map(r => r.childName).join(' y ');
+          title = `👶 Consejos para ${childNames}`;
+          
+          // Combinar mensajes
+          const messages = childReminders.map((r, idx) => {
+            return `${r.childName} (${r.child.ageInMonths}m): ${r.message}`;
+          });
+          message = messages.join('\n\n');
         }
 
         // Enviar push notification
@@ -24548,10 +24701,8 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
           },
           {
             type: 'daily_reminder',
-            reminderType: fallbackReminder.type,
-            childId: youngestChild.id,
-            childName: youngestChild.name,
-            childAge: youngestChild.ageInMonths
+            childrenIds: eligibleChildren.map(c => c.id),
+            childrenNames: eligibleChildren.map(c => c.name).join(', ')
           }
         );
 
@@ -24562,45 +24713,47 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
           title: title,
           message: message,
           data: {
-            reminderType: fallbackReminder.type,
-            childId: youngestChild.id,
-            childName: youngestChild.name,
-            childAge: youngestChild.ageInMonths
+            childrenIds: eligibleChildren.map(c => c.id),
+            childrenNames: eligibleChildren.map(c => c.name).join(', '),
+            childrenCount: eligibleChildren.length
           },
           read: false,
           createdAt: new Date()
         });
 
-        // Guardar log detallado para dashboard
-        await db.collection('reminders_history').add({
-          userId: userId,
-          userName: userData.displayName || userData.name || 'Usuario',
-          childId: youngestChild.id,
-          childName: youngestChild.name,
-          childAge: youngestChild.ageInMonths,
-          childAgeDays: youngestChild.ageInDays,
-          reminderType: fallbackReminder.type,
-          title: title,
-          message: message,
-          generatedBy: reminder.generatedBy || 'fallback',
-          model: reminder.model || null,
-          prompt: reminder.prompt || null,
-          sent: true,
-          sentAt: new Date(),
-          createdAt: new Date()
-        });
+        // Guardar log detallado para cada hijo en el dashboard
+        for (const childReminderData of childReminders) {
+          await db.collection('reminders_history').add({
+            userId: userId,
+            userName: userData.displayName || userData.name || 'Usuario',
+            childId: childReminderData.child.id,
+            childName: childReminderData.childName,
+            childAge: childReminderData.child.ageInMonths,
+            childAgeDays: childReminderData.child.ageInDays,
+            reminderType: childReminderData.child.fallbackReminder.type,
+            title: eligibleChildren.length === 1 ? title : `👶 Consejo para ${childReminderData.childName}`,
+            message: childReminderData.message,
+            generatedBy: childReminderData.reminder.generatedBy || 'fallback',
+            model: childReminderData.reminder.model || null,
+            prompt: childReminderData.reminder.prompt || null,
+            sent: true,
+            sentAt: new Date(),
+            createdAt: new Date()
+          });
+        }
 
         notificationsSent++;
+        
+        const childrenNames = eligibleChildren.map(c => c.name).join(', ');
         results.push({
           userId,
-          childName: youngestChild.name,
-          ageMonths: youngestChild.ageInMonths,
-          reminderType: fallbackReminder.type,
+          childrenNames: childrenNames,
+          childrenCount: eligibleChildren.length,
           title: title,
-          generatedBy: reminder.generatedBy || 'fallback'
+          generatedBy: childReminders[0]?.reminder?.generatedBy || 'fallback'
         });
 
-        console.log(`✅ [DAILY] Notificación enviada a ${userId} para ${youngestChild.name} (${youngestChild.ageInMonths} meses) - ${reminder.generatedBy || 'fallback'}`);
+        console.log(`✅ [DAILY] Notificación enviada a ${userId} para ${eligibleChildren.length} hijo(s): ${childrenNames}`);
 
       } catch (userError) {
         errors++;
