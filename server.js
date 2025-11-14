@@ -24084,6 +24084,886 @@ app.get('/api/admin/notifications/stats', authenticateToken, isAdmin, async (req
 });
 
 // ============================================================================
+// 📅 NOTIFICACIONES DIARIAS AUTOMÁTICAS - Vacunas, Consejos y Recordatorios
+// Powered by ChatGPT para mensajes personalizados
+// ============================================================================
+
+// Configuración por defecto para recordatorios
+const DEFAULT_REMINDER_CONFIG = {
+  enabled: true,
+  frequency: 'daily', // daily, every2days, every3days, weekly
+  timeOfDay: '09:00', // Hora local para enviar
+  types: {
+    vaccines: true,
+    tips: true,
+    milestones: true
+  }
+};
+
+// Función para generar mensaje personalizado con ChatGPT
+async function generatePersonalizedReminder(childData, reminderType, ageInMonths, ageInDays) {
+  if (!openai) {
+    console.warn('⚠️ [DAILY] OpenAI no configurado, usando mensaje por defecto');
+    return null;
+  }
+
+  try {
+    let prompt = '';
+    
+    const childName = childData.name || 'el bebé';
+    const childGender = childData.gender || 'bebé';
+    
+    if (reminderType === 'vaccine') {
+      // Buscar vacuna próxima según edad
+      const upcomingVaccines = [];
+      if (ageInMonths === 0 && ageInDays <= 7) upcomingVaccines.push('BCG y Hepatitis B');
+      else if (ageInMonths === 2) upcomingVaccines.push('Pentavalente, Rotavirus y Neumocócica');
+      else if (ageInMonths === 4) upcomingVaccines.push('2da dosis de Pentavalente, Rotavirus y Neumocócica');
+      else if (ageInMonths === 6) upcomingVaccines.push('3ra dosis de Pentavalente y 2da de Rotavirus');
+      else if (ageInMonths === 12) upcomingVaccines.push('SRP y Neumocócica de refuerzo');
+      else if (ageInMonths === 18) upcomingVaccines.push('Pentavalente de refuerzo');
+      
+      if (upcomingVaccines.length > 0) {
+        prompt = `Eres una doula experta y cálida. Escribe un recordatorio breve (máximo 100 caracteres) para que los padres no olviden las vacunas de ${childName}, un ${childGender} de ${ageInMonths} meses. Las vacunas son: ${upcomingVaccines[0]}. 
+        
+Debe ser:
+- Cálido y empático
+- Recordar la importancia sin asustar
+- Mencionar el nombre del bebé
+- Incluir emoji relevante
+- No usar comillas ni puntos finales innecesarios
+
+Ejemplo: "💉 ${childName} necesita sus vacunas de los ${ageInMonths} meses pronto. ¡Agenda tu cita!"`;
+      }
+    } 
+    else if (reminderType === 'tip') {
+      prompt = `Eres una doula experta y cálida. Da un consejo práctico y valioso para padres de ${childName}, un ${childGender} de ${ageInMonths} meses.
+
+El consejo debe ser:
+- Específico para la edad de ${ageInMonths} meses
+- Práctico y aplicable hoy
+- Máximo 120 caracteres
+- Incluir emoji relevante
+- Mencionar el nombre del bebé cuando sea natural
+- Basado en evidencia científica
+- Cálido y empático
+
+Temas sugeridos según edad:
+- 0 meses: Contacto piel con piel, lactancia, sueño
+- 1-2 meses: Estimulación visual, hablar mucho, tiempo boca abajo
+- 3-5 meses: Juegos, sonidos, agarrar objetos
+- 6 meses: Alimentación complementaria, gateo, dentición
+- 12 meses: Primeras palabras, caminar, independencia
+- 18-24 meses: Lenguaje, juego simbólico, socialización
+
+No uses comillas ni puntos finales innecesarios.`;
+    }
+    else if (reminderType === 'milestone') {
+      prompt = `Eres una doula experta. ${childName}, un ${childGender}, cumple ${ageInMonths} meses hoy. Escribe un mensaje celebratorio breve (máximo 100 caracteres) que:
+- Celebre el hito
+- Mencione 1 logro típico de esta edad
+- Sea emotivo y positivo
+- Incluya emoji de celebración
+- Mencione el nombre del bebé
+
+No uses comillas ni puntos finales innecesarios.`;
+    }
+
+    if (!prompt) return null;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: "Eres una doula experta, cálida y empática. Tus mensajes son breves, prácticos y basados en evidencia."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.8,
+      max_tokens: 100
+    });
+
+    const message = completion.choices[0]?.message?.content?.trim();
+    
+    if (!message) {
+      console.warn('⚠️ [DAILY] OpenAI no devolvió mensaje');
+      return null;
+    }
+
+    // Limpiar comillas y puntos innecesarios
+    const cleanedMessage = message.replace(/^["']|["']$/g, '').replace(/\.+$/, '');
+
+    console.log(`✅ [DAILY] Mensaje generado por ChatGPT: "${cleanedMessage}"`);
+    
+    return {
+      title: reminderType === 'vaccine' ? '💉 Recordatorio de vacunas' :
+             reminderType === 'milestone' ? '🎉 ¡Hito especial!' :
+             '👶 Consejo del día',
+      message: cleanedMessage,
+      generatedBy: 'chatgpt',
+      model: 'gpt-4',
+      prompt: prompt
+    };
+
+  } catch (error) {
+    console.error('❌ [DAILY] Error generando mensaje con ChatGPT:', error.message);
+    return null;
+  }
+}
+
+// Base de datos de recordatorios según edad del bebé (en meses) - FALLBACK
+const DAILY_REMINDERS = {
+  // Vacunas según calendario mexicano
+  vaccines: [
+    { ageMonths: 0, daysBefore: 3, title: '💉 Vacunas del recién nacido', message: 'En unos días tu bebé debe recibir BCG y Hepatitis B. ¡No olvides agendar tu cita!' },
+    { ageMonths: 2, daysBefore: 7, title: '💉 Vacunas de los 2 meses', message: 'La próxima semana tu bebé debe recibir: Pentavalente, Rotavirus y Neumocócica. ¡Recuerda agendar!' },
+    { ageMonths: 2, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca vacunas de los 2 meses! Pentavalente, Rotavirus y Neumocócica.' },
+    { ageMonths: 4, daysBefore: 7, title: '💉 Vacunas de los 4 meses', message: 'La próxima semana tu bebé debe recibir su segunda dosis de: Pentavalente, Rotavirus y Neumocócica.' },
+    { ageMonths: 4, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca la segunda dosis de vacunas! Pentavalente, Rotavirus y Neumocócica.' },
+    { ageMonths: 6, daysBefore: 7, title: '💉 Vacunas de los 6 meses', message: 'La próxima semana: tercera dosis de Pentavalente y segunda de Rotavirus. ¡Agenda tu cita!' },
+    { ageMonths: 6, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca vacunas! Tercera dosis de Pentavalente y segunda de Rotavirus.' },
+    { ageMonths: 7, daysBefore: 7, title: '💉 Vacuna de Influenza', message: 'La próxima semana tu bebé debe recibir la primera dosis de Influenza estacional.' },
+    { ageMonths: 12, daysBefore: 7, title: '💉 Vacunas del primer año', message: 'La próxima semana: SRP (Sarampión, Rubéola, Parotiditis) y Neumocócica de refuerzo. ¡Un año de protección!' },
+    { ageMonths: 12, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca vacunas del año! SRP y Neumocócica de refuerzo.' },
+    { ageMonths: 18, daysBefore: 7, title: '💉 Vacunas de los 18 meses', message: 'La próxima semana: Pentavalente de refuerzo. ¡Mantén al día su cartilla!' },
+    { ageMonths: 24, daysBefore: 7, title: '💉 Vacunas de los 2 años', message: 'La próxima semana tu pequeño debe recibir su refuerzo anual de Influenza.' }
+  ],
+  
+  // Consejos según edad
+  tips: {
+    0: [ // Recién nacido
+      { title: '👶 Recién nacido', message: 'El contacto piel con piel fortalece el vínculo. Abrázalo mucho, es lo que más necesita ahora.' },
+      { title: '😴 Sueño del bebé', message: 'Los recién nacidos duermen 16-17 horas al día. Es normal que se despierten cada 2-3 horas para comer.' },
+      { title: '🍼 Alimentación', message: 'La leche materna o fórmula es todo lo que necesita. No necesita agua ni otros líquidos.' },
+      { title: '👃 Cuidados básicos', message: 'El cordón umbilical se cae solo en 1-2 semanas. Manténlo limpio y seco.' }
+    ],
+    1: [
+      { title: '😊 Primer mes', message: 'Tu bebé ya puede enfocar objetos a 20-30 cm. ¡Háblale mucho, reconoce tu voz!' },
+      { title: '👀 Estimulación visual', message: 'Usa colores contrastantes como blanco y negro. Ayuda al desarrollo visual.' },
+      { title: '🎵 Música suave', message: 'La música clásica o canciones de cuna ayudan a calmar y estimular su cerebro.' }
+    ],
+    2: [
+      { title: '😄 ¡Sonrisas sociales!', message: 'A los 2 meses empiezan las primeras sonrisas sociales. ¡Sonríele mucho!' },
+      { title: '🗣️ Balbuceos', message: 'Tu bebé empieza a hacer sonidos. Respóndele para fomentar la comunicación.' },
+      { title: '💪 Tiempo boca abajo', message: '3-5 minutos varias veces al día fortalece su cuello y espalda. Siempre supervisado.' }
+    ],
+    3: [
+      { title: '🤲 Manos descubiertas', message: 'Empieza a descubrir sus manos. Ofrécele juguetes suaves para agarrar.' },
+      { title: '👂 Responde a sonidos', message: 'Gira la cabeza hacia los sonidos. Habla y canta para estimular su audición.' }
+    ],
+    4: [
+      { title: '🔄 ¡Puede girar!', message: 'Muchos bebés empiezan a girarse. Nunca lo dejes solo en superficies altas.' },
+      { title: '😂 Risas a carcajadas', message: 'Las cosquillas suaves y juegos le hacen reír. ¡Disfruta este momento!' }
+    ],
+    5: [
+      { title: '🍎 Preparación para sólidos', message: 'Pronto empezará con sólidos. Observa señales: se sienta con apoyo, muestra interés en comida.' },
+      { title: '🏃 Muy activo', message: 'Empieza a prepararse para gatear. Dale espacio seguro para moverse.' }
+    ],
+    6: [
+      { title: '🥄 Alimentación complementaria', message: 'A los 6 meses puedes iniciar papillas y purés. La leche sigue siendo su alimento principal.' },
+      { title: '🦷 Posible dentición', message: 'Pueden aparecer los primeros dientes. Mordederas frías alivian las molestias.' },
+      { title: '🪑 ¡Ya se sienta!', message: 'Muchos bebés ya se sientan sin apoyo. Coloca cojines alrededor por seguridad.' }
+    ],
+    9: [
+      { title: '👋 Dice adiós', message: 'Empieza a imitar gestos como decir adiós. ¡Practiquen juntos!' },
+      { title: '🧸 Juego de esconder', message: 'Le encanta el "¿dónde está el bebé?". Desarrolla permanencia de objeto.' }
+    ],
+    12: [
+      { title: '🎂 ¡Primer año!', message: '¡Felicidades! Ha sido un año increíble. Muchos bebés ya caminan o están por hacerlo.' },
+      { title: '🗣️ Primeras palabras', message: 'Puede decir "mamá" o "papá". Háblale mucho para ampliar su vocabulario.' }
+    ],
+    18: [
+      { title: '🚶 Caminando seguro', message: 'Ya camina con confianza. Puede empezar a correr y subir escaleras con ayuda.' },
+      { title: '📚 Cuentos interactivos', message: 'Le encantan los cuentos con imágenes. Señala y nombra objetos para aprender palabras.' }
+    ],
+    24: [
+      { title: '🎉 ¡Dos años!', message: 'Tu pequeño tiene personalidad propia. Es normal la etapa del "no" y las rabietas.' },
+      { title: '🧩 Juego simbólico', message: 'Imita situaciones cotidianas. Dale juguetes para cocinar, limpiar o cuidar muñecos.' }
+    ]
+  },
+  
+  // Hitos del desarrollo
+  milestones: [
+    { ageMonths: 1, title: '📸 Primer mes cumplido', message: '¡Tu bebé cumple su primer mes! Es buen momento para fotos y registro de peso/talla.' },
+    { ageMonths: 3, title: '🎯 3 meses de logros', message: '¡Ya son 3 meses! Tu bebé tiene más control de cuello y muestra más expresiones.' },
+    { ageMonths: 6, title: '🎂 Medio año', message: '¡6 meses! Tu bebé ha crecido increíblemente. Tiempo de evaluar su desarrollo con el pediatra.' },
+    { ageMonths: 9, title: '📊 9 meses de desarrollo', message: '¡9 meses afuera! Probablemente gatea y explora todo. Seguridad en casa es clave.' },
+    { ageMonths: 12, title: '🎊 ¡Primer año!', message: '¡Un año! De bebé recién nacido a pequeño explorador. ¡Celebra este gran logro!' }
+  ]
+};
+
+// Función para obtener recordatorio según edad
+function getDailyReminder(ageInMonths, ageInDays) {
+  const reminders = [];
+  
+  // Verificar vacunas próximas
+  DAILY_REMINDERS.vaccines.forEach(vaccine => {
+    const targetDays = vaccine.ageMonths * 30;
+    const daysUntilVaccine = targetDays - ageInDays;
+    
+    if (daysUntilVaccine === vaccine.daysBefore) {
+      reminders.push({
+        type: 'vaccine',
+        priority: 1,
+        title: vaccine.title,
+        message: vaccine.message
+      });
+    }
+  });
+  
+  // Verificar hitos
+  DAILY_REMINDERS.milestones.forEach(milestone => {
+    if (milestone.ageMonths === ageInMonths && ageInDays % 30 === 0) {
+      reminders.push({
+        type: 'milestone',
+        priority: 2,
+        title: milestone.title,
+        message: milestone.message
+      });
+    }
+  });
+  
+  // Consejos según edad (rotar diariamente)
+  const ageTips = DAILY_REMINDERS.tips[ageInMonths];
+  if (ageTips) {
+    const dayOfWeek = new Date().getDay(); // 0-6
+    const tipIndex = dayOfWeek % ageTips.length;
+    reminders.push({
+      type: 'tip',
+      priority: 3,
+      title: ageTips[tipIndex].title,
+      message: ageTips[tipIndex].message
+    });
+  }
+  
+  // Si no hay consejos específicos, usar del mes más cercano
+  if (reminders.filter(r => r.type === 'tip').length === 0) {
+    const nearestAge = [0, 1, 2, 3, 4, 5, 6, 9, 12, 18, 24].reduce((prev, curr) => {
+      return Math.abs(curr - ageInMonths) < Math.abs(prev - ageInMonths) ? curr : prev;
+    });
+    const fallbackTips = DAILY_REMINDERS.tips[nearestAge];
+    if (fallbackTips) {
+      const dayOfWeek = new Date().getDay();
+      const tipIndex = dayOfWeek % fallbackTips.length;
+      reminders.push({
+        type: 'tip',
+        priority: 3,
+        title: fallbackTips[tipIndex].title,
+        message: fallbackTips[tipIndex].message
+      });
+    }
+  }
+  
+  // Ordenar por prioridad (vacunas primero)
+  return reminders.sort((a, b) => a.priority - b.priority)[0] || null;
+}
+
+// Endpoint para enviar notificaciones diarias (llamado por cron job)
+app.post('/api/notifications/daily-reminders', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    console.log('📅 [DAILY] Iniciando envío de recordatorios diarios...');
+    
+    let notificationsSent = 0;
+    let errors = 0;
+    const results = [];
+
+    // Obtener todos los usuarios
+    const usersSnapshot = await db.collection('users').get();
+
+    for (const userDoc of usersSnapshot.docs) {
+      try {
+        const userData = userDoc.data();
+        const userId = userDoc.id;
+
+        // Saltar si no tiene tokens FCM
+        if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+          continue;
+        }
+
+        // Obtener hijos del usuario (como padre principal)
+        const childrenSnapshot = await db.collection('children')
+          .where('parentId', '==', userId)
+          .get();
+
+        // También obtener hijos compartidos con el usuario
+        const sharedChildrenSnapshot = await db.collection('children')
+          .where('sharedWith', 'array-contains', userId)
+          .get();
+
+        const allChildren = [...childrenSnapshot.docs, ...sharedChildrenSnapshot.docs];
+
+        if (allChildren.length === 0) {
+          continue; // Usuario sin hijos asignados
+        }
+
+        // Enviar notificación para el hijo más pequeño (más relevante)
+        let youngestChild = null;
+        let youngestAge = 999;
+
+        for (const childDoc of allChildren) {
+          const childData = childDoc.data();
+          
+          // Calcular edad actual
+          if (childData.birthDate) {
+            const birthDate = childData.birthDate.toDate?.() || new Date(childData.birthDate);
+            const now = new Date();
+            const ageInDays = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24));
+            const ageInMonths = Math.floor(ageInDays / 30);
+
+            if (ageInMonths < youngestAge && ageInMonths <= 24) { // Solo hasta 2 años
+              youngestAge = ageInMonths;
+              youngestChild = {
+                ...childData,
+                id: childDoc.id,
+                ageInMonths,
+                ageInDays
+              };
+            }
+          }
+        }
+
+        if (!youngestChild) {
+          continue; // No hay hijos con edad calculable
+        }
+
+        // Obtener recordatorio del día (fallback)
+        const fallbackReminder = getDailyReminder(youngestChild.ageInMonths, youngestChild.ageInDays);
+
+        if (!fallbackReminder) {
+          continue; // No hay recordatorio para hoy
+        }
+
+        // Generar mensaje personalizado con ChatGPT
+        const gptReminder = await generatePersonalizedReminder(
+          youngestChild,
+          fallbackReminder.type,
+          youngestChild.ageInMonths,
+          youngestChild.ageInDays
+        );
+
+        // Usar GPT si está disponible, sino usar fallback
+        const reminder = gptReminder || fallbackReminder;
+        const title = reminder.title || fallbackReminder.title;
+        const message = reminder.message || fallbackReminder.message.replace('tu bebé', youngestChild.name || 'tu bebé');
+
+        // Enviar push notification
+        await sendPushNotification(
+          userData.fcmTokens,
+          {
+            title: title,
+            body: message
+          },
+          {
+            type: 'daily_reminder',
+            reminderType: fallbackReminder.type,
+            childId: youngestChild.id,
+            childName: youngestChild.name,
+            childAge: youngestChild.ageInMonths
+          }
+        );
+
+        // Guardar notificación en Firestore
+        await db.collection('notifications').add({
+          userId: userId,
+          type: 'daily_reminder',
+          title: title,
+          message: message,
+          data: {
+            reminderType: fallbackReminder.type,
+            childId: youngestChild.id,
+            childName: youngestChild.name,
+            childAge: youngestChild.ageInMonths
+          },
+          read: false,
+          createdAt: new Date()
+        });
+
+        // Guardar log detallado para dashboard
+        await db.collection('reminders_history').add({
+          userId: userId,
+          userName: userData.displayName || userData.name || 'Usuario',
+          childId: youngestChild.id,
+          childName: youngestChild.name,
+          childAge: youngestChild.ageInMonths,
+          childAgeDays: youngestChild.ageInDays,
+          reminderType: fallbackReminder.type,
+          title: title,
+          message: message,
+          generatedBy: reminder.generatedBy || 'fallback',
+          model: reminder.model || null,
+          prompt: reminder.prompt || null,
+          sent: true,
+          sentAt: new Date(),
+          createdAt: new Date()
+        });
+
+        notificationsSent++;
+        results.push({
+          userId,
+          childName: youngestChild.name,
+          ageMonths: youngestChild.ageInMonths,
+          reminderType: fallbackReminder.type,
+          title: title,
+          generatedBy: reminder.generatedBy || 'fallback'
+        });
+
+        console.log(`✅ [DAILY] Notificación enviada a ${userId} para ${youngestChild.name} (${youngestChild.ageInMonths} meses) - ${reminder.generatedBy || 'fallback'}`);
+
+      } catch (userError) {
+        errors++;
+        console.error(`❌ [DAILY] Error procesando usuario ${userDoc.id}:`, userError.message);
+      }
+    }
+
+    console.log(`📊 [DAILY] Completado: ${notificationsSent} enviadas, ${errors} errores`);
+
+    res.json({
+      success: true,
+      message: 'Recordatorios diarios enviados',
+      data: {
+        notificationsSent,
+        errors,
+        results: results.slice(0, 10) // Primeros 10 para muestra
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [DAILY] Error en recordatorios diarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando recordatorios diarios',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para probar recordatorio de un usuario específico
+app.post('/api/notifications/test-daily-reminder', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const userDoc = await db.collection('users').doc(uid).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Obtener hijos
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', uid)
+      .get();
+
+    const sharedChildrenSnapshot = await db.collection('children')
+      .where('sharedWith', 'array-contains', uid)
+      .get();
+
+    const allChildren = [...childrenSnapshot.docs, ...sharedChildrenSnapshot.docs];
+
+    if (allChildren.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No tienes hijos registrados'
+      });
+    }
+
+    // Buscar hijo más pequeño
+    let youngestChild = null;
+    let youngestAge = 999;
+
+    for (const childDoc of allChildren) {
+      const childData = childDoc.data();
+      
+      if (childData.birthDate) {
+        const birthDate = childData.birthDate.toDate?.() || new Date(childData.birthDate);
+        const now = new Date();
+        const ageInDays = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24));
+        const ageInMonths = Math.floor(ageInDays / 30);
+
+        if (ageInMonths < youngestAge && ageInMonths <= 24) {
+          youngestAge = ageInMonths;
+          youngestChild = {
+            ...childData,
+            id: childDoc.id,
+            ageInMonths,
+            ageInDays
+          };
+        }
+      }
+    }
+
+    if (!youngestChild) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se pudo calcular la edad de los hijos'
+      });
+    }
+
+    // Obtener recordatorio
+    const reminder = getDailyReminder(youngestChild.ageInMonths, youngestChild.ageInDays);
+
+    if (!reminder) {
+      return res.json({
+        success: true,
+        message: 'No hay recordatorio disponible para hoy',
+        data: {
+          childName: youngestChild.name,
+          ageMonths: youngestChild.ageInMonths,
+          ageDays: youngestChild.ageInDays
+        }
+      });
+    }
+
+    const personalizedMessage = reminder.message.replace('tu bebé', youngestChild.name || 'tu bebé');
+
+    // Enviar push si tiene tokens
+    if (userData.fcmTokens && userData.fcmTokens.length > 0) {
+      await sendPushNotification(
+        userData.fcmTokens,
+        {
+          title: `🧪 Test: ${reminder.title}`,
+          body: personalizedMessage
+        },
+        {
+          type: 'daily_reminder',
+          reminderType: reminder.type,
+          childId: youngestChild.id,
+          test: true
+        }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: 'Recordatorio de prueba enviado',
+      data: {
+        childName: youngestChild.name,
+        ageMonths: youngestChild.ageInMonths,
+        ageDays: youngestChild.ageInDays,
+        reminder: {
+          type: reminder.type,
+          title: reminder.title,
+          message: personalizedMessage
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [DAILY] Error en test:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en recordatorio de prueba',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// 🎛️ ADMINISTRACIÓN DE RECORDATORIOS - Dashboard
+// ============================================================================
+
+// Obtener configuración de recordatorios
+app.get('/api/admin/reminders/config', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener configuración de Firestore
+    const configDoc = await db.collection('system_config').doc('reminders').get();
+    
+    const config = configDoc.exists ? configDoc.data() : DEFAULT_REMINDER_CONFIG;
+
+    res.json({
+      success: true,
+      data: config
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo configuración:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo configuración',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar configuración de recordatorios
+app.put('/api/admin/reminders/config', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { enabled, frequency, timeOfDay, types } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Validar frecuencia
+    const validFrequencies = ['daily', 'every2days', 'every3days', 'weekly'];
+    if (frequency && !validFrequencies.includes(frequency)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Frecuencia inválida. Debe ser: daily, every2days, every3days, weekly'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date(),
+      updatedBy: req.user.uid
+    };
+
+    if (enabled !== undefined) updateData.enabled = enabled;
+    if (frequency) updateData.frequency = frequency;
+    if (timeOfDay) updateData.timeOfDay = timeOfDay;
+    if (types) updateData.types = types;
+
+    await db.collection('system_config').doc('reminders').set(updateData, { merge: true });
+
+    console.log('✅ [ADMIN] Configuración de recordatorios actualizada:', updateData);
+
+    res.json({
+      success: true,
+      message: 'Configuración actualizada exitosamente',
+      data: updateData
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando configuración:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando configuración',
+      error: error.message
+    });
+  }
+});
+
+// Obtener historial de recordatorios enviados
+app.get('/api/admin/reminders/history', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, childName, reminderType, generatedBy } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('reminders_history');
+
+    // Filtros opcionales
+    if (childName) {
+      query = query.where('childName', '==', childName);
+    }
+    if (reminderType) {
+      query = query.where('reminderType', '==', reminderType);
+    }
+    if (generatedBy) {
+      query = query.where('generatedBy', '==', generatedBy);
+    }
+
+    // Obtener todos los documentos que cumplan con los filtros
+    const snapshot = await query.get();
+
+    // Ordenar y paginar en memoria
+    let reminders = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      sentAt: doc.data().sentAt?.toDate?.() || doc.data().sentAt,
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
+    }));
+
+    // Ordenar por fecha descendente
+    reminders.sort((a, b) => {
+      const dateA = a.sentAt || a.createdAt || new Date(0);
+      const dateB = b.sentAt || b.createdAt || new Date(0);
+      return dateB - dateA;
+    });
+
+    // Paginar
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+
+    const paginatedReminders = reminders.slice(startIndex, endIndex);
+    const totalPages = Math.ceil(reminders.length / limitNum);
+
+    res.json({
+      success: true,
+      data: paginatedReminders,
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        itemsPerPage: limitNum,
+        totalItems: reminders.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo historial:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo historial',
+      error: error.message
+    });
+  }
+});
+
+// Obtener estadísticas de recordatorios
+app.get('/api/admin/reminders/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const remindersSnapshot = await db.collection('reminders_history').get();
+    const reminders = remindersSnapshot.docs.map(doc => doc.data());
+
+    const now = new Date();
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const stats = {
+      total: reminders.length,
+      last24h: 0,
+      last7days: 0,
+      last30days: 0,
+      byType: {},
+      bySource: {
+        chatgpt: 0,
+        fallback: 0
+      },
+      mostActiveUsers: {},
+      averagePerDay: 0
+    };
+
+    reminders.forEach(reminder => {
+      const sentAt = reminder.sentAt?.toDate?.() || reminder.sentAt || new Date(0);
+      
+      // Conteo por período
+      if (sentAt >= dayAgo) stats.last24h++;
+      if (sentAt >= weekAgo) stats.last7days++;
+      if (sentAt >= monthAgo) stats.last30days++;
+
+      // Conteo por tipo
+      const type = reminder.reminderType || 'unknown';
+      stats.byType[type] = (stats.byType[type] || 0) + 1;
+
+      // Conteo por fuente
+      const source = reminder.generatedBy || 'fallback';
+      if (source === 'chatgpt') {
+        stats.bySource.chatgpt++;
+      } else {
+        stats.bySource.fallback++;
+      }
+
+      // Usuarios más activos
+      const userName = reminder.userName || 'Usuario';
+      stats.mostActiveUsers[userName] = (stats.mostActiveUsers[userName] || 0) + 1;
+    });
+
+    // Promedio por día (últimos 30 días)
+    stats.averagePerDay = stats.last30days > 0 ? (stats.last30days / 30).toFixed(1) : 0;
+
+    // Top 10 usuarios más activos
+    stats.topUsers = Object.entries(stats.mostActiveUsers)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count }));
+
+    delete stats.mostActiveUsers; // No enviamos el objeto completo
+
+    res.json({
+      success: true,
+      data: stats
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// Ver detalle de un recordatorio específico
+app.get('/api/admin/reminders/history/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const reminderDoc = await db.collection('reminders_history').doc(id).get();
+
+    if (!reminderDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recordatorio no encontrado'
+      });
+    }
+
+    const reminderData = reminderDoc.data();
+
+    res.json({
+      success: true,
+      data: {
+        id: reminderDoc.id,
+        ...reminderData,
+        sentAt: reminderData.sentAt?.toDate?.() || reminderData.sentAt,
+        createdAt: reminderData.createdAt?.toDate?.() || reminderData.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo detalle:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalle',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
