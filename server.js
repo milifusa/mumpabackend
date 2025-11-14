@@ -4597,13 +4597,31 @@ app.get('/post/:postId', async (req, res) => {
         }
     </style>
     <script>
-        // Intentar abrir en la app
-        window.onload = function() {
-            const deepLink = 'munpa://post/${postId}';
-            window.location.href = deepLink;
+        function openInApp() {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
             
-            // Si no abre en 2 segundos, quedarse en la web
-            setTimeout(() => {}, 2000);
+            if (isAndroid) {
+                // Intent scheme para Android
+                window.location.href = 'intent://post/${postId}#Intent;scheme=munpa;package=com.munpa.app;end';
+            } else if (isIOS) {
+                // Deep link para iOS
+                window.location.href = 'munpa://post/${postId}';
+                // Fallback a App Store si no tiene la app
+                setTimeout(() => {
+                    // Si sigue aquí después de 2s, no tiene la app
+                    // window.location.href = 'https://apps.apple.com/app/munpa/idXXXXXX';
+                }, 2000);
+            } else {
+                // Desktop o desconocido
+                window.location.href = 'munpa://post/${postId}';
+            }
+        }
+        
+        // Intentar abrir automáticamente al cargar
+        window.onload = function() {
+            // Mostrar el botón inmediatamente y hacer auto-redirect
+            setTimeout(openInApp, 100);
         };
     </script>
 </head>
@@ -4621,7 +4639,7 @@ app.get('/post/:postId', async (req, res) => {
             ❤️ ${postData.likeCount || 0} likes · 💬 ${postData.commentCount || 0} comentarios
         </div>
         <br>
-        <a href="munpa://post/${postId}" class="button">Abrir en Munpa</a>
+        <button onclick="openInApp()" class="button" style="border: none; cursor: pointer;">Abrir en Munpa 📱</button>
     </div>
 </body>
 </html>
@@ -4705,9 +4723,22 @@ app.get('/recommendation/:recommendationId', async (req, res) => {
         .button:hover { background: #4f46e5; }
     </style>
     <script>
+        function openInApp() {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+            
+            if (isAndroid) {
+                window.location.href = 'intent://recommendation/${recommendationId}#Intent;scheme=munpa;package=com.munpa.app;end';
+            } else if (isIOS) {
+                window.location.href = 'munpa://recommendation/${recommendationId}';
+                setTimeout(() => {}, 2000);
+            } else {
+                window.location.href = 'munpa://recommendation/${recommendationId}';
+            }
+        }
+        
         window.onload = function() {
-            window.location.href = 'munpa://recommendation/${recommendationId}';
-            setTimeout(() => {}, 2000);
+            setTimeout(openInApp, 100);
         };
     </script>
 </head>
@@ -4721,7 +4752,7 @@ app.get('/recommendation/:recommendationId', async (req, res) => {
         ${recData.address ? `<div class="info">📍 ${recData.address}</div>` : ''}
         ${recData.phone ? `<div class="info">📞 ${recData.phone}</div>` : ''}
         <div class="info">⭐ ${recData.averageRating || 0} (${recData.totalReviews || 0} reseñas)</div>
-        <a href="munpa://recommendation/${recommendationId}" class="button">Abrir en Munpa</a>
+        <button onclick="openInApp()" class="button" style="border: none; cursor: pointer;">Abrir en Munpa 📱</button>
     </div>
 </body>
 </html>
@@ -4732,6 +4763,266 @@ app.get('/recommendation/:recommendationId', async (req, res) => {
   } catch (error) {
     console.error('❌ [SHARE] Error mostrando recomendación:', error);
     res.status(500).send('<html><body style="padding:20px;text-align:center;"><h2>Error al cargar</h2></body></html>');
+  }
+});
+
+// Ver invitación para compartir hijo (público)
+app.get('/share-child/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Buscar invitación por token
+    const invitationsSnapshot = await db.collection('childInvitations')
+      .where('token', '==', token)
+      .limit(1)
+      .get();
+
+    if (invitationsSnapshot.empty) {
+      return res.status(404).send(`
+        <html>
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Invitación no encontrada - Munpa</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                     margin: 0; padding: 20px; background: #f5f5f5; display: flex; justify-content: center;
+                     align-items: center; min-height: 100vh; text-align: center; }
+              .container { max-width: 400px; background: white; border-radius: 12px; padding: 40px;
+                           box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+              .emoji { font-size: 64px; margin-bottom: 20px; }
+              h2 { color: #333; margin-bottom: 12px; }
+              p { color: #666; line-height: 1.6; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="emoji">😕</div>
+              <h2>Invitación no encontrada</h2>
+              <p>Esta invitación no existe o ya expiró.</p>
+            </div>
+          </body>
+        </html>
+      `);
+    }
+
+    const invitationData = invitationsSnapshot.docs[0].data();
+
+    // Verificar si ya fue usada o expiró
+    const now = new Date();
+    const expiresAt = invitationData.expiresAt?.toDate?.() || invitationData.expiresAt;
+    const isExpired = expiresAt && now > expiresAt;
+    const isUsed = invitationData.status !== 'pending';
+
+    // Obtener info del usuario que invitó
+    let inviterName = 'Usuario';
+    try {
+      const inviterDoc = await db.collection('users').doc(invitationData.invitedBy).get();
+      if (inviterDoc.exists) {
+        const inviterData = inviterDoc.data();
+        inviterName = inviterData.displayName || inviterData.name || 'Usuario';
+      }
+    } catch (error) {
+      console.warn('⚠️ [SHARE] Error obteniendo invitador:', error);
+    }
+
+    // Obtener info del hijo
+    const childDoc = await db.collection('children').doc(invitationData.childId).get();
+    let childPhotoUrl = null;
+    let childGender = null;
+    if (childDoc.exists) {
+      const childData = childDoc.data();
+      childPhotoUrl = childData.photoUrl || null;
+      childGender = childData.gender || null;
+    }
+
+    // Elegir emoji según género o rol
+    const defaultEmoji = childGender === 'niña' ? '👧' : childGender === 'niño' ? '👦' : '👶';
+    const roleEmojis = {
+      padre: '👨',
+      madre: '👩',
+      cuidadora: '👩‍⚕️',
+      familiar: '👵',
+      otro: '👤'
+    };
+    const roleEmoji = roleEmojis[invitationData.role] || '👤';
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${inviterName} te invitó a ver el perfil de ${invitationData.childName} - Munpa</title>
+    <meta property="og:title" content="${inviterName} te invitó a Munpa">
+    <meta property="og:description" content="Quiere compartir el perfil de ${invitationData.childName} contigo">
+    ${childPhotoUrl ? `<meta property="og:image" content="${childPhotoUrl}">` : ''}
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 400px;
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        .logo { font-size: 48px; margin-bottom: 20px; }
+        .child-photo {
+            width: 120px;
+            height: 120px;
+            border-radius: 60px;
+            object-fit: cover;
+            margin: 20px auto;
+            border: 4px solid #667eea;
+        }
+        .child-emoji { font-size: 80px; margin: 20px 0; }
+        .inviter {
+            color: #667eea;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .child-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #333;
+            margin: 16px 0;
+        }
+        .role {
+            display: inline-block;
+            background: #f0f0f0;
+            color: #666;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin: 12px 0;
+        }
+        .message {
+            color: #555;
+            font-size: 16px;
+            line-height: 1.6;
+            margin: 20px 0;
+        }
+        .button {
+            display: block;
+            width: 100%;
+            background: #667eea;
+            color: white;
+            padding: 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 24px;
+            text-decoration: none;
+            box-sizing: border-box;
+        }
+        .button:hover {
+            background: #5568d3;
+        }
+        .expired {
+            background: #ef4444;
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+        .status {
+            font-size: 14px;
+            color: #888;
+            margin-top: 16px;
+        }
+    </style>
+    <script>
+        function openInApp() {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+            
+            if (isAndroid) {
+                window.location.href = 'intent://share-child/${token}#Intent;scheme=munpa;package=com.munpa.app;end';
+            } else if (isIOS) {
+                window.location.href = 'munpa://share-child/${token}';
+                setTimeout(() => {}, 2000);
+            } else {
+                window.location.href = 'munpa://share-child/${token}';
+            }
+        }
+        
+        window.onload = function() {
+            ${!isExpired && !isUsed ? 'setTimeout(openInApp, 100);' : ''}
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">👶 Munpa</div>
+        
+        ${childPhotoUrl ? 
+          `<img src="${childPhotoUrl}" alt="${invitationData.childName}" class="child-photo">` : 
+          `<div class="child-emoji">${defaultEmoji}</div>`
+        }
+        
+        <div class="inviter">${roleEmoji} ${inviterName}</div>
+        <div class="child-name">${invitationData.childName}</div>
+        <div class="role">Como ${invitationData.role}</div>
+        
+        <div class="message">
+            Te ha invitado a ver y compartir el perfil de su ${childGender === 'niña' ? 'hija' : childGender === 'niño' ? 'hijo' : 'bebé'} en Munpa.
+        </div>
+        
+        ${isExpired ? 
+          '<div class="expired">⏰ Esta invitación ha expirado</div>' : 
+          isUsed ?
+            '<div class="expired">✅ Esta invitación ya fue utilizada</div>' :
+            '<button onclick="openInApp()" class="button">Aceptar invitación en Munpa 📱</button>'
+        }
+        
+        <div class="status">
+            ${!isExpired && !isUsed ? 
+              `Válida hasta: ${expiresAt ? new Date(expiresAt).toLocaleDateString('es-MX', { 
+                day: 'numeric', 
+                month: 'long', 
+                year: 'numeric' 
+              }) : 'Sin límite'}` : 
+              ''
+            }
+        </div>
+    </div>
+</body>
+</html>
+    `;
+
+    res.send(html);
+
+  } catch (error) {
+    console.error('❌ [SHARE] Error mostrando invitación:', error);
+    res.status(500).send(`
+      <html>
+        <body style="font-family: Arial; padding: 20px; text-align: center;">
+          <h2>😕 Ups, algo salió mal</h2>
+          <p>No pudimos cargar esta invitación.</p>
+          <a href="https://munpa.online" style="color: #6366f1;">Ir a Munpa</a>
+        </body>
+      </html>
+    `);
   }
 });
 
@@ -4792,8 +5083,22 @@ app.get('/marketplace/product/:productId', async (req, res) => {
                  border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 16px; }
     </style>
     <script>
+        function openInApp() {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+            
+            if (isAndroid) {
+                window.location.href = 'intent://marketplace/product/${productId}#Intent;scheme=munpa;package=com.munpa.app;end';
+            } else if (isIOS) {
+                window.location.href = 'munpa://marketplace/product/${productId}';
+                setTimeout(() => {}, 2000);
+            } else {
+                window.location.href = 'munpa://marketplace/product/${productId}';
+            }
+        }
+        
         window.onload = function() {
-            window.location.href = 'munpa://marketplace/product/${productId}';
+            setTimeout(openInApp, 100);
         };
     </script>
 </head>
@@ -4806,7 +5111,7 @@ app.get('/marketplace/product/:productId', async (req, res) => {
         <div class="description">${productData.description || ''}</div>
         <div class="info">📦 ${productData.condition || 'Condición no especificada'}</div>
         <div class="info">📍 ${productData.location?.city || ''}, ${productData.location?.state || ''}</div>
-        <a href="munpa://marketplace/product/${productId}" class="button">Ver en Munpa</a>
+        <button onclick="openInApp()" class="button" style="border: none; cursor: pointer;">Ver en Munpa 📱</button>
     </div>
 </body>
 </html>
