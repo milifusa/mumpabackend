@@ -24185,7 +24185,7 @@ No uses comillas ni puntos finales innecesarios.`;
     if (!prompt) return null;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-3.5-turbo",
       messages: [
         {
           role: "system",
@@ -24218,7 +24218,7 @@ No uses comillas ni puntos finales innecesarios.`;
              '👶 Consejo del día',
       message: cleanedMessage,
       generatedBy: 'chatgpt',
-      model: 'gpt-4',
+      model: 'gpt-3.5-turbo',
       prompt: prompt
     };
 
@@ -24509,8 +24509,23 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
 
         // Usar GPT si está disponible, sino usar fallback
         const reminder = gptReminder || fallbackReminder;
-        const title = reminder.title || fallbackReminder.title;
-        const message = reminder.message || fallbackReminder.message.replace('tu bebé', youngestChild.name || 'tu bebé');
+        let title = reminder.title || fallbackReminder.title;
+        let message = reminder.message || fallbackReminder.message;
+        
+        // Asegurar que el mensaje incluya el nombre del bebé
+        const childName = youngestChild.name || 'tu bebé';
+        message = message.replace(/tu bebé|el bebé/gi, childName);
+        
+        // Agregar nombre del bebé al título si no está presente
+        if (childName !== 'tu bebé' && !title.toLowerCase().includes(childName.toLowerCase())) {
+          // Para tips y milestones, personalizar el título
+          if (fallbackReminder.type === 'tip') {
+            title = `👶 Consejo para ${childName}`;
+          } else if (fallbackReminder.type === 'milestone') {
+            title = `🎉 ¡${childName} cumple ${youngestChild.ageInMonths} meses!`;
+          }
+          // Para vacunas, mantener el título original (ya es descriptivo)
+        }
 
         // Enviar push notification
         await sendPushNotification(
