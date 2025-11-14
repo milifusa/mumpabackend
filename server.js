@@ -24785,7 +24785,8 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
           userId: userId,
           type: 'daily_reminder',
           title: title,
-          message: message,
+          body: message, // Campo body para consistencia con otras notificaciones
+          message: message, // Mantener message para compatibilidad
           data: {
             childrenIds: eligibleChildren.map(c => c.id),
             childrenNames: eligibleChildren.map(c => c.name).join(', '),
