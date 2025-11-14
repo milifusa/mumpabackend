@@ -24717,7 +24717,20 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
             if (child.fallbackReminder.type === 'tip') {
               title = `👶 Consejo para ${childName}`;
             } else if (child.fallbackReminder.type === 'milestone') {
-              title = `🎉 ¡${childName} cumple ${child.ageInMonths} meses!`;
+              // Formatear edad en título de milestone
+              let ageText;
+              if (child.ageInMonths < 24) {
+                ageText = `${child.ageInMonths} meses`;
+              } else {
+                const years = Math.floor(child.ageInMonths / 12);
+                const remainingMonths = child.ageInMonths % 12;
+                if (remainingMonths === 0) {
+                  ageText = `${years} ${years === 1 ? 'año' : 'años'}`;
+                } else {
+                  ageText = `${years} ${years === 1 ? 'año' : 'años'} y ${remainingMonths} meses`;
+                }
+              }
+              title = `🎉 ¡${childName} cumple ${ageText}!`;
             } else {
               title = reminder.title || child.fallbackReminder.title;
             }
@@ -24733,7 +24746,22 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
           
           // Combinar mensajes
           const messages = childReminders.map((r, idx) => {
-            return `${r.childName} (${r.child.ageInMonths}m): ${r.message}`;
+            // Formatear edad: < 24 meses en meses, >= 24 meses en años
+            let ageDisplay;
+            if (r.child.ageInMonths < 24) {
+              ageDisplay = `${r.child.ageInMonths}m`;
+            } else {
+              const years = Math.floor(r.child.ageInMonths / 12);
+              const remainingMonths = r.child.ageInMonths % 12;
+              if (remainingMonths === 0) {
+                ageDisplay = `${years}a`;
+              } else if (remainingMonths === 6) {
+                ageDisplay = `${years}.5a`;
+              } else {
+                ageDisplay = `${years}a ${remainingMonths}m`;
+              }
+            }
+            return `${r.childName} (${ageDisplay}): ${r.message}`;
           });
           message = messages.join('\n\n');
         }
