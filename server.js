@@ -24432,9 +24432,14 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
     let notificationsSent = 0;
     let errors = 0;
     const results = [];
+    let usersWithoutTokens = 0;
+    let usersWithoutChildren = 0;
+    let childrenTooOld = 0;
+    let noReminderForAge = 0;
 
     // Obtener todos los usuarios
     const usersSnapshot = await db.collection('users').get();
+    console.log(`👥 [DAILY] Total usuarios en BD: ${usersSnapshot.docs.length}`);
 
     for (const userDoc of usersSnapshot.docs) {
       try {
@@ -24443,6 +24448,7 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
 
         // Saltar si no tiene tokens FCM
         if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+          usersWithoutTokens++;
           continue;
         }
 
@@ -24459,6 +24465,7 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
         const allChildren = [...childrenSnapshot.docs, ...sharedChildrenSnapshot.docs];
 
         if (allChildren.length === 0) {
+          usersWithoutChildren++;
           continue; // Usuario sin hijos asignados
         }
 
@@ -24484,18 +24491,23 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
                 ageInMonths,
                 ageInDays
               };
+            } else if (ageInMonths > 24) {
+              console.log(`⏭️ [DAILY] Niño ${childData.name} tiene ${ageInMonths} meses (> 24), saltando`);
             }
           }
         }
 
         if (!youngestChild) {
-          continue; // No hay hijos con edad calculable
+          childrenTooOld++;
+          continue; // No hay hijos con edad calculable o todos son > 24 meses
         }
 
         // Obtener recordatorio del día (fallback)
         const fallbackReminder = getDailyReminder(youngestChild.ageInMonths, youngestChild.ageInDays);
 
         if (!fallbackReminder) {
+          noReminderForAge++;
+          console.log(`⏭️ [DAILY] No hay recordatorio para ${youngestChild.name} (${youngestChild.ageInMonths} meses, ${youngestChild.ageInDays} días)`);
           continue; // No hay recordatorio para hoy
         }
 
@@ -24597,6 +24609,13 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
     }
 
     console.log(`📊 [DAILY] Completado: ${notificationsSent} enviadas, ${errors} errores`);
+    console.log(`📊 [DAILY] Estadísticas:`);
+    console.log(`   👥 Total usuarios en BD: ${usersSnapshot.docs.length}`);
+    console.log(`   ❌ Sin tokens FCM: ${usersWithoutTokens}`);
+    console.log(`   ❌ Sin hijos: ${usersWithoutChildren}`);
+    console.log(`   ❌ Hijos > 24 meses: ${childrenTooOld}`);
+    console.log(`   ❌ Sin recordatorio para edad: ${noReminderForAge}`);
+    console.log(`   ✅ Notificaciones enviadas: ${notificationsSent}`);
 
     res.json({
       success: true,
@@ -24604,7 +24623,14 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
       data: {
         notificationsSent,
         errors,
-        results: results.slice(0, 10) // Primeros 10 para muestra
+        results: results.slice(0, 10), // Primeros 10 para muestra
+        stats: {
+          totalUsers: usersSnapshot.docs.length,
+          usersWithoutTokens,
+          usersWithoutChildren,
+          childrenTooOld,
+          noReminderForAge
+        }
       }
     });
 
