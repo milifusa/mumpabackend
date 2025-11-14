@@ -24508,43 +24508,56 @@ function getDailyReminder(ageInMonths, ageInDays) {
 
 // Middleware especial para cron jobs: acepta JWT admin o CRON_SECRET
 const authenticateCron = (req, res, next) => {
-  // Opción 1: CRON_SECRET header (para Vercel Cron o servicios externos)
-  const cronSecret = req.headers['x-cron-secret'];
-  if (cronSecret && cronSecret === process.env.CRON_SECRET) {
-    console.log('✅ [CRON] Autenticado con CRON_SECRET');
+  console.log('🔍 [CRON] Headers recibidos:', Object.keys(req.headers));
+  
+  // Opción 1: x-cron-secret header (para servicios externos como cron-job.org)
+  const cronSecretHeader = req.headers['x-cron-secret'];
+  if (cronSecretHeader && cronSecretHeader === process.env.CRON_SECRET) {
+    console.log('✅ [CRON] Autenticado con x-cron-secret');
     req.user = { uid: 'cron-job', isAdmin: true };
     return next();
   }
 
-  // Opción 2: JWT de admin (para llamadas manuales)
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: 'No autorizado. Requiere CRON_SECRET header o token de admin'
-    });
+  // Opción 2: Authorization Bearer (para Vercel Cron Jobs)
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && parts[0] === 'Bearer') {
+      const token = parts[1];
+      
+      // Verificar si es el CRON_SECRET
+      if (token === process.env.CRON_SECRET) {
+        console.log('✅ [CRON] Autenticado con Authorization Bearer (CRON_SECRET)');
+        req.user = { uid: 'cron-job', isAdmin: true };
+        return next();
+      }
+      
+      // Si no es CRON_SECRET, intentar como JWT de admin
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        
+        // Verificar que es admin
+        if (!req.user.isAdmin) {
+          return res.status(403).json({
+            success: false,
+            message: 'Acceso denegado. Se requieren permisos de administrador'
+          });
+        }
+        
+        console.log('✅ [CRON] Autenticado con JWT admin');
+        return next();
+      } catch (error) {
+        // No es un JWT válido, continuar con error
+      }
+    }
   }
 
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    
-    // Verificar que es admin
-    if (!req.user.isAdmin) {
-      return res.status(403).json({
-        success: false,
-        message: 'Acceso denegado. Se requieren permisos de administrador'
-      });
-    }
-    
-    console.log('✅ [CRON] Autenticado con JWT admin');
-    next();
-  } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: 'Token inválido o expirado'
-    });
-  }
+  // Si llegamos aquí, no hay autenticación válida
+  return res.status(401).json({
+    success: false,
+    message: 'No autorizado. Requiere CRON_SECRET header o token de admin'
+  });
 };
 
 // Endpoint para enviar notificaciones diarias (llamado por cron job)
