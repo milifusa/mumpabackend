@@ -24427,6 +24427,30 @@ const DAILY_REMINDERS = {
     24: [
       { title: '🎉 ¡Dos años!', message: 'Tu pequeño tiene personalidad propia. Es normal la etapa del "no" y las rabietas.' },
       { title: '🧩 Juego simbólico', message: 'Imita situaciones cotidianas. Dale juguetes para cocinar, limpiar o cuidar muñecos.' }
+    ],
+    30: [
+      { title: '🗣️ Lenguaje en desarrollo', message: 'Tu hijo ya forma frases simples. Léele cuentos todos los días para ampliar su vocabulario.' },
+      { title: '🎨 Creatividad', message: 'Ofrece crayones, pinturas y plastilina. La creatividad estimula su desarrollo cognitivo.' }
+    ],
+    36: [
+      { title: '🎉 ¡Tres años!', message: 'Tu hijo es más independiente. Dale pequeñas responsabilidades apropiadas para su edad.' },
+      { title: '👥 Socialización', message: 'Es buen momento para actividades en grupo. Aprende a compartir y hacer amigos.' }
+    ],
+    42: [
+      { title: '🚲 Actividad física', message: 'Fomenta el juego activo. Puede andar en triciclo, saltar y trepar.' },
+      { title: '📚 Cuentos complejos', message: 'Su atención es mayor. Disfruta historias más largas y hace preguntas.' }
+    ],
+    48: [
+      { title: '🎉 ¡Cuatro años!', message: 'Tu hijo tiene mucha energía e imaginación. Responde "por qué" a todo.' },
+      { title: '🎭 Juego de rol', message: 'Le encanta disfrazarse y jugar a ser otros. Esto desarrolla su empatía.' }
+    ],
+    54: [
+      { title: '✏️ Pre-escritura', message: 'Practica trazos y figuras. Empieza a reconocer algunas letras.' },
+      { title: '🧮 Números y conteo', message: 'Puede contar hasta 10 o más. Incorpora matemáticas en juegos diarios.' }
+    ],
+    60: [
+      { title: '🎉 ¡Cinco años!', message: 'Tu hijo está listo para la escuela. Es más independiente y sociable.' },
+      { title: '🎓 Preparación escolar', message: 'Practica rutinas, sigue instrucciones y desarrolla habilidades de autoayuda.' }
     ]
   },
   
@@ -24484,12 +24508,12 @@ function getDailyReminder(ageInMonths, ageInDays) {
     });
   }
   
-  // Si no hay consejos específicos, usar del mes más cercano
+  // Si no hay consejos específicos, usar del mes más cercano (hasta 60 meses = 5 años)
   if (reminders.filter(r => r.type === 'tip').length === 0) {
-    const nearestAge = [0, 1, 2, 3, 4, 5, 6, 9, 12, 18, 24].reduce((prev, curr) => {
+    const nearestAge = [0, 1, 2, 3, 4, 5, 6, 9, 12, 18, 24, 30, 36, 42, 48, 54, 60].reduce((prev, curr) => {
       return Math.abs(curr - ageInMonths) < Math.abs(prev - ageInMonths) ? curr : prev;
     });
-    const fallbackTips = DAILY_REMINDERS.tips[nearestAge];
+    const fallbackTips = DAILY_REMINDERS.tips[nearestAge] || DAILY_REMINDERS.tips[24]; // Si no existe, usar 24 meses
     if (fallbackTips) {
       const dayOfWeek = new Date().getDay();
       const tipIndex = dayOfWeek % fallbackTips.length;
@@ -24613,6 +24637,8 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
           continue; // Usuario sin hijos asignados
         }
 
+        console.log(`👶 [DAILY] Usuario ${userId} tiene ${allChildren.length} hijo(s) total(es)`);
+
         // Recopilar TODOS los hijos elegibles (< 24 meses) con sus recordatorios
         const eligibleChildren = [];
 
@@ -24626,23 +24652,30 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
             const ageInDays = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24));
             const ageInMonths = Math.floor(ageInDays / 30);
 
-            if (ageInMonths <= 24) { // Solo hasta 2 años
-              const fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
-              
-              if (fallbackReminder) {
-                eligibleChildren.push({
-                  ...childData,
-                  id: childDoc.id,
-                  ageInMonths,
-                  ageInDays,
-                  fallbackReminder
-                });
-              }
+            console.log(`   👶 Hijo: ${childData.name}, ${ageInMonths} meses, ${ageInDays} días`);
+
+            // Obtener recordatorio sin límite de edad
+            const fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+            
+            if (fallbackReminder) {
+              console.log(`   ✅ Tiene recordatorio: ${fallbackReminder.title}`);
+              eligibleChildren.push({
+                ...childData,
+                id: childDoc.id,
+                ageInMonths,
+                ageInDays,
+                fallbackReminder
+              });
             } else {
-              console.log(`⏭️ [DAILY] Niño ${childData.name} tiene ${ageInMonths} meses (> 24), saltando`);
+              console.log(`   ⏭️ No hay recordatorio para ${childData.name} (${ageInMonths} meses, ${ageInDays} días)`);
+              noReminderForAge++;
             }
+          } else {
+            console.log(`   ⚠️ ${childData.name} no tiene birthDate`);
           }
         }
+
+        console.log(`   📊 Hijos elegibles para ${userId}: ${eligibleChildren.length}/${allChildren.length}`);
 
         if (eligibleChildren.length === 0) {
           if (allChildren.length > 0) {
