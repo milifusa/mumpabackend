@@ -19160,6 +19160,87 @@ app.patch('/api/marketplace/products/:id/status', authenticateToken, async (req,
 
       await db.collection('marketplace_transactions').add(transactionData);
       console.log('✅ [MARKETPLACE] Transacción creada para producto:', id);
+
+      // Notificar a todos los usuarios que chatearon sobre este producto
+      try {
+        const productData = productDoc.data();
+        console.log('📢 [MARKETPLACE] Buscando usuarios que chatearon sobre el producto:', id);
+        
+        // Obtener todos los mensajes relacionados con este producto
+        const messagesSnapshot = await db.collection('marketplace_messages')
+          .where('productId', '==', id)
+          .get();
+
+        // Recopilar IDs únicos de usuarios (excluyendo al vendedor)
+        const interestedUserIds = new Set();
+        messagesSnapshot.docs.forEach(doc => {
+          const msgData = doc.data();
+          if (msgData.senderId !== uid) {
+            interestedUserIds.add(msgData.senderId);
+          }
+          if (msgData.receiverId !== uid) {
+            interestedUserIds.add(msgData.receiverId);
+          }
+        });
+
+        console.log(`📢 [MARKETPLACE] ${interestedUserIds.size} usuarios interesados encontrados`);
+
+        // Enviar notificación a cada usuario interesado
+        for (const userId of interestedUserIds) {
+          try {
+            // Obtener tokens FCM del usuario
+            const userDoc = await db.collection('users').doc(userId).get();
+            if (!userDoc.exists || !userDoc.data().fcmTokens || userDoc.data().fcmTokens.length === 0) {
+              console.log(`⚠️ [MARKETPLACE] Usuario ${userId} sin tokens FCM`);
+              continue;
+            }
+
+            const tokens = userDoc.data().fcmTokens;
+            const statusText = status === 'vendido' ? 'vendió' : status === 'donado' ? 'donó' : 'intercambió';
+
+            // Enviar push notification
+            await sendPushNotification(
+              tokens,
+              {
+                title: '🛍️ Artículo vendido',
+                body: `${productData.title} ya se ${statusText}. ¡Gracias por tu interés!`
+              },
+              {
+                type: 'compra',
+                productId: id,
+                productTitle: productData.title,
+                status: status,
+                sellerId: uid
+              }
+            );
+
+            // Guardar notificación en Firestore para historial
+            await db.collection('notifications').add({
+              userId: userId,
+              type: 'compra',
+              title: '🛍️ Artículo vendido',
+              message: `${productData.title} ya se ${statusText}. ¡Gracias por tu interés!`,
+              data: {
+                productId: id,
+                productTitle: productData.title,
+                status: status,
+                sellerId: uid
+              },
+              read: false,
+              createdAt: now
+            });
+
+            console.log(`✅ [MARKETPLACE] Notificación enviada a usuario ${userId}`);
+
+          } catch (userError) {
+            console.error(`❌ [MARKETPLACE] Error notificando a usuario ${userId}:`, userError.message);
+          }
+        }
+
+      } catch (notifyError) {
+        console.error('❌ [MARKETPLACE] Error enviando notificaciones:', notifyError.message);
+        // No fallar el endpoint si las notificaciones fallan
+      }
     }
 
     await db.collection('marketplace_products').doc(id).update(updateData);
