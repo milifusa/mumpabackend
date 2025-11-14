@@ -24102,6 +24102,19 @@ const DEFAULT_REMINDER_CONFIG = {
 
 // Función para generar mensaje personalizado con ChatGPT
 async function generatePersonalizedReminder(childData, reminderType, ageInMonths, ageInDays) {
+  // Intentar inicializar OpenAI si no está disponible (para funciones serverless)
+  if (!openai && process.env.OPENAI_API_KEY) {
+    console.log('🤖 [DAILY] Inicializando OpenAI dinámicamente...');
+    try {
+      openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+      });
+      console.log('✅ [DAILY] OpenAI inicializado correctamente');
+    } catch (error) {
+      console.error('❌ [DAILY] Error inicializando OpenAI:', error.message);
+    }
+  }
+  
   if (!openai) {
     console.warn('⚠️ [DAILY] OpenAI no configurado, usando mensaje por defecto');
     return null;
@@ -24404,7 +24417,8 @@ const authenticateCron = (req, res, next) => {
 };
 
 // Endpoint para enviar notificaciones diarias (llamado por cron job)
-app.post('/api/notifications/daily-reminders', authenticateCron, async (req, res) => {
+// Vercel Cron Jobs usan GET por defecto
+app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res) => {
   try {
     if (!db) {
       return res.status(500).json({
