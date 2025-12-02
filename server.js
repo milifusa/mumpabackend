@@ -24872,6 +24872,352 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
   }
 });
 
+// ============================================================================
+// 📅 RECORDATORIOS SEMANALES ALEATORIOS
+// ============================================================================
+
+// Endpoint para enviar notificaciones semanales en horarios aleatorios
+// Se ejecuta cada hora entre 9am-7pm, pero solo envía 1 vez por semana
+app.get('/api/notifications/weekly-reminders', authenticateCron, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    console.log('📅 [WEEKLY] Verificando si enviar recordatorios semanales...');
+
+    // Obtener configuración de envío semanal
+    const configRef = db.collection('config').doc('weekly_reminders');
+    const configDoc = await configRef.get();
+    const configData = configDoc.exists ? configDoc.data() : {};
+
+    // Verificar si ya se envió esta semana
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay()); // Domingo de esta semana
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    if (configData.lastSentAt) {
+      const lastSent = configData.lastSentAt.toDate();
+      if (lastSent >= startOfWeek) {
+        console.log(`⏭️ [WEEKLY] Ya se enviaron notificaciones esta semana (${lastSent.toLocaleString()})`);
+        return res.json({
+          success: true,
+          message: 'Ya se enviaron notificaciones esta semana',
+          data: {
+            lastSentAt: lastSent,
+            nextAvailableAt: new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000)
+          }
+        });
+      }
+    }
+
+    // Probabilidad aleatoria de envío (15% cada hora = ~100% de probabilidad en el día)
+    const randomChance = Math.random();
+    const sendProbability = 0.15; // 15%
+
+    if (randomChance > sendProbability) {
+      console.log(`🎲 [WEEKLY] Probabilidad no cumplida (${(randomChance * 100).toFixed(1)}% > ${(sendProbability * 100)}%). Esperando próxima ejecución...`);
+      return res.json({
+        success: true,
+        message: 'Esperando momento aleatorio para enviar',
+        data: {
+          randomValue: randomChance,
+          threshold: sendProbability,
+          willSend: false
+        }
+      });
+    }
+
+    console.log(`🎲 [WEEKLY] ¡Momento de enviar! (${(randomChance * 100).toFixed(1)}% <= ${(sendProbability * 100)}%)`);
+
+    // ===== LÓGICA DE ENVÍO (misma que daily-reminders) =====
+    
+    let notificationsSent = 0;
+    let errors = 0;
+    const results = [];
+    let usersWithoutTokens = 0;
+    let usersWithoutChildren = 0;
+    let childrenTooOld = 0;
+    let noReminderForAge = 0;
+
+    // Obtener todos los usuarios
+    const usersSnapshot = await db.collection('users').get();
+    console.log(`👥 [WEEKLY] Total usuarios en BD: ${usersSnapshot.docs.length}`);
+
+    for (const userDoc of usersSnapshot.docs) {
+      try {
+        const userData = userDoc.data();
+        const userId = userDoc.id;
+
+        // Saltar si no tiene tokens FCM
+        if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+          usersWithoutTokens++;
+          continue;
+        }
+
+        // Obtener hijos del usuario (como padre principal)
+        const childrenSnapshot = await db.collection('children')
+          .where('parentId', '==', userId)
+          .get();
+
+        // También obtener hijos compartidos con el usuario
+        const sharedChildrenSnapshot = await db.collection('children')
+          .where('sharedWith', 'array-contains', userId)
+          .get();
+
+        const allChildren = [...childrenSnapshot.docs, ...sharedChildrenSnapshot.docs];
+
+        if (allChildren.length === 0) {
+          usersWithoutChildren++;
+          continue;
+        }
+
+        console.log(`👶 [WEEKLY] Usuario ${userId} tiene ${allChildren.length} hijo(s) total(es)`);
+
+        // Recopilar TODOS los hijos elegibles con sus recordatorios
+        const eligibleChildren = [];
+
+        for (const childDoc of allChildren) {
+          const childData = childDoc.data();
+          
+          // Calcular edad actual
+          if (childData.birthDate) {
+            const birthDate = childData.birthDate.toDate?.() || new Date(childData.birthDate);
+            const now = new Date();
+            const ageInDays = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24));
+            const ageInMonths = Math.floor(ageInDays / 30);
+
+            console.log(`   👶 Hijo: ${childData.name}, ${ageInMonths} meses, ${ageInDays} días`);
+
+            // Obtener recordatorio
+            const fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+            
+            if (fallbackReminder) {
+              console.log(`   ✅ Tiene recordatorio: ${fallbackReminder.title}`);
+              eligibleChildren.push({
+                ...childData,
+                id: childDoc.id,
+                ageInMonths,
+                ageInDays,
+                fallbackReminder
+              });
+            } else {
+              console.log(`   ⏭️ No hay recordatorio para ${childData.name} (${ageInMonths} meses, ${ageInDays} días)`);
+              noReminderForAge++;
+            }
+          } else {
+            console.log(`   ⚠️ ${childData.name} no tiene birthDate`);
+          }
+        }
+
+        console.log(`   📊 Hijos elegibles para ${userId}: ${eligibleChildren.length}/${allChildren.length}`);
+
+        if (eligibleChildren.length === 0) {
+          if (allChildren.length > 0) {
+            childrenTooOld++;
+          }
+          continue;
+        }
+
+        // Generar mensajes para cada hijo
+        const childReminders = [];
+        for (const child of eligibleChildren) {
+          const gptReminder = await generatePersonalizedReminder(
+            child,
+            child.fallbackReminder.type,
+            child.ageInMonths,
+            child.ageInDays
+          );
+
+          const reminder = gptReminder || child.fallbackReminder;
+          let message = reminder.message || child.fallbackReminder.message;
+          const childName = child.name || 'tu bebé';
+          message = message.replace(/tu bebé|el bebé/gi, childName);
+
+          childReminders.push({
+            child,
+            reminder,
+            message,
+            childName
+          });
+        }
+
+        // Crear título y mensaje combinado
+        let title, message;
+        if (eligibleChildren.length === 1) {
+          const { child, reminder, message: childMessage, childName } = childReminders[0];
+          
+          if (childName !== 'tu bebé') {
+            if (child.fallbackReminder.type === 'tip') {
+              title = `👶 Consejo para ${childName}`;
+            } else if (child.fallbackReminder.type === 'milestone') {
+              let ageText;
+              if (child.ageInMonths < 24) {
+                ageText = `${child.ageInMonths} meses`;
+              } else {
+                const years = Math.floor(child.ageInMonths / 12);
+                const remainingMonths = child.ageInMonths % 12;
+                if (remainingMonths === 0) {
+                  ageText = `${years} ${years === 1 ? 'año' : 'años'}`;
+                } else {
+                  ageText = `${years} ${years === 1 ? 'año' : 'años'} y ${remainingMonths} meses`;
+                }
+              }
+              title = `🎉 ¡${childName} cumple ${ageText}!`;
+            } else {
+              title = reminder.title || child.fallbackReminder.title;
+            }
+          } else {
+            title = reminder.title || child.fallbackReminder.title;
+          }
+          
+          message = childMessage;
+        } else {
+          const childNames = childReminders.map(r => r.childName).join(' y ');
+          title = `👶 Consejos para ${childNames}`;
+          
+          const messages = childReminders.map((r, idx) => {
+            let ageDisplay;
+            if (r.child.ageInMonths < 24) {
+              ageDisplay = `${r.child.ageInMonths}m`;
+            } else {
+              const years = Math.floor(r.child.ageInMonths / 12);
+              const remainingMonths = r.child.ageInMonths % 12;
+              if (remainingMonths === 0) {
+                ageDisplay = `${years}a`;
+              } else if (remainingMonths === 6) {
+                ageDisplay = `${years}.5a`;
+              } else {
+                ageDisplay = `${years}a ${remainingMonths}m`;
+              }
+            }
+            return `${r.childName} (${ageDisplay}): ${r.message}`;
+          });
+          message = messages.join('\n\n');
+        }
+
+        // Enviar push notification
+        await sendPushNotification(
+          userData.fcmTokens,
+          {
+            title: title,
+            body: message
+          },
+          {
+            type: 'weekly_reminder',
+            childrenIds: eligibleChildren.map(c => c.id),
+            childrenNames: eligibleChildren.map(c => c.name).join(', ')
+          }
+        );
+
+        // Guardar notificación en Firestore
+        await db.collection('notifications').add({
+          userId: userId,
+          type: 'weekly_reminder',
+          title: title,
+          body: message,
+          message: message,
+          data: {
+            childrenIds: eligibleChildren.map(c => c.id),
+            childrenNames: eligibleChildren.map(c => c.name).join(', '),
+            childrenCount: eligibleChildren.length
+          },
+          read: false,
+          createdAt: new Date()
+        });
+
+        // Guardar log detallado para cada hijo en el dashboard
+        for (const childReminderData of childReminders) {
+          await db.collection('reminders_history').add({
+            userId: userId,
+            userName: userData.displayName || userData.name || 'Usuario',
+            childId: childReminderData.child.id,
+            childName: childReminderData.childName,
+            childAge: childReminderData.child.ageInMonths,
+            childAgeDays: childReminderData.child.ageInDays,
+            reminderType: childReminderData.child.fallbackReminder.type,
+            title: eligibleChildren.length === 1 ? title : `👶 Consejo para ${childReminderData.childName}`,
+            message: childReminderData.message,
+            generatedBy: childReminderData.reminder.generatedBy || 'fallback',
+            model: childReminderData.reminder.model || null,
+            prompt: childReminderData.reminder.prompt || null,
+            sent: true,
+            sentAt: new Date(),
+            sentType: 'weekly_random',
+            createdAt: new Date()
+          });
+        }
+
+        notificationsSent++;
+        
+        const childrenNames = eligibleChildren.map(c => c.name).join(', ');
+        results.push({
+          userId,
+          childrenNames: childrenNames,
+          childrenCount: eligibleChildren.length,
+          title: title,
+          generatedBy: childReminders[0]?.reminder?.generatedBy || 'fallback'
+        });
+
+        console.log(`✅ [WEEKLY] Notificación enviada a ${userId} para ${eligibleChildren.length} hijo(s): ${childrenNames}`);
+
+      } catch (userError) {
+        errors++;
+        console.error(`❌ [WEEKLY] Error procesando usuario ${userDoc.id}:`, userError.message);
+      }
+    }
+
+    // Registrar que ya se envió esta semana
+    await configRef.set({
+      lastSentAt: now,
+      lastSentHour: now.getHours(),
+      notificationsSent,
+      errors
+    }, { merge: true });
+
+    console.log(`📊 [WEEKLY] Completado: ${notificationsSent} enviadas, ${errors} errores`);
+    console.log(`📊 [WEEKLY] Horario: ${now.toLocaleString()}`);
+    console.log(`📊 [WEEKLY] Estadísticas:`);
+    console.log(`   👥 Total usuarios en BD: ${usersSnapshot.docs.length}`);
+    console.log(`   ❌ Sin tokens FCM: ${usersWithoutTokens}`);
+    console.log(`   ❌ Sin hijos: ${usersWithoutChildren}`);
+    console.log(`   ❌ Hijos > 24 meses: ${childrenTooOld}`);
+    console.log(`   ❌ Sin recordatorio para edad: ${noReminderForAge}`);
+    console.log(`   ✅ Notificaciones enviadas: ${notificationsSent}`);
+
+    res.json({
+      success: true,
+      message: 'Recordatorios semanales enviados',
+      data: {
+        sentAt: now,
+        sentHour: now.getHours(),
+        notificationsSent,
+        errors,
+        results: results.slice(0, 10),
+        stats: {
+          totalUsers: usersSnapshot.docs.length,
+          usersWithoutTokens,
+          usersWithoutChildren,
+          childrenTooOld,
+          noReminderForAge
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [WEEKLY] Error en recordatorios semanales:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando recordatorios semanales',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para probar recordatorio de un usuario específico
 app.post('/api/notifications/test-daily-reminder', authenticateToken, async (req, res) => {
   try {
