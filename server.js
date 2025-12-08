@@ -24508,12 +24508,13 @@ function getDailyReminder(ageInMonths, ageInDays) {
     });
   }
   
-  // Si no hay consejos específicos, usar del mes más cercano (hasta 60 meses = 5 años)
+  // Si no hay consejos específicos, usar del mes más cercano (extendido hasta 144 meses = 12 años)
   if (reminders.filter(r => r.type === 'tip').length === 0) {
-    const nearestAge = [0, 1, 2, 3, 4, 5, 6, 9, 12, 18, 24, 30, 36, 42, 48, 54, 60].reduce((prev, curr) => {
+    const availableAges = [0, 1, 2, 3, 4, 5, 6, 9, 12, 18, 24, 30, 36, 42, 48, 54, 60, 72, 84, 96, 108, 120, 132, 144];
+    const nearestAge = availableAges.reduce((prev, curr) => {
       return Math.abs(curr - ageInMonths) < Math.abs(prev - ageInMonths) ? curr : prev;
     });
-    const fallbackTips = DAILY_REMINDERS.tips[nearestAge] || DAILY_REMINDERS.tips[24]; // Si no existe, usar 24 meses
+    const fallbackTips = DAILY_REMINDERS.tips[nearestAge] || DAILY_REMINDERS.tips[24];
     if (fallbackTips) {
       const dayOfWeek = new Date().getDay();
       const tipIndex = dayOfWeek % fallbackTips.length;
@@ -24526,8 +24527,32 @@ function getDailyReminder(ageInMonths, ageInDays) {
     }
   }
   
+  // GARANTIZAR que siempre haya un recordatorio para TODOS los hijos
+  if (reminders.length === 0) {
+    // Consejos genéricos por rango de edad
+    const genericTips = [
+      { title: '💝 Momento especial', message: 'Dedica unos minutos hoy para jugar y conectar con tu bebé. Los momentos de calidad fortalecen el vínculo.' },
+      { title: '🌟 Tip del día', message: 'Habla con tu bebé durante las actividades diarias. Esto estimula su desarrollo del lenguaje.' },
+      { title: '🎈 Diversión en familia', message: 'Los juegos simples como esconderse y aparecer son excelentes para el desarrollo cognitivo.' },
+      { title: '📚 Lectura diaria', message: 'Leer cuentos juntos, aunque sea por pocos minutos, beneficia enormemente su desarrollo.' },
+      { title: '🤗 Conexión emocional', message: 'Los abrazos y el contacto físico son fundamentales para el bienestar emocional de tu pequeño.' },
+      { title: '🎵 Música y movimiento', message: 'Cantar y bailar juntos estimula múltiples áreas del desarrollo de tu hijo.' },
+      { title: '🌈 Exploración', message: 'Permite que tu hijo explore de forma segura. La curiosidad es el motor del aprendizaje.' }
+    ];
+    
+    const dayOfWeek = new Date().getDay();
+    const tipIndex = dayOfWeek % genericTips.length;
+    
+    reminders.push({
+      type: 'tip',
+      priority: 3,
+      title: genericTips[tipIndex].title,
+      message: genericTips[tipIndex].message
+    });
+  }
+  
   // Ordenar por prioridad (vacunas primero)
-  return reminders.sort((a, b) => a.priority - b.priority)[0] || null;
+  return reminders.sort((a, b) => a.priority - b.priority)[0];
 }
 
 // Middleware especial para cron jobs: acepta JWT admin o CRON_SECRET
