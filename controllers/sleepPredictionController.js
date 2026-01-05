@@ -14,11 +14,11 @@ const {
   differenceInMinutes, 
   differenceInHours,
   addMinutes, 
+  addDays,
   format,
   startOfDay,
   isToday,
-  subDays,
-  addDays
+  subDays
 } = require('date-fns');
 
 class SleepPredictionController {
@@ -432,61 +432,168 @@ class SleepPredictionController {
    * Predecir próxima siesta usando ventanas de sueño
    */
   predictNextNap(naps, now, ageInMonths) {
+    // Si no hay siestas registradas, usar horarios por defecto
     if (naps.length === 0) {
       const defaults = this.getDefaultNapSchedule(ageInMonths);
+      const nextDefault = this.findNextDefaultNap(defaults, now);
       return {
-        time: defaults[0],
+        time: nextDefault,
         confidence: 30,
         reason: 'Basado en horarios típicos para la edad',
-        windowStart: defaults[0],
-        windowEnd: addMinutes(parseISO(defaults[0]), 60).toISOString()
+        windowStart: addMinutes(parseISO(nextDefault), -30).toISOString(),
+        windowEnd: addMinutes(parseISO(nextDefault), 30).toISOString(),
+        expectedDuration: this.getTypicalNapDuration(ageInMonths),
+        type: 'Horario sugerido'
+      };
+    }
+
+    // Encontrar la última siesta
+    const sortedNaps = [...naps].sort((a, b) => 
+      parseISO(b.startTime).getTime() - parseISO(a.startTime).getTime()
+    );
+    const lastNap = sortedNaps[0];
+    const lastNapEnd = parseISO(lastNap.endTime || lastNap.startTime);
+    const hoursSinceLastNap = differenceInHours(now, lastNapEnd, { roundingMethod: 'floor' });
+    const minutesSinceLastNap = differenceInMinutes(now, lastNapEnd);
+
+    // Ventanas de sueño típicas por edad (en horas)
+    const wakeWindows = this.getWakeWindows(ageInMonths);
+    const minWakeWindow = wakeWindows.min;
+    const maxWakeWindow = wakeWindows.max;
+    const optimalWakeWindow = wakeWindows.optimal;
+
+    // Si la última siesta fue hace muy poco, calcular cuándo debería ser la próxima
+    if (minutesSinceLastNap < minWakeWindow * 60) {
+      // Calcular próxima siesta basada en ventana de sueño óptima
+      const nextNapTime = addMinutes(lastNapEnd, optimalWakeWindow * 60);
+      
+      return {
+        time: nextNapTime.toISOString(),
+        windowStart: addMinutes(nextNapTime, -20).toISOString(),
+        windowEnd: addMinutes(nextNapTime, 20).toISOString(),
+        expectedDuration: this.getTypicalNapDuration(ageInMonths),
+        confidence: 75,
+        type: 'Basado en ventana de sueño',
+        reason: `Última siesta hace ${Math.round(minutesSinceLastNap)} minutos. Ventana óptima: ${optimalWakeWindow} horas`,
+        hoursUntilNextNap: Math.max(0, (optimalWakeWindow * 60 - minutesSinceLastNap) / 60)
       };
     }
 
     // Analizar patrones de horario de siestas
     const napTimes = naps.map(n => {
       const date = parseISO(n.startTime);
-      return date.getHours() + date.getMinutes() / 60;
+      return {
+        hour: date.getHours() + date.getMinutes() / 60,
+        date: date
+      };
     });
 
     // Agrupar siestas por horario (mañana, mediodía, tarde)
-    const morningNaps = napTimes.filter(t => t >= 8 && t < 12);
-    const afternoonNaps = napTimes.filter(t => t >= 12 && t < 16);
-    const eveningNaps = napTimes.filter(t => t >= 16 && t < 20);
+    const morningNaps = napTimes.filter(t => t.hour >= 7 && t.hour < 12);
+    const afternoonNaps = napTimes.filter(t => t.hour >= 12 && t.hour < 16);
+    const eveningNaps = napTimes.filter(t => t.hour >= 16 && t.hour < 20);
 
     // Calcular promedios
-    const avgMorningNap = morningNaps.length > 0 ? stats.mean(morningNaps) : null;
-    const avgAfternoonNap = afternoonNaps.length > 0 ? stats.mean(afternoonNaps) : null;
-    const avgEveningNap = eveningNaps.length > 0 ? stats.mean(eveningNaps) : null;
+    const avgMorningNap = morningNaps.length > 0 ? stats.mean(morningNaps.map(n => n.hour)) : null;
+    const avgAfternoonNap = afternoonNaps.length > 0 ? stats.mean(afternoonNaps.map(n => n.hour)) : null;
+    const avgEveningNap = eveningNaps.length > 0 ? stats.mean(eveningNaps.map(n => n.hour)) : null;
 
-    // Determinar próxima siesta según hora actual
+    // Hora actual
     const currentHour = now.getHours() + now.getMinutes() / 60;
     let nextNapHour, confidence, napType;
 
-    if (currentHour < 12 && avgMorningNap) {
+    // Lógica mejorada: considerar si es razonable esperar otra siesta hoy
+    const hourOfDay = now.getHours();
+    
+    // Si es muy tarde (después de las 7 PM), no predecir más siestas para hoy
+    if (hourOfDay >= 19) {
+      // Predecir primera siesta del día siguiente
+      if (avgMorningNap) {
+        nextNapHour = avgMorningNap;
+        napType = 'Siesta de la mañana';
+        confidence = 80;
+      } else {
+        // Usar horario por defecto para mañana
+        const defaults = this.getDefaultNapSchedule(ageInMonths);
+        const firstNap = parseISO(defaults[0]);
+        nextNapHour = firstNap.getHours() + firstNap.getMinutes() / 60;
+        napType = 'Horario sugerido';
+        confidence = 40;
+      }
+      
+      const nextNapDate = new Date(now);
+      nextNapDate.setDate(nextNapDate.getDate() + 1);
+      nextNapDate.setHours(Math.floor(nextNapHour));
+      nextNapDate.setMinutes(Math.round((nextNapHour % 1) * 60));
+      nextNapDate.setSeconds(0);
+
+      const recentNapDurations = naps
+        .slice(-5)
+        .filter(n => n.duration && n.duration > 0)
+        .map(n => n.duration);
+      
+      const expectedDuration = recentNapDurations.length > 0
+        ? Math.round(stats.mean(recentNapDurations))
+        : this.getTypicalNapDuration(ageInMonths);
+
+      return {
+        time: nextNapDate.toISOString(),
+        windowStart: addMinutes(nextNapDate, -30).toISOString(),
+        windowEnd: addMinutes(nextNapDate, 30).toISOString(),
+        expectedDuration,
+        confidence,
+        type: napType,
+        reason: `Ya es tarde. Próxima siesta mañana. ${naps.length} siestas en historial`
+      };
+    }
+
+    // Determinar próxima siesta según hora actual y ventana de sueño
+    if (currentHour < 12 && avgMorningNap && avgMorningNap > currentHour) {
       nextNapHour = avgMorningNap;
       napType = 'Siesta de la mañana';
       confidence = 85;
-    } else if (currentHour < 16 && avgAfternoonNap) {
+    } else if (currentHour < 16 && avgAfternoonNap && avgAfternoonNap > currentHour) {
       nextNapHour = avgAfternoonNap;
       napType = 'Siesta de la tarde';
       confidence = 90;
-    } else if (currentHour < 19 && avgEveningNap && ageInMonths < 6) {
+    } else if (currentHour < 18 && avgEveningNap && avgEveningNap > currentHour && ageInMonths < 9) {
       nextNapHour = avgEveningNap;
-      napType = 'Siesta de la noche';
+      napType = 'Siesta vespertina';
       confidence = 75;
-    } else if (avgMorningNap) {
-      // Si ya pasó la hora, predecir para mañana
-      nextNapHour = avgMorningNap;
-      napType = 'Siesta de la mañana (próximo día)';
-      confidence = 80;
     } else {
-      return null;
+      // Si no hay patrón claro o ya pasaron todas las siestas, usar ventana de sueño
+      const nextNapByWindow = addMinutes(lastNapEnd, optimalWakeWindow * 60);
+      
+      // Si la próxima por ventana es razonable (antes de las 7 PM)
+      if (nextNapByWindow.getHours() < 19) {
+        return {
+          time: nextNapByWindow.toISOString(),
+          windowStart: addMinutes(nextNapByWindow, -20).toISOString(),
+          windowEnd: addMinutes(nextNapByWindow, 20).toISOString(),
+          expectedDuration: this.getTypicalNapDuration(ageInMonths),
+          confidence: 70,
+          type: 'Basado en ventana de sueño',
+          reason: `Basado en ventana óptima de ${optimalWakeWindow}h desde última siesta`
+        };
+      }
+      
+      // De lo contrario, predecir para mañana
+      if (avgMorningNap) {
+        nextNapHour = avgMorningNap;
+        napType = 'Siesta de la mañana (mañana)';
+        confidence = 75;
+      } else {
+        const defaults = this.getDefaultNapSchedule(ageInMonths);
+        const firstNap = parseISO(defaults[0]);
+        nextNapHour = firstNap.getHours() + firstNap.getMinutes() / 60;
+        napType = 'Horario sugerido (mañana)';
+        confidence = 50;
+      }
     }
 
-    // Calcular tiempo óptimo
+    // Calcular fecha y hora de la próxima siesta
     const nextNapDate = new Date(now);
-    if (nextNapHour < currentHour) {
+    if (nextNapHour <= currentHour) {
       nextNapDate.setDate(nextNapDate.getDate() + 1);
     }
     nextNapDate.setHours(Math.floor(nextNapHour));
@@ -500,7 +607,7 @@ class SleepPredictionController {
     // Duración esperada
     const recentNapDurations = naps
       .slice(-5)
-      .filter(n => n.duration)
+      .filter(n => n.duration && n.duration > 0)
       .map(n => n.duration);
     
     const expectedDuration = recentNapDurations.length > 0
@@ -516,6 +623,52 @@ class SleepPredictionController {
       type: napType,
       reason: `Basado en ${naps.length} siestas anteriores`
     };
+  }
+
+  /**
+   * Obtener ventanas de sueño por edad (tiempo despierto entre siestas)
+   */
+  getWakeWindows(ageInMonths) {
+    if (ageInMonths <= 1) {
+      return { min: 0.75, optimal: 1, max: 1.5 }; // 45-90 min
+    } else if (ageInMonths <= 3) {
+      return { min: 1, optimal: 1.5, max: 2 }; // 1-2 horas
+    } else if (ageInMonths <= 6) {
+      return { min: 1.5, optimal: 2, max: 2.5 }; // 1.5-2.5 horas
+    } else if (ageInMonths <= 9) {
+      return { min: 2, optimal: 2.5, max: 3.5 }; // 2-3.5 horas
+    } else if (ageInMonths <= 12) {
+      return { min: 2.5, optimal: 3, max: 4 }; // 2.5-4 horas
+    } else if (ageInMonths <= 18) {
+      return { min: 3, optimal: 4, max: 5 }; // 3-5 horas
+    } else {
+      return { min: 4, optimal: 5, max: 6 }; // 4-6 horas
+    }
+  }
+
+  /**
+   * Encontrar el próximo horario por defecto que no haya pasado
+   */
+  findNextDefaultNap(defaults, now) {
+    const currentHour = now.getHours() + now.getMinutes() / 60;
+    
+    for (const defaultTime of defaults) {
+      const napTime = parseISO(defaultTime);
+      const napHour = napTime.getHours() + napTime.getMinutes() / 60;
+      
+      if (napHour > currentHour && napHour < 19) {
+        return defaultTime;
+      }
+    }
+    
+    // Si todos los horarios ya pasaron, devolver el primero del día siguiente
+    const tomorrow = addDays(now, 1);
+    const firstNap = parseISO(defaults[0]);
+    tomorrow.setHours(firstNap.getHours());
+    tomorrow.setMinutes(firstNap.getMinutes());
+    tomorrow.setSeconds(0);
+    
+    return tomorrow.toISOString();
   }
 
   /**
