@@ -407,8 +407,8 @@ class SleepPredictionController {
       return napTime > now;
     }) || null;
 
-    // 3. PREDECIR HORA DE DORMIR NOCTURNA
-    const bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths);
+    // 3. PREDECIR HORA DE DORMIR NOCTURNA (pasar historial completo para mejor predicción)
+    const bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory);
 
     // 4. ANALIZAR PATRONES DE SUEÑO
     const patterns = this.analyzeSleepPatterns(sleepHistory, ageInMonths);
