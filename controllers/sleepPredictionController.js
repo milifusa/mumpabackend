@@ -533,59 +533,88 @@ class SleepPredictionController {
   }
 
   /**
-   * Predecir siestas basándose en patrones históricos
+   * Predecir siestas basándose en patrones históricos REALES
    */
   predictDailyNapsFromPatterns(naps, now, ageInMonths, napsToday, targetNapCount) {
     const todayEnd = new Date(now);
     todayEnd.setHours(23, 59, 59, 999); // Fin del día actual
     
-    const napsByHour = {};
-    
-    // Agrupar siestas históricas por hora del día
-    naps.forEach(nap => {
+    // Analizar últimos 30 días para encontrar patrones
+    const thirtyDaysAgo = subDays(now, 30);
+    const recentNaps = naps.filter(nap => {
       const napDate = parseISO(nap.startTime);
-      const hour = napDate.getHours();
-      if (!napsByHour[hour]) {
-        napsByHour[hour] = [];
-      }
-      napsByHour[hour].push({
-        hour: napDate.getHours() + napDate.getMinutes() / 60,
-        duration: nap.duration || 60
-      });
+      return napDate >= thirtyDaysAgo;
     });
 
-    // Identificar horarios más comunes
-    const commonNapTimes = Object.keys(napsByHour)
-      .map(hour => {
-        const napsAtHour = napsByHour[hour];
-        return {
-          avgHour: stats.mean(napsAtHour.map(n => n.hour)),
-          avgDuration: Math.round(stats.mean(napsAtHour.map(n => n.duration))),
-          frequency: napsAtHour.length
-        };
-      })
-      .sort((a, b) => b.frequency - a.frequency)
+    // Agrupar siestas por "slot" del día (mañana, mediodía, tarde)
+    // usando clustering simple basado en hora
+    const napSlots = [];
+    
+    recentNaps.forEach(nap => {
+      const napDate = parseISO(nap.startTime);
+      const napHour = napDate.getHours() + napDate.getMinutes() / 60;
+      
+      // Buscar si pertenece a un slot existente (±2 horas de tolerancia)
+      let foundSlot = false;
+      for (let slot of napSlots) {
+        const avgSlotHour = stats.mean(slot.hours);
+        if (Math.abs(napHour - avgSlotHour) <= 2) {
+          slot.hours.push(napHour);
+          slot.durations.push(nap.duration || 60);
+          slot.count++;
+          foundSlot = true;
+          break;
+        }
+      }
+      
+      // Si no pertenece a ningún slot, crear uno nuevo
+      if (!foundSlot) {
+        napSlots.push({
+          hours: [napHour],
+          durations: [nap.duration || 60],
+          count: 1
+        });
+      }
+    });
+
+    // Calcular promedios de cada slot y ordenar por hora
+    const predictedSlots = napSlots
+      .map(slot => ({
+        avgHour: stats.mean(slot.hours),
+        avgDuration: Math.round(stats.mean(slot.durations)),
+        confidence: Math.min(90, 60 + slot.count * 5),
+        frequency: slot.count
+      }))
+      .filter(slot => slot.avgHour >= 7 && slot.avgHour < 19) // Solo 7 AM - 7 PM
+      .sort((a, b) => a.avgHour - b.avgHour)
       .slice(0, targetNapCount);
 
-    // Generar predicciones SOLO para el día actual
-    const predictedNaps = commonNapTimes
-      .filter(nap => nap.avgHour >= 7 && nap.avgHour < 19) // Solo entre 7 AM y 7 PM
-      .sort((a, b) => a.avgHour - b.avgHour)
-      .map((nap, index) => {
+    // Generar predicciones SOLO para el día actual usando horarios REALES
+    const predictedNaps = predictedSlots
+      .map((slot, index) => {
         const napDate = new Date(now);
-        napDate.setHours(Math.floor(nap.avgHour));
-        napDate.setMinutes(Math.round((nap.avgHour % 1) * 60));
+        napDate.setHours(Math.floor(slot.avgHour));
+        napDate.setMinutes(Math.round((slot.avgHour % 1) * 60));
         napDate.setSeconds(0);
+
+        const napType = this.getNapTypeByTime(slot.avgHour);
+        
+        // APRENDER duración específica para este tipo
+        const durationLearned = this.learnNapDuration(naps, napType, ageInMonths);
+        const expectedDuration = typeof durationLearned === 'object' 
+          ? durationLearned.duration 
+          : durationLearned;
 
         return {
           time: napDate.toISOString(),
-          windowStart: addMinutes(napDate, -20).toISOString(),
-          windowEnd: addMinutes(napDate, 20).toISOString(),
-          expectedDuration: nap.avgDuration,
-          confidence: Math.min(90, 60 + nap.frequency * 5),
+          windowStart: addMinutes(napDate, -30).toISOString(),
+          windowEnd: addMinutes(napDate, 30).toISOString(),
+          expectedDuration,
+          confidence: slot.confidence,
           napNumber: index + 1,
-          type: this.getNapTypeByTime(nap.avgHour),
-          status: napDate <= now ? 'passed' : 'upcoming'
+          type: napType,
+          status: napDate <= now ? 'passed' : 'upcoming',
+          basedOnFrequency: slot.frequency
         };
       })
       .filter(nap => {
@@ -597,7 +626,7 @@ class SleepPredictionController {
     return {
       naps: predictedNaps,
       totalNaps: predictedNaps.length,
-      basedOn: 'patterns'
+      basedOn: 'learned-patterns'
     };
   }
 
