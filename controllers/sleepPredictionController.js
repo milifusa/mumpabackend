@@ -494,10 +494,18 @@ class SleepPredictionController {
    * Predecir TODAS las siestas del día (horario completo)
    */
   predictDailyNaps(naps, now, ageInMonths) {
-    const currentHour = now.getHours() + now.getMinutes() / 60;
+    // IMPORTANTE: Las fechas ya vienen en UTC desde Firestore
+    // Pero necesitamos considerar la hora LOCAL del usuario para decidir
+    // si predecir hoy o mañana
     
-    // Si es tarde (después de las 7 PM), predecir para MAÑANA
-    const predictionDate = currentHour >= 19 ? addDays(now, 1) : now;
+    // Obtener hora UTC actual
+    const utcHour = now.getUTCHours() + now.getUTCMinutes() / 60;
+    
+    // Ajustar a UTC-6 (zona horaria del usuario)
+    const localHour = ((utcHour - 6) + 24) % 24;
+    
+    // Si es tarde en hora LOCAL (después de las 7 PM), predecir para MAÑANA
+    const predictionDate = localHour >= 19 ? addDays(now, 1) : now;
     const todayStart = startOfDay(predictionDate);
 
     // Obtener número esperado de siestas por edad
