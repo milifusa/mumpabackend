@@ -1,6 +1,6 @@
 {
   "name": "mumpabackend",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Backend con Firebase para autenticación y predicción de sueño infantil",
   "main": "server.js",
   "scripts": {

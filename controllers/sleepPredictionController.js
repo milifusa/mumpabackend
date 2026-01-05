@@ -501,8 +501,8 @@ class SleepPredictionController {
       return this.predictDailyNapsFromPatterns(naps, now, ageInMonths, napsToday, targetNapCount);
     }
 
-    // Si no hay suficiente historial, usar horarios por defecto
-    return this.predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount);
+    // Si no hay suficiente historial, usar horarios por defecto (pero pasar naps para aprender duraciones)
+    return this.predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount, naps);
   }
 
   /**
@@ -574,7 +574,7 @@ class SleepPredictionController {
   /**
    * Predecir siestas usando horarios por defecto
    */
-  predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount) {
+  predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount, allNaps = []) {
     const schedule = this.getDefaultScheduleByAge(ageInMonths);
     const defaultNaps = schedule.naps;
 
@@ -593,15 +593,22 @@ class SleepPredictionController {
         }
 
         const hour = napDate.getHours() + napDate.getMinutes() / 60;
+        const napType = this.getNapTypeByTime(hour);
+
+        // ✅ APRENDER duración real del bebé (si hay historial)
+        const durationLearned = this.learnNapDuration(allNaps, napType, ageInMonths);
+        const expectedDuration = typeof durationLearned === 'object' 
+          ? durationLearned.duration 
+          : durationLearned;
 
         return {
           time: napDate.toISOString(),
           windowStart: addMinutes(napDate, -30).toISOString(),
           windowEnd: addMinutes(napDate, 30).toISOString(),
-          expectedDuration: this.getTypicalNapDuration(ageInMonths),
+          expectedDuration,
           confidence: 40,
           napNumber: index + 1,
-          type: this.getNapTypeByTime(hour),
+          type: napType,
           status: napDate <= now ? 'passed' : 'upcoming'
         };
       });
@@ -648,13 +655,20 @@ class SleepPredictionController {
     if (naps.length === 0) {
       const defaults = this.getDefaultNapSchedule(ageInMonths);
       const nextDefault = this.findNextDefaultNap(defaults, now);
+      
+      // ✅ APRENDER duración incluso sin historial (usa edad por defecto)
+      const durationLearned = this.learnNapDuration(naps, null, ageInMonths);
+      const expectedDuration = typeof durationLearned === 'object' 
+        ? durationLearned.duration 
+        : durationLearned;
+      
       return {
         time: nextDefault,
         confidence: 30,
         reason: 'Basado en horarios típicos para la edad',
         windowStart: addMinutes(parseISO(nextDefault), -30).toISOString(),
         windowEnd: addMinutes(parseISO(nextDefault), 30).toISOString(),
-        expectedDuration: this.getTypicalNapDuration(ageInMonths),
+        expectedDuration,
         type: 'Horario sugerido'
       };
     }
@@ -687,22 +701,34 @@ class SleepPredictionController {
         const tomorrowMorning = addDays(now, 1);
         tomorrowMorning.setHours(9, 0, 0, 0); // 9:00 AM
         
+        // ✅ APRENDER duración para siesta de la mañana
+        const durationLearned = this.learnNapDuration(naps, 'Mañana', ageInMonths);
+        const expectedDuration = typeof durationLearned === 'object' 
+          ? durationLearned.duration 
+          : durationLearned;
+        
         return {
           time: tomorrowMorning.toISOString(),
           windowStart: addMinutes(tomorrowMorning, -30).toISOString(),
           windowEnd: addMinutes(tomorrowMorning, 30).toISOString(),
-          expectedDuration: this.getTypicalNapDuration(ageInMonths),
+          expectedDuration,
           confidence: 70,
           type: 'Próxima siesta (mañana)',
           reason: `Última siesta fue tarde (${lastNapEnd.toLocaleTimeString()}). Próxima siesta mañana por la mañana`
         };
       }
       
+      // ✅ APRENDER duración general
+      const durationLearned = this.learnNapDuration(naps, null, ageInMonths);
+      const expectedDuration = typeof durationLearned === 'object' 
+        ? durationLearned.duration 
+        : durationLearned;
+      
       return {
         time: nextNapTime.toISOString(),
         windowStart: addMinutes(nextNapTime, -20).toISOString(),
         windowEnd: addMinutes(nextNapTime, 20).toISOString(),
-        expectedDuration: this.getTypicalNapDuration(ageInMonths),
+        expectedDuration,
         confidence: 75,
         type: 'Basado en ventana de sueño',
         reason: `Última siesta hace ${Math.round(minutesSinceLastNap)} minutos. Ventana óptima: ${optimalWakeWindow} horas`,
@@ -758,14 +784,11 @@ class SleepPredictionController {
       nextNapDate.setMinutes(Math.round((nextNapHour % 1) * 60));
       nextNapDate.setSeconds(0);
 
-      const recentNapDurations = naps
-        .slice(-5)
-        .filter(n => n.duration && n.duration > 0)
-        .map(n => n.duration);
-      
-      const expectedDuration = recentNapDurations.length > 0
-        ? Math.round(stats.mean(recentNapDurations))
-        : this.getTypicalNapDuration(ageInMonths);
+      // ✅ APRENDER duración del tipo de siesta específico
+      const durationLearned = this.learnNapDuration(naps, napType, ageInMonths);
+      const expectedDuration = typeof durationLearned === 'object' 
+        ? durationLearned.duration 
+        : durationLearned;
 
       return {
         time: nextNapDate.toISOString(),
@@ -797,11 +820,17 @@ class SleepPredictionController {
       
       // Si la próxima por ventana es razonable (antes de las 7 PM)
       if (nextNapByWindow.getHours() < 19) {
+        // ✅ APRENDER duración
+        const durationLearned = this.learnNapDuration(naps, null, ageInMonths);
+        const expectedDuration = typeof durationLearned === 'object' 
+          ? durationLearned.duration 
+          : durationLearned;
+        
         return {
           time: nextNapByWindow.toISOString(),
           windowStart: addMinutes(nextNapByWindow, -20).toISOString(),
           windowEnd: addMinutes(nextNapByWindow, 20).toISOString(),
-          expectedDuration: this.getTypicalNapDuration(ageInMonths),
+          expectedDuration,
           confidence: 70,
           type: 'Basado en ventana de sueño',
           reason: `Basado en ventana óptima de ${optimalWakeWindow}h desde última siesta`
@@ -835,15 +864,11 @@ class SleepPredictionController {
     const windowStart = addMinutes(nextNapDate, -30);
     const windowEnd = addMinutes(nextNapDate, 30);
 
-    // Duración esperada
-    const recentNapDurations = naps
-      .slice(-5)
-      .filter(n => n.duration && n.duration > 0)
-      .map(n => n.duration);
-    
-    const expectedDuration = recentNapDurations.length > 0
-      ? Math.round(stats.mean(recentNapDurations))
-      : this.getTypicalNapDuration(ageInMonths);
+    // ✅ APRENDER duración del tipo de siesta específico
+    const durationLearned = this.learnNapDuration(naps, napType, ageInMonths);
+    const expectedDuration = typeof durationLearned === 'object' 
+      ? durationLearned.duration 
+      : durationLearned;
 
     return {
       time: nextNapDate.toISOString(),
@@ -1363,11 +1388,88 @@ class SleepPredictionController {
     return bedtime.toISOString();
   }
 
+  /**
+   * Obtener duración típica de siesta por defecto (cuando no hay historial)
+   */
   getTypicalNapDuration(ageInMonths) {
     if (ageInMonths <= 3) return 45;
     if (ageInMonths <= 6) return 60;
     if (ageInMonths <= 12) return 75;
-    return 90;
+    if (ageInMonths <= 24) return 90;
+    return 60; // Niños mayores tienden a dormir siestas más cortas
+  }
+
+  /**
+   * APRENDER duración real de siestas del bebé basándose en historial
+   */
+  learnNapDuration(naps, napType, ageInMonths) {
+    // Si no hay historial suficiente, usar duración por defecto
+    if (!naps || naps.length < 3) {
+      return this.getTypicalNapDuration(ageInMonths);
+    }
+
+    // Filtrar solo siestas recientes (últimos 30 días)
+    const thirtyDaysAgo = subDays(new Date(), 30);
+    const recentNaps = naps.filter(nap => {
+      const napDate = parseISO(nap.startTime);
+      return napDate >= thirtyDaysAgo && nap.type === 'nap' && nap.duration > 0;
+    });
+
+    if (recentNaps.length === 0) {
+      return this.getTypicalNapDuration(ageInMonths);
+    }
+
+    // Si se especifica un tipo de siesta (mañana, mediodía, tarde), filtrar por hora
+    let relevantNaps = recentNaps;
+    
+    if (napType) {
+      const napTypeHour = this.getNapTypeHour(napType);
+      if (napTypeHour) {
+        relevantNaps = recentNaps.filter(nap => {
+          const hour = parseISO(nap.startTime).getHours();
+          return Math.abs(hour - napTypeHour) <= 3; // ±3 horas de tolerancia
+        });
+      }
+    }
+
+    // Si después del filtro no hay siestas, usar todas las recientes
+    if (relevantNaps.length === 0) {
+      relevantNaps = recentNaps;
+    }
+
+    // Calcular duración promedio REAL del bebé
+    const durations = relevantNaps.map(nap => nap.duration || nap.netDuration || 0);
+    const avgDuration = Math.round(stats.mean(durations));
+    const stdDev = durations.length > 1 ? Math.round(stats.standardDeviation(durations)) : 0;
+
+    // Si la desviación estándar es muy alta, dar más peso al promedio
+    const confidence = durations.length >= 5 ? 85 : 65;
+
+    return {
+      duration: avgDuration,
+      min: Math.max(15, avgDuration - stdDev), // Mínimo 15 minutos
+      max: avgDuration + stdDev,
+      confidence,
+      sampleSize: relevantNaps.length,
+      basedOn: napType ? `Siestas tipo ${napType}` : 'Todas las siestas'
+    };
+  }
+
+  /**
+   * Obtener hora típica según tipo de siesta
+   */
+  getNapTypeHour(napType) {
+    const typeMapping = {
+      'Siesta de la mañana': 9,
+      'Mañana': 9,
+      'Siesta del mediodía': 13,
+      'Mediodía': 13,
+      'Siesta de la tarde': 16,
+      'Tarde': 16,
+      'Siesta de la noche': 18,
+      'Noche': 18
+    };
+    return typeMapping[napType] || null;
   }
 
   getExpectedSleepByAge(ageInMonths) {
