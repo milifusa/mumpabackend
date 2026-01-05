@@ -428,7 +428,7 @@ class SleepPredictionController {
     const napsToday = naps.filter(nap => {
       const napDate = parseISO(nap.startTime);
       return napDate >= todayStart;
-    }).map(nap => ({
+    }).map((nap, index) => ({
       id: nap.id,
       time: nap.startTime,
       startTime: nap.startTime,
@@ -436,27 +436,36 @@ class SleepPredictionController {
       duration: nap.duration,
       actualDuration: nap.duration,
       quality: nap.quality,
+      location: nap.location,
+      pauses: nap.pauses || [],
+      napNumber: index + 1,
       type: 'completed',
       status: 'completed',
       isReal: true
     }));
 
-    // 8. COMBINAR HECHOS + PREDICCIONES EN UN SOLO ARRAY
+    // 8. OBTENER PREDICCIONES FUTURAS DEL DÍA ACTUAL
+    const futurePredictions = dailyNapSchedule.naps
+      .filter(predictedNap => {
+        const predTime = parseISO(predictedNap.time);
+        return predTime > now;
+      })
+      .map((predictedNap, index) => ({
+        ...predictedNap,
+        napNumber: napsToday.length + index + 1,
+        type: 'prediction',
+        status: 'upcoming',
+        isReal: false
+      }));
+
+    // 9. COMBINAR HECHOS + PREDICCIONES EN UN SOLO ARRAY
     const allNapsOfDay = [
-      ...napsToday,  // HECHOS (ya sucedieron)
-      ...dailyNapSchedule.naps
-        .filter(predictedNap => parseISO(predictedNap.time) > now)  // Solo futuras
-        .map((predictedNap, index) => ({
-          ...predictedNap,
-          napNumber: napsToday.length + index + 1,
-          type: 'prediction',
-          status: 'upcoming',
-          isReal: false
-        }))
+      ...napsToday,           // HECHOS (ya sucedieron)
+      ...futurePredictions    // PREDICCIONES (futuras)
     ].sort((a, b) => parseISO(a.time).getTime() - parseISO(b.time).getTime());
 
-    // 9. CALCULAR PROGRESO DEL DÍA
-    const totalExpectedNaps = napsToday.length + dailyNapSchedule.naps.filter(n => parseISO(n.time) > now).length;
+    // 10. CALCULAR PROGRESO DEL DÍA
+    const totalExpectedNaps = napsToday.length + futurePredictions.length;
 
     return {
       nextNap: napPrediction,
