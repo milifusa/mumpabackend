@@ -1,6 +1,6 @@
 {
   "name": "mumpabackend",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Backend con Firebase para autenticación y predicción de sueño infantil",
   "main": "server.js",
   "scripts": {
@@ -11,7 +11,8 @@
     "deploy:vercel": "./deploy-vercel.sh",
     "setup:vercel": "node setup-vercel-env.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:sleep": "node test-sleep-prediction.js"
+    "test:sleep": "node test-sleep-prediction.js",
+    "test:edit": "node test-edit-sleep.js"
   },
   "keywords": [
     "firebase",

@@ -54,12 +54,21 @@ class SleepPredictionController {
         });
       }
 
-      // Calcular duración si no se proporciona
+      // Calcular duración
       let calculatedDuration = duration;
+      let grossDuration = null;
+      let netDuration = null;
+      
       if (endTime && !duration) {
         const start = parseISO(startTime);
         const end = parseISO(endTime);
-        calculatedDuration = differenceInMinutes(end, start);
+        grossDuration = differenceInMinutes(end, start); // Duración bruta (total)
+        
+        // Si hay pausas, calcular duración neta
+        const pauses = req.body.pauses || [];
+        const totalPauseTime = pauses.reduce((sum, pause) => sum + (pause.duration || 0), 0);
+        netDuration = grossDuration - totalPauseTime;
+        calculatedDuration = netDuration;
       }
 
       // Crear registro de sueño
@@ -70,12 +79,15 @@ class SleepPredictionController {
         startTime: admin.firestore.Timestamp.fromDate(parseISO(startTime)),
         endTime: endTime ? admin.firestore.Timestamp.fromDate(parseISO(endTime)) : null,
         duration: calculatedDuration || null,
+        grossDuration: grossDuration || null, // Duración total (con pausas)
+        netDuration: netDuration || calculatedDuration || null, // Duración efectiva (sin pausas)
         quality: quality || 'fair',
         wakeUps: wakeUps || 0,
         notes: notes || '',
         location: location || 'crib',
         temperature: temperature || null,
         noiseLevel: noiseLevel || 0.5,
+        pauses: req.body.pauses || [], // Array de pausas
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
@@ -230,9 +242,8 @@ class SleepPredictionController {
         return res.status(403).json({ error: 'No autorizado' });
       }
 
-      // Actualizar evento
+      // Preparar actualizaciones
       const updates = {
-        ...updateData,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
 
@@ -244,14 +255,66 @@ class SleepPredictionController {
         updates.endTime = admin.firestore.Timestamp.fromDate(parseISO(updateData.endTime));
       }
 
+      // Agregar pausas si existen
+      if (updateData.pauses !== undefined) {
+        updates.pauses = updateData.pauses; // Array de pausas
+      }
+
+      // Agregar otros campos editables
+      const editableFields = [
+        'quality', 'wakeUps', 'notes', 'location', 
+        'temperature', 'noiseLevel', 'type'
+      ];
+      
+      editableFields.forEach(field => {
+        if (updateData[field] !== undefined) {
+          updates[field] = updateData[field];
+        }
+      });
+
+      // Recalcular duración si hay cambios en horarios o pausas
+      const newStartTime = updateData.startTime 
+        ? parseISO(updateData.startTime) 
+        : eventData.startTime.toDate();
+      
+      const newEndTime = updateData.endTime 
+        ? parseISO(updateData.endTime) 
+        : (eventData.endTime ? eventData.endTime.toDate() : null);
+
+      if (newStartTime && newEndTime) {
+        // Duración total en minutos
+        let totalDuration = differenceInMinutes(newEndTime, newStartTime);
+        
+        // Restar pausas si existen
+        const pauses = updateData.pauses || eventData.pauses || [];
+        if (pauses && pauses.length > 0) {
+          const totalPauseTime = pauses.reduce((sum, pause) => sum + (pause.duration || 0), 0);
+          totalDuration -= totalPauseTime;
+        }
+        
+        updates.duration = Math.max(0, totalDuration); // No permitir duraciones negativas
+        updates.netDuration = updates.duration; // Duración neta (sin pausas)
+        updates.grossDuration = differenceInMinutes(newEndTime, newStartTime); // Duración bruta
+      }
+
       await this.db.collection('sleepEvents').doc(eventId).update(updates);
 
       // Actualizar estadísticas
       await this.updateChildSleepStats(userId, eventData.childId);
 
+      // Obtener evento actualizado
+      const updatedDoc = await this.db.collection('sleepEvents').doc(eventId).get();
+      const updatedData = updatedDoc.data();
+
       res.json({
         success: true,
-        message: 'Evento actualizado exitosamente'
+        message: 'Evento actualizado exitosamente',
+        sleepEvent: {
+          id: eventId,
+          ...updatedData,
+          startTime: updatedData.startTime.toDate().toISOString(),
+          endTime: updatedData.endTime ? updatedData.endTime.toDate().toISOString() : null
+        }
       });
 
     } catch (error) {

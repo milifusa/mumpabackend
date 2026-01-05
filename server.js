@@ -25688,6 +25688,214 @@ app.delete('/api/sleep/:eventId', authenticateToken, (req, res) => {
   sleepController.deleteSleepEvent(req, res);
 });
 
+// Agregar pausa a un evento de sueño
+app.post('/api/sleep/:eventId/pause', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { eventId } = req.params;
+    const { startTime, endTime, duration, reason } = req.body;
+
+    // Verificar que el evento existe y pertenece al usuario
+    const eventDoc = await db.collection('sleepEvents').doc(eventId).get();
+    
+    if (!eventDoc.exists) {
+      return res.status(404).json({ error: 'Evento no encontrado' });
+    }
+
+    const eventData = eventDoc.data();
+    if (eventData.userId !== userId) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    // Calcular duración de la pausa si no se proporciona
+    let pauseDuration = duration;
+    if (startTime && endTime && !duration) {
+      const start = new Date(startTime);
+      const end = new Date(endTime);
+      pauseDuration = Math.floor((end - start) / 1000 / 60); // en minutos
+    }
+
+    // Crear objeto de pausa
+    const pause = {
+      id: `pause_${Date.now()}`,
+      startTime: startTime || null,
+      endTime: endTime || null,
+      duration: pauseDuration || 0,
+      reason: reason || 'Despertó',
+      createdAt: new Date().toISOString()
+    };
+
+    // Obtener pausas existentes
+    const pauses = eventData.pauses || [];
+    pauses.push(pause);
+
+    // Recalcular duración neta
+    const totalPauseTime = pauses.reduce((sum, p) => sum + (p.duration || 0), 0);
+    const grossDuration = eventData.grossDuration || eventData.duration || 0;
+    const netDuration = Math.max(0, grossDuration - totalPauseTime);
+
+    // Actualizar evento
+    await db.collection('sleepEvents').doc(eventId).update({
+      pauses,
+      netDuration,
+      duration: netDuration,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      message: 'Pausa agregada exitosamente',
+      pause,
+      totalPauses: pauses.length,
+      netDuration
+    });
+
+  } catch (error) {
+    console.error('❌ Error al agregar pausa:', error);
+    res.status(500).json({
+      error: 'Error al agregar pausa',
+      details: error.message
+    });
+  }
+});
+
+// Eliminar pausa de un evento de sueño
+app.delete('/api/sleep/:eventId/pause/:pauseId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { eventId, pauseId } = req.params;
+
+    // Verificar que el evento existe y pertenece al usuario
+    const eventDoc = await db.collection('sleepEvents').doc(eventId).get();
+    
+    if (!eventDoc.exists) {
+      return res.status(404).json({ error: 'Evento no encontrado' });
+    }
+
+    const eventData = eventDoc.data();
+    if (eventData.userId !== userId) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    // Filtrar pausas para eliminar la especificada
+    const pauses = (eventData.pauses || []).filter(p => p.id !== pauseId);
+
+    // Recalcular duración neta
+    const totalPauseTime = pauses.reduce((sum, p) => sum + (p.duration || 0), 0);
+    const grossDuration = eventData.grossDuration || eventData.duration || 0;
+    const netDuration = Math.max(0, grossDuration - totalPauseTime);
+
+    // Actualizar evento
+    await db.collection('sleepEvents').doc(eventId).update({
+      pauses,
+      netDuration,
+      duration: netDuration,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      message: 'Pausa eliminada exitosamente',
+      totalPauses: pauses.length,
+      netDuration
+    });
+
+  } catch (error) {
+    console.error('❌ Error al eliminar pausa:', error);
+    res.status(500).json({
+      error: 'Error al eliminar pausa',
+      details: error.message
+    });
+  }
+});
+
+// Editar horarios de un evento (inicio/fin)
+app.patch('/api/sleep/:eventId/times', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { eventId } = req.params;
+    const { startTime, endTime } = req.body;
+
+    if (!startTime && !endTime) {
+      return res.status(400).json({
+        error: 'Debes proporcionar al menos startTime o endTime'
+      });
+    }
+
+    // Verificar que el evento existe y pertenece al usuario
+    const eventDoc = await db.collection('sleepEvents').doc(eventId).get();
+    
+    if (!eventDoc.exists) {
+      return res.status(404).json({ error: 'Evento no encontrado' });
+    }
+
+    const eventData = eventDoc.data();
+    if (eventData.userId !== userId) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    // Preparar actualizaciones
+    const updates = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    // Actualizar horarios
+    const newStartTime = startTime 
+      ? new Date(startTime) 
+      : eventData.startTime.toDate();
+    
+    const newEndTime = endTime 
+      ? new Date(endTime) 
+      : (eventData.endTime ? eventData.endTime.toDate() : null);
+
+    if (startTime) {
+      updates.startTime = admin.firestore.Timestamp.fromDate(new Date(startTime));
+    }
+    if (endTime) {
+      updates.endTime = admin.firestore.Timestamp.fromDate(new Date(endTime));
+    }
+
+    // Recalcular duraciones
+    if (newStartTime && newEndTime) {
+      const grossDuration = Math.floor((newEndTime - newStartTime) / 1000 / 60);
+      const pauses = eventData.pauses || [];
+      const totalPauseTime = pauses.reduce((sum, p) => sum + (p.duration || 0), 0);
+      const netDuration = Math.max(0, grossDuration - totalPauseTime);
+
+      updates.grossDuration = grossDuration;
+      updates.netDuration = netDuration;
+      updates.duration = netDuration;
+    }
+
+    await db.collection('sleepEvents').doc(eventId).update(updates);
+
+    // Obtener evento actualizado
+    const updatedDoc = await db.collection('sleepEvents').doc(eventId).get();
+    const updatedData = updatedDoc.data();
+
+    res.json({
+      success: true,
+      message: 'Horarios actualizados exitosamente',
+      sleepEvent: {
+        id: eventId,
+        startTime: updatedData.startTime.toDate().toISOString(),
+        endTime: updatedData.endTime ? updatedData.endTime.toDate().toISOString() : null,
+        duration: updatedData.duration,
+        grossDuration: updatedData.grossDuration,
+        netDuration: updatedData.netDuration,
+        pauses: updatedData.pauses || []
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error al actualizar horarios:', error);
+    res.status(500).json({
+      error: 'Error al actualizar horarios',
+      details: error.message
+    });
+  }
+});
+
 // Obtener análisis detallado de patrones
 app.get('/api/sleep/analysis/:childId', authenticateToken, async (req, res) => {
   try {
