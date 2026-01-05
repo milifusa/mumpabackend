@@ -675,6 +675,7 @@ class SleepPredictionController {
    * Predecir hora de dormir nocturna
    */
   predictBedtime(nightSleeps, ageInMonths) {
+    // Si no hay datos de sueño nocturno, usar horarios por defecto
     if (nightSleeps.length === 0) {
       const defaultBedtime = this.getDefaultBedtime(ageInMonths);
       return {
@@ -684,36 +685,76 @@ class SleepPredictionController {
       };
     }
 
-    // Analizar horarios de dormir
-    const bedtimes = nightSleeps.map(n => {
-      const date = parseISO(n.startTime);
-      return date.getHours() + date.getMinutes() / 60;
+    // Analizar horarios de dormir - SOLO LOS QUE SON REALMENTE NOCTURNOS
+    const validBedtimes = nightSleeps
+      .map(n => {
+        const date = parseISO(n.startTime);
+        const hour = date.getHours() + date.getMinutes() / 60;
+        return { hour, date };
+      })
+      .filter(b => b.hour >= 18 || b.hour <= 4); // Entre 6 PM y 4 AM
+
+    // Si no hay horarios nocturnos válidos, usar por defecto
+    if (validBedtimes.length === 0) {
+      const defaultBedtime = this.getDefaultBedtime(ageInMonths);
+      return {
+        time: defaultBedtime,
+        confidence: 40,
+        reason: 'Sin horarios nocturnos válidos. Usando horario típico'
+      };
+    }
+
+    // Normalizar horarios (convertir horas después de medianoche a formato 24+)
+    const normalizedHours = validBedtimes.map(b => {
+      if (b.hour >= 0 && b.hour <= 4) {
+        return b.hour + 24; // 1 AM = 25, 2 AM = 26, etc.
+      }
+      return b.hour;
     });
 
-    const avgBedtime = stats.mean(bedtimes);
-    const stdBedtime = bedtimes.length > 1 ? stats.standardDeviation(bedtimes) : 0;
+    const avgBedtime = stats.mean(normalizedHours);
+    const stdBedtime = normalizedHours.length > 1 ? stats.standardDeviation(normalizedHours) : 0;
 
-    // Calcular fecha de hoy
-    const today = new Date();
-    today.setHours(Math.floor(avgBedtime));
-    today.setMinutes(Math.round((avgBedtime % 1) * 60));
-    today.setSeconds(0);
+    // Desnormalizar (convertir de vuelta a 0-23)
+    let finalBedtimeHour = avgBedtime;
+    if (finalBedtimeHour >= 24) {
+      finalBedtimeHour -= 24;
+    }
 
-    // Si ya pasó la hora, mover a mañana
-    if (today < new Date()) {
-      today.setDate(today.getDate() + 1);
+    // Validación adicional: La hora de dormir DEBE estar entre 18:00 (6 PM) y 23:00 (11 PM)
+    if (finalBedtimeHour < 18 || finalBedtimeHour > 23) {
+      // Si el cálculo da un horario inválido, usar horario por defecto
+      const defaultBedtime = this.getDefaultBedtime(ageInMonths);
+      return {
+        time: defaultBedtime,
+        confidence: 40,
+        reason: 'Horario calculado fuera de rango. Usando horario típico para la edad'
+      };
+    }
+
+    // Calcular fecha
+    const now = new Date();
+    const bedtimeDate = new Date(now);
+    bedtimeDate.setHours(Math.floor(finalBedtimeHour));
+    bedtimeDate.setMinutes(Math.round((finalBedtimeHour % 1) * 60));
+    bedtimeDate.setSeconds(0);
+    bedtimeDate.setMilliseconds(0);
+
+    // Si ya pasó la hora hoy, programar para mañana
+    if (bedtimeDate <= now) {
+      bedtimeDate.setDate(bedtimeDate.getDate() + 1);
     }
 
     // Confianza basada en consistencia
     const confidence = Math.max(50, Math.min(95, 100 - stdBedtime * 20));
 
     return {
-      time: today.toISOString(),
-      windowStart: addMinutes(today, -20).toISOString(),
-      windowEnd: addMinutes(today, 20).toISOString(),
+      time: bedtimeDate.toISOString(),
+      windowStart: addMinutes(bedtimeDate, -20).toISOString(),
+      windowEnd: addMinutes(bedtimeDate, 20).toISOString(),
       confidence: Math.round(confidence),
       consistency: stdBedtime < 0.5 ? 'Alta' : stdBedtime < 1 ? 'Media' : 'Baja',
-      reason: `Basado en ${nightSleeps.length} noches anteriores`
+      reason: `Basado en ${validBedtimes.length} noches anteriores`
     };
   }
 
@@ -1041,16 +1082,32 @@ class SleepPredictionController {
 
   getDefaultBedtime(ageInMonths) {
     const schedule = this.getDefaultScheduleByAge(ageInMonths);
-    const today = new Date();
-    const [hourMin, period] = schedule.bedtime.split(' ');
+    const now = new Date();
+    
+    // Parsear el horario (ej: "7:30 PM")
+    const bedtimeStr = schedule.bedtime;
+    const [hourMin, period] = bedtimeStr.split(' ');
     const [hour, min] = hourMin.split(':');
     let hour24 = parseInt(hour);
-    if (period === 'PM' && hour24 !== 12) hour24 += 12;
     
-    const bedtime = new Date(today);
+    // Convertir a formato 24 horas
+    if (period === 'PM' && hour24 !== 12) {
+      hour24 += 12;
+    } else if (period === 'AM' && hour24 === 12) {
+      hour24 = 0;
+    }
+    
+    // VALIDACIÓN: La hora de dormir DEBE estar entre 18:00 y 23:00
+    if (hour24 < 18 || hour24 > 23) {
+      console.warn(`⚠️ Hora de dormir inválida: ${hour24}:${min}. Usando 19:00 por defecto.`);
+      hour24 = 19; // 7:00 PM por defecto
+    }
+    
+    const bedtime = new Date(now);
     bedtime.setHours(hour24, min ? parseInt(min) : 0, 0, 0);
     
-    if (bedtime < new Date()) {
+    // Si ya pasó la hora hoy, mover a mañana
+    if (bedtime <= now) {
       bedtime.setDate(bedtime.getDate() + 1);
     }
     
