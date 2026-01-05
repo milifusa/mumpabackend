@@ -25659,6 +25659,269 @@ app.get('/api/admin/reminders/history/:id', authenticateToken, isAdmin, async (r
 });
 
 // ============================================================================
+// 🛌 SISTEMA DE PREDICCIÓN DE SUEÑO (Tipo Napper)
+// ============================================================================
+const sleepController = require('./controllers/sleepPredictionController');
+
+// Registrar evento de sueño
+app.post('/api/sleep/record', authenticateToken, (req, res) => {
+  sleepController.recordSleepEvent(req, res);
+});
+
+// Obtener predicción de sueño
+app.get('/api/sleep/predict/:childId', authenticateToken, (req, res) => {
+  sleepController.predictSleep(req, res);
+});
+
+// Obtener historial de sueño
+app.get('/api/sleep/history/:childId', authenticateToken, (req, res) => {
+  sleepController.getSleepHistoryEndpoint(req, res);
+});
+
+// Actualizar evento de sueño
+app.put('/api/sleep/:eventId', authenticateToken, (req, res) => {
+  sleepController.updateSleepEvent(req, res);
+});
+
+// Eliminar evento de sueño
+app.delete('/api/sleep/:eventId', authenticateToken, (req, res) => {
+  sleepController.deleteSleepEvent(req, res);
+});
+
+// Obtener análisis detallado de patrones
+app.get('/api/sleep/analysis/:childId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { childId } = req.params;
+    const { days = 30 } = req.query;
+
+    // Obtener información del niño
+    const childDoc = await db.collection('children').doc(childId).get();
+    
+    if (!childDoc.exists) {
+      return res.status(404).json({ error: 'Niño no encontrado' });
+    }
+
+    const childData = childDoc.data();
+    const birthDate = childData.birthDate.toDate();
+    const ageInMonths = sleepController.calculateAgeInMonths(birthDate);
+
+    // Obtener historial
+    const sleepHistory = await sleepController.getSleepHistory(userId, childId, parseInt(days));
+
+    if (sleepHistory.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No hay datos de sueño registrados',
+        childInfo: { name: childData.name, ageInMonths }
+      });
+    }
+
+    // Analizar patrones
+    const patterns = sleepController.analyzeSleepPatterns(sleepHistory, ageInMonths);
+    const recommendations = sleepController.generateRecommendations(patterns, ageInMonths, sleepHistory);
+
+    res.json({
+      success: true,
+      analysis: {
+        patterns,
+        recommendations,
+        childInfo: {
+          name: childData.name,
+          ageInMonths
+        },
+        dataRange: {
+          days: parseInt(days),
+          totalEvents: sleepHistory.length,
+          firstEvent: sleepHistory[0].startTime,
+          lastEvent: sleepHistory[sleepHistory.length - 1].startTime
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error en análisis de sueño:', error);
+    res.status(500).json({
+      error: 'Error al generar análisis',
+      details: error.message
+    });
+  }
+});
+
+// Obtener estadísticas semanales/mensuales
+app.get('/api/sleep/stats/:childId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { childId } = req.params;
+    const { period = 'week' } = req.query; // 'week' o 'month'
+    
+    const days = period === 'week' ? 7 : 30;
+    const sleepHistory = await sleepController.getSleepHistory(userId, childId, days);
+
+    if (sleepHistory.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No hay datos disponibles',
+        stats: null
+      });
+    }
+
+    // Agrupar por días
+    const dailyStats = {};
+    
+    sleepHistory.forEach(event => {
+      const date = new Date(event.startTime).toISOString().split('T')[0];
+      
+      if (!dailyStats[date]) {
+        dailyStats[date] = {
+          date,
+          totalSleep: 0,
+          naps: 0,
+          nightSleep: 0,
+          events: []
+        };
+      }
+
+      dailyStats[date].events.push(event);
+      dailyStats[date].totalSleep += event.duration || 0;
+      
+      if (event.type === 'nap') {
+        dailyStats[date].naps++;
+      } else {
+        dailyStats[date].nightSleep += event.duration || 0;
+      }
+    });
+
+    const dailyArray = Object.values(dailyStats).sort((a, b) => 
+      new Date(a.date) - new Date(b.date)
+    );
+
+    res.json({
+      success: true,
+      period,
+      days,
+      dailyStats: dailyArray,
+      summary: {
+        totalEvents: sleepHistory.length,
+        avgSleepPerDay: Math.round(
+          dailyArray.reduce((sum, day) => sum + day.totalSleep, 0) / dailyArray.length
+        ),
+        avgNapsPerDay: parseFloat(
+          (dailyArray.reduce((sum, day) => sum + day.naps, 0) / dailyArray.length).toFixed(1)
+        )
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      error: 'Error al obtener estadísticas',
+      details: error.message
+    });
+  }
+});
+
+// Endpoint para obtener recordatorios inteligentes
+app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { childId } = req.params;
+
+    // Obtener predicción
+    const childDoc = await db.collection('children').doc(childId).get();
+    
+    if (!childDoc.exists) {
+      return res.status(404).json({ error: 'Niño no encontrado' });
+    }
+
+    const childData = childDoc.data();
+    const birthDate = childData.birthDate.toDate();
+    const ageInMonths = sleepController.calculateAgeInMonths(birthDate);
+    const sleepHistory = await sleepController.getSleepHistory(userId, childId, 7);
+
+    if (sleepHistory.length < 3) {
+      return res.json({
+        success: true,
+        reminders: [],
+        message: 'Necesitamos más datos para generar recordatorios'
+      });
+    }
+
+    const prediction = await sleepController.generateSleepPrediction(
+      sleepHistory,
+      ageInMonths,
+      childData
+    );
+
+    const reminders = [];
+    const now = new Date();
+
+    // Recordatorio de siesta
+    if (prediction.nextNap && prediction.nextNap.time) {
+      const napTime = new Date(prediction.nextNap.time);
+      const minutesUntilNap = Math.floor((napTime - now) / 1000 / 60);
+
+      if (minutesUntilNap > 0 && minutesUntilNap <= 30) {
+        reminders.push({
+          type: 'nap',
+          title: '🛌 Hora de siesta pronto',
+          message: `La próxima siesta de ${childData.name} es en ${minutesUntilNap} minutos`,
+          time: prediction.nextNap.time,
+          minutesUntil: minutesUntilNap,
+          priority: minutesUntilNap <= 15 ? 'high' : 'medium'
+        });
+      }
+    }
+
+    // Recordatorio de hora de dormir
+    if (prediction.bedtime && prediction.bedtime.time) {
+      const bedtime = new Date(prediction.bedtime.time);
+      const minutesUntilBedtime = Math.floor((bedtime - now) / 1000 / 60);
+
+      if (minutesUntilBedtime > 0 && minutesUntilBedtime <= 60) {
+        reminders.push({
+          type: 'bedtime',
+          title: '🌙 Hora de dormir se acerca',
+          message: `Es hora de empezar la rutina de ${childData.name}`,
+          time: prediction.bedtime.time,
+          minutesUntil: minutesUntilBedtime,
+          priority: minutesUntilBedtime <= 30 ? 'high' : 'medium'
+        });
+      }
+    }
+
+    // Recordatorio de presión de sueño alta
+    if (prediction.sleepPressure && prediction.sleepPressure.level === 'critical') {
+      reminders.push({
+        type: 'urgent',
+        title: '⚠️ Necesita dormir urgentemente',
+        message: prediction.sleepPressure.recommendation,
+        priority: 'critical'
+      });
+    }
+
+    res.json({
+      success: true,
+      reminders,
+      sleepPressure: prediction.sleepPressure,
+      nextPrediction: {
+        nap: prediction.nextNap,
+        bedtime: prediction.bedtime
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo recordatorios:', error);
+    res.status(500).json({
+      error: 'Error al obtener recordatorios',
+      details: error.message
+    });
+  }
+});
+
+console.log('🛌 Sistema de predicción de sueño cargado');
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
