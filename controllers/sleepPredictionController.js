@@ -494,8 +494,11 @@ class SleepPredictionController {
    * Predecir TODAS las siestas del día (horario completo)
    */
   predictDailyNaps(naps, now, ageInMonths) {
-    const todayStart = startOfDay(now);
     const currentHour = now.getHours() + now.getMinutes() / 60;
+    
+    // Si es tarde (después de las 7 PM), predecir para MAÑANA
+    const predictionDate = currentHour >= 19 ? addDays(now, 1) : now;
+    const todayStart = startOfDay(predictionDate);
 
     // Obtener número esperado de siestas por edad
     const expectedNaps = this.getExpectedNapsPerDay(ageInMonths);
@@ -526,27 +529,28 @@ class SleepPredictionController {
       targetNapCount = expectedNaps.max;
     }
 
-    // Obtener siestas ya registradas hoy
-    const napsToday = naps.filter(nap => {
+    // Obtener siestas ya registradas del día de predicción
+    const napsOfPredictionDay = naps.filter(nap => {
       const napDate = parseISO(nap.startTime);
-      return napDate >= todayStart;
+      return napDate >= todayStart && napDate < addDays(todayStart, 1);
     });
 
     // Si hay suficiente historial, usar patrones aprendidos
     if (naps.length >= 7) {
-      return this.predictDailyNapsFromPatterns(naps, now, ageInMonths, napsToday, targetNapCount);
+      return this.predictDailyNapsFromPatterns(naps, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount);
     }
 
     // Si no hay suficiente historial, usar horarios por defecto (pero pasar naps para aprender duraciones)
-    return this.predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount, naps);
+    return this.predictDailyNapsFromDefaults(predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps);
   }
 
   /**
    * Predecir siestas basándose en patrones históricos REALES
    */
-  predictDailyNapsFromPatterns(naps, now, ageInMonths, napsToday, targetNapCount) {
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999); // Fin del día actual
+  predictDailyNapsFromPatterns(naps, predictionDate, ageInMonths, napsOfDay, targetNapCount) {
+    const dayStart = startOfDay(predictionDate);
+    const dayEnd = new Date(predictionDate);
+    dayEnd.setHours(23, 59, 59, 999);
     
     // Analizar últimos 30 días para encontrar patrones
     const thirtyDaysAgo = subDays(now, 30);
@@ -598,10 +602,10 @@ class SleepPredictionController {
       .sort((a, b) => a.avgHour - b.avgHour)
       .slice(0, targetNapCount);
 
-    // Generar predicciones SOLO para el día actual usando horarios REALES
+    // Generar predicciones para el día de predicción usando horarios REALES
     const predictedNaps = predictedSlots
       .map((slot, index) => {
-        const napDate = new Date(now);
+        const napDate = new Date(predictionDate);
         napDate.setHours(Math.floor(slot.avgHour));
         napDate.setMinutes(Math.round((slot.avgHour % 1) * 60));
         napDate.setSeconds(0);
@@ -622,14 +626,9 @@ class SleepPredictionController {
           confidence: slot.confidence,
           napNumber: index + 1,
           type: napType,
-          status: napDate <= now ? 'passed' : 'upcoming',
+          status: 'upcoming',
           basedOnFrequency: slot.frequency
         };
-      })
-      .filter(nap => {
-        const napTime = parseISO(nap.time);
-        // ✅ SOLO mostrar siestas que son FUTURAS y del día ACTUAL
-        return napTime > now && napTime <= todayEnd;
       });
 
     return {
@@ -642,9 +641,10 @@ class SleepPredictionController {
   /**
    * Predecir siestas usando horarios por defecto
    */
-  predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount, allNaps = []) {
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999); // Fin del día actual
+  predictDailyNapsFromDefaults(predictionDate, ageInMonths, napsOfDay, targetNapCount, allNaps = []) {
+    const dayStart = startOfDay(predictionDate);
+    const dayEnd = new Date(predictionDate);
+    dayEnd.setHours(23, 59, 59, 999);
     
     const schedule = this.getDefaultScheduleByAge(ageInMonths);
     const defaultNaps = schedule.naps;
@@ -656,7 +656,7 @@ class SleepPredictionController {
     const predictedNaps = defaultNaps
       .slice(0, napsToUse)  // ✅ Usar el número correcto por edad
       .map((napTime, index) => {
-        const napDate = this.parseDefaultTime(napTime, now);
+        const napDate = this.parseDefaultTime(napTime, predictionDate);
         
         const hour = napDate.getHours() + napDate.getMinutes() / 60;
         const napType = this.getNapTypeByTime(hour);
@@ -675,13 +675,8 @@ class SleepPredictionController {
           confidence: 40,
           napNumber: index + 1,
           type: napType,
-          status: napDate <= now ? 'passed' : 'upcoming'
+          status: 'upcoming'
         };
-      })
-      .filter(nap => {
-        const napTime = parseISO(nap.time);
-        // ✅ SOLO mostrar siestas FUTURAS del día ACTUAL
-        return napTime > now && napTime <= todayEnd;
       });
 
     return {
