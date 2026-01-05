@@ -398,27 +398,53 @@ class SleepPredictionController {
     const naps = sleepHistory.filter(s => s.type === 'nap');
     const nightSleeps = sleepHistory.filter(s => s.type === 'nightsleep');
 
-    // 1. PREDECIR PRÓXIMA SIESTA
-    const napPrediction = this.predictNextNap(naps, now, ageInMonths);
+    // 1. PREDECIR TODAS LAS SIESTAS DEL DÍA
+    const dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths);
 
-    // 2. PREDECIR HORA DE DORMIR NOCTURNA
+    // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
+    const napPrediction = dailyNapSchedule.naps.find(nap => {
+      const napTime = parseISO(nap.time);
+      return napTime > now;
+    }) || null;
+
+    // 3. PREDECIR HORA DE DORMIR NOCTURNA
     const bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths);
 
-    // 3. ANALIZAR PATRONES DE SUEÑO
+    // 4. ANALIZAR PATRONES DE SUEÑO
     const patterns = this.analyzeSleepPatterns(sleepHistory, ageInMonths);
 
-    // 4. GENERAR RECOMENDACIONES
+    // 5. GENERAR RECOMENDACIONES
     const recommendations = this.generateRecommendations(
       patterns,
       ageInMonths,
       sleepHistory
     );
 
-    // 5. CALCULAR PRESIÓN DE SUEÑO
+    // 6. CALCULAR PRESIÓN DE SUEÑO
     const sleepPressure = this.calculateSleepPressure(sleepHistory, now);
+
+    // 7. OBTENER SIESTAS YA REGISTRADAS HOY
+    const todayStart = startOfDay(now);
+    const napsToday = naps.filter(nap => {
+      const napDate = parseISO(nap.startTime);
+      return napDate >= todayStart;
+    }).map(nap => ({
+      id: nap.id,
+      startTime: nap.startTime,
+      endTime: nap.endTime,
+      duration: nap.duration,
+      status: 'completed'
+    }));
 
     return {
       nextNap: napPrediction,
+      dailySchedule: {
+        naps: dailyNapSchedule.naps,
+        totalNaps: dailyNapSchedule.totalNaps,
+        completedNaps: napsToday.length,
+        remainingNaps: dailyNapSchedule.naps.filter(n => parseISO(n.time) > now).length,
+        napsCompleted: napsToday
+      },
       bedtime: bedtimePrediction,
       patterns,
       recommendations,
@@ -426,6 +452,162 @@ class SleepPredictionController {
       predictedAt: now.toISOString(),
       confidence: this.calculateConfidence(sleepHistory, ageInMonths)
     };
+  }
+
+  /**
+   * Predecir TODAS las siestas del día (horario completo)
+   */
+  predictDailyNaps(naps, now, ageInMonths) {
+    const todayStart = startOfDay(now);
+    const currentHour = now.getHours() + now.getMinutes() / 60;
+
+    // Obtener número esperado de siestas por edad
+    const expectedNaps = this.getExpectedNapsPerDay(ageInMonths);
+    const targetNapCount = Math.round((expectedNaps.min + expectedNaps.max) / 2);
+
+    // Obtener siestas ya registradas hoy
+    const napsToday = naps.filter(nap => {
+      const napDate = parseISO(nap.startTime);
+      return napDate >= todayStart;
+    });
+
+    // Si hay suficiente historial, usar patrones aprendidos
+    if (naps.length >= 7) {
+      return this.predictDailyNapsFromPatterns(naps, now, ageInMonths, napsToday, targetNapCount);
+    }
+
+    // Si no hay suficiente historial, usar horarios por defecto
+    return this.predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount);
+  }
+
+  /**
+   * Predecir siestas basándose en patrones históricos
+   */
+  predictDailyNapsFromPatterns(naps, now, ageInMonths, napsToday, targetNapCount) {
+    const napsByHour = {};
+    
+    // Agrupar siestas históricas por hora del día
+    naps.forEach(nap => {
+      const napDate = parseISO(nap.startTime);
+      const hour = napDate.getHours();
+      if (!napsByHour[hour]) {
+        napsByHour[hour] = [];
+      }
+      napsByHour[hour].push({
+        hour: napDate.getHours() + napDate.getMinutes() / 60,
+        duration: nap.duration || 60
+      });
+    });
+
+    // Identificar horarios más comunes
+    const commonNapTimes = Object.keys(napsByHour)
+      .map(hour => {
+        const napsAtHour = napsByHour[hour];
+        return {
+          avgHour: stats.mean(napsAtHour.map(n => n.hour)),
+          avgDuration: Math.round(stats.mean(napsAtHour.map(n => n.duration))),
+          frequency: napsAtHour.length
+        };
+      })
+      .sort((a, b) => b.frequency - a.frequency)
+      .slice(0, targetNapCount);
+
+    // Generar predicciones para el día
+    const predictedNaps = commonNapTimes
+      .filter(nap => nap.avgHour >= 7 && nap.avgHour < 19) // Solo entre 7 AM y 7 PM
+      .sort((a, b) => a.avgHour - b.avgHour)
+      .map((nap, index) => {
+        const napDate = new Date(now);
+        napDate.setHours(Math.floor(nap.avgHour));
+        napDate.setMinutes(Math.round((nap.avgHour % 1) * 60));
+        napDate.setSeconds(0);
+
+        // Si ya pasó, mover a mañana
+        if (napDate <= now) {
+          napDate.setDate(napDate.getDate() + 1);
+        }
+
+        return {
+          time: napDate.toISOString(),
+          windowStart: addMinutes(napDate, -20).toISOString(),
+          windowEnd: addMinutes(napDate, 20).toISOString(),
+          expectedDuration: nap.avgDuration,
+          confidence: Math.min(90, 60 + nap.frequency * 5),
+          napNumber: index + 1,
+          type: this.getNapTypeByTime(nap.avgHour),
+          status: napDate <= now ? 'passed' : 'upcoming'
+        };
+      });
+
+    return {
+      naps: predictedNaps,
+      totalNaps: predictedNaps.length,
+      basedOn: 'patterns'
+    };
+  }
+
+  /**
+   * Predecir siestas usando horarios por defecto
+   */
+  predictDailyNapsFromDefaults(now, ageInMonths, napsToday, targetNapCount) {
+    const schedule = this.getDefaultScheduleByAge(ageInMonths);
+    const defaultNaps = schedule.naps;
+
+    const predictedNaps = defaultNaps
+      .slice(0, targetNapCount)
+      .map((napTime, index) => {
+        const napDate = this.parseDefaultTime(napTime, now);
+        
+        // Si ya pasó, mover a mañana
+        if (napDate <= now) {
+          napDate.setDate(napDate.getDate() + 1);
+        }
+
+        const hour = napDate.getHours() + napDate.getMinutes() / 60;
+
+        return {
+          time: napDate.toISOString(),
+          windowStart: addMinutes(napDate, -30).toISOString(),
+          windowEnd: addMinutes(napDate, 30).toISOString(),
+          expectedDuration: this.getTypicalNapDuration(ageInMonths),
+          confidence: 40,
+          napNumber: index + 1,
+          type: this.getNapTypeByTime(hour),
+          status: napDate <= now ? 'passed' : 'upcoming'
+        };
+      });
+
+    return {
+      naps: predictedNaps,
+      totalNaps: predictedNaps.length,
+      basedOn: 'defaults'
+    };
+  }
+
+  /**
+   * Obtener tipo de siesta según la hora
+   */
+  getNapTypeByTime(hour) {
+    if (hour >= 7 && hour < 11) return 'Siesta de la mañana';
+    if (hour >= 11 && hour < 15) return 'Siesta del mediodía';
+    if (hour >= 15 && hour < 19) return 'Siesta de la tarde';
+    return 'Siesta';
+  }
+
+  /**
+   * Parsear tiempo por defecto (ej: "9:00 AM")
+   */
+  parseDefaultTime(timeStr, baseDate) {
+    const [hourMin, period] = timeStr.split(' ');
+    const [hour, min] = hourMin.split(':');
+    let hour24 = parseInt(hour);
+    
+    if (period === 'PM' && hour24 !== 12) hour24 += 12;
+    if (period === 'AM' && hour24 === 12) hour24 = 0;
+    
+    const date = new Date(baseDate);
+    date.setHours(hour24, parseInt(min) || 0, 0, 0);
+    return date;
   }
 
   /**
