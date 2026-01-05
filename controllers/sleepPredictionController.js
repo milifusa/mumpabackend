@@ -463,7 +463,32 @@ class SleepPredictionController {
 
     // Obtener número esperado de siestas por edad
     const expectedNaps = this.getExpectedNapsPerDay(ageInMonths);
-    const targetNapCount = Math.round((expectedNaps.min + expectedNaps.max) / 2);
+    
+    // Calcular número de siestas basado en patrones reales o edad
+    let targetNapCount;
+    
+    // Si hay suficiente historial, analizar patrón real
+    if (naps.length >= 14) {
+      // Contar siestas por día en el historial
+      const napsByDay = {};
+      naps.forEach(nap => {
+        const day = format(parseISO(nap.startTime), 'yyyy-MM-dd');
+        napsByDay[day] = (napsByDay[day] || 0) + 1;
+      });
+      
+      const napsPerDay = Object.values(napsByDay);
+      const avgNapsPerDay = Math.round(stats.mean(napsPerDay));
+      
+      // Usar el promedio real, pero dentro del rango esperado por edad
+      targetNapCount = Math.min(
+        Math.max(avgNapsPerDay, expectedNaps.min),
+        expectedNaps.max
+      );
+    } else {
+      // Sin suficiente historial, usar el valor máximo esperado por edad
+      // Porque es mejor predecir más y que no las tome, que predecir menos
+      targetNapCount = expectedNaps.max;
+    }
 
     // Obtener siestas ya registradas hoy
     const napsToday = naps.filter(nap => {
@@ -553,8 +578,12 @@ class SleepPredictionController {
     const schedule = this.getDefaultScheduleByAge(ageInMonths);
     const defaultNaps = schedule.naps;
 
+    // IMPORTANTE: Tomar solo la cantidad de siestas esperadas por edad
+    // Si targetNapCount es mayor que las siestas por defecto, usar todas las disponibles
+    const napsToUse = Math.min(targetNapCount, defaultNaps.length);
+
     const predictedNaps = defaultNaps
-      .slice(0, targetNapCount)
+      .slice(0, napsToUse)  // ✅ Usar el número correcto por edad
       .map((napTime, index) => {
         const napDate = this.parseDefaultTime(napTime, now);
         
@@ -580,7 +609,8 @@ class SleepPredictionController {
     return {
       naps: predictedNaps,
       totalNaps: predictedNaps.length,
-      basedOn: 'defaults'
+      basedOn: 'defaults',
+      expectedByAge: targetNapCount
     };
   }
 
@@ -1230,38 +1260,56 @@ class SleepPredictionController {
 
   getDefaultScheduleByAge(ageInMonths) {
     const schedules = {
-      '0-3': {
-        naps: ['9:00 AM', '12:00 PM', '3:00 PM', '5:30 PM'],
-        bedtime: '7:30 PM',
+      '0-1': {
+        naps: ['8:00 AM', '10:30 AM', '1:00 PM', '3:30 PM', '5:30 PM', '7:00 PM'],
+        bedtime: '8:00 PM',
         totalSleep: 16
       },
+      '2-3': {
+        naps: ['8:30 AM', '11:00 AM', '1:30 PM', '4:00 PM', '6:00 PM'],
+        bedtime: '7:30 PM',
+        totalSleep: 15
+      },
       '4-6': {
-        naps: ['9:00 AM', '1:00 PM', '4:30 PM'],
+        naps: ['9:00 AM', '12:30 PM', '4:00 PM', '6:00 PM'],
         bedtime: '7:00 PM',
         totalSleep: 15
       },
-      '7-12': {
-        naps: ['9:30 AM', '2:00 PM'],
+      '7-9': {
+        naps: ['9:30 AM', '1:30 PM', '5:00 PM'],
+        bedtime: '7:00 PM',
+        totalSleep: 14
+      },
+      '10-12': {
+        naps: ['10:00 AM', '2:30 PM'],
         bedtime: '7:00 PM',
         totalSleep: 14
       },
       '13-18': {
-        naps: ['1:00 PM'],
+        naps: ['12:30 PM', '4:30 PM'],
         bedtime: '7:30 PM',
         totalSleep: 13
       },
-      '19+': {
-        naps: ['1:30 PM'],
+      '19-36': {
+        naps: ['1:00 PM'],
         bedtime: '8:00 PM',
         totalSleep: 12
+      },
+      '37+': {
+        naps: ['2:00 PM'],
+        bedtime: '8:00 PM',
+        totalSleep: 11
       }
     };
 
-    if (ageInMonths <= 3) return schedules['0-3'];
+    if (ageInMonths <= 1) return schedules['0-1'];
+    if (ageInMonths <= 3) return schedules['2-3'];
     if (ageInMonths <= 6) return schedules['4-6'];
-    if (ageInMonths <= 12) return schedules['7-12'];
+    if (ageInMonths <= 9) return schedules['7-9'];
+    if (ageInMonths <= 12) return schedules['10-12'];
     if (ageInMonths <= 18) return schedules['13-18'];
-    return schedules['19+'];
+    if (ageInMonths <= 36) return schedules['19-36'];
+    return schedules['37+'];
   }
 
   getDefaultNapSchedule(ageInMonths) {
@@ -1331,11 +1379,15 @@ class SleepPredictionController {
   }
 
   getExpectedNapsPerDay(ageInMonths) {
-    if (ageInMonths <= 3) return { min: 4, max: 5 };
-    if (ageInMonths <= 6) return { min: 3, max: 4 };
-    if (ageInMonths <= 12) return { min: 2, max: 3 };
-    if (ageInMonths <= 18) return { min: 1, max: 2 };
-    return { min: 1, max: 1 };
+    // Basado en recomendaciones pediátricas reales
+    if (ageInMonths <= 1) return { min: 4, max: 6 };  // Recién nacidos: 4-6 siestas
+    if (ageInMonths <= 3) return { min: 4, max: 5 };  // 2-3 meses: 4-5 siestas
+    if (ageInMonths <= 6) return { min: 3, max: 4 };  // 4-6 meses: 3-4 siestas
+    if (ageInMonths <= 9) return { min: 2, max: 3 };  // 7-9 meses: 2-3 siestas
+    if (ageInMonths <= 12) return { min: 2, max: 2 }; // 10-12 meses: 2 siestas
+    if (ageInMonths <= 18) return { min: 1, max: 2 }; // 13-18 meses: 1-2 siestas
+    if (ageInMonths <= 36) return { min: 1, max: 1 }; // 19-36 meses: 1 siesta
+    return { min: 0, max: 1 };                         // 3+ años: 0-1 siesta
   }
 
   mapQualityScore(score) {
