@@ -515,7 +515,7 @@ class SleepPredictionController {
     let targetNapCount;
     
     // Si hay suficiente historial, analizar patrón real
-    if (naps.length >= 14) {
+    if (naps.length >= 21) {  // ✅ Aumentar a 21 (3 semanas) para mejor análisis
       // Contar siestas por día en el historial
       const napsByDay = {};
       naps.forEach(nap => {
@@ -532,9 +532,11 @@ class SleepPredictionController {
         expectedNaps.max
       );
     } else {
-      // Sin suficiente historial, usar el valor máximo esperado por edad
-      // Porque es mejor predecir más y que no las tome, que predecir menos
+      // ✅ Sin suficiente historial, usar el MÁXIMO esperado por edad
+      // Porque es mejor predecir más siestas y que no las tome, que predecir menos
       targetNapCount = expectedNaps.max;
+      
+      console.log(`[PREDICCIÓN] Poco historial (${naps.length} siestas). Usando máximo por edad: ${targetNapCount} siestas`);
     }
 
     // Obtener siestas ya registradas del día de predicción
@@ -1370,7 +1372,7 @@ class SleepPredictionController {
         totalSleep: 15
       },
       '4-6': {
-        naps: ['9:00 AM', '12:30 PM', '4:00 PM', '6:00 PM'],
+        naps: ['8:30 AM', '11:30 AM', '2:30 PM', '5:30 PM'],  // ✅ 4 siestas
         bedtime: '7:00 PM',
         totalSleep: 15
       },
