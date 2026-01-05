@@ -423,27 +423,54 @@ class SleepPredictionController {
     // 6. CALCULAR PRESIÓN DE SUEÑO
     const sleepPressure = this.calculateSleepPressure(sleepHistory, now);
 
-    // 7. OBTENER SIESTAS YA REGISTRADAS HOY
+    // 7. OBTENER SIESTAS YA REGISTRADAS HOY (HECHOS)
     const todayStart = startOfDay(now);
     const napsToday = naps.filter(nap => {
       const napDate = parseISO(nap.startTime);
       return napDate >= todayStart;
     }).map(nap => ({
       id: nap.id,
+      time: nap.startTime,
       startTime: nap.startTime,
       endTime: nap.endTime,
       duration: nap.duration,
-      status: 'completed'
+      actualDuration: nap.duration,
+      quality: nap.quality,
+      type: 'completed',
+      status: 'completed',
+      isReal: true
     }));
+
+    // 8. COMBINAR HECHOS + PREDICCIONES EN UN SOLO ARRAY
+    const allNapsOfDay = [
+      ...napsToday,  // HECHOS (ya sucedieron)
+      ...dailyNapSchedule.naps
+        .filter(predictedNap => parseISO(predictedNap.time) > now)  // Solo futuras
+        .map((predictedNap, index) => ({
+          ...predictedNap,
+          napNumber: napsToday.length + index + 1,
+          type: 'prediction',
+          status: 'upcoming',
+          isReal: false
+        }))
+    ].sort((a, b) => parseISO(a.time).getTime() - parseISO(b.time).getTime());
+
+    // 9. CALCULAR PROGRESO DEL DÍA
+    const totalExpectedNaps = napsToday.length + dailyNapSchedule.naps.filter(n => parseISO(n.time) > now).length;
 
     return {
       nextNap: napPrediction,
       dailySchedule: {
-        naps: dailyNapSchedule.naps,
-        totalNaps: dailyNapSchedule.totalNaps,
-        completedNaps: napsToday.length,
-        remainingNaps: dailyNapSchedule.naps.filter(n => parseISO(n.time) > now).length,
-        napsCompleted: napsToday
+        date: format(now, 'yyyy-MM-dd'),
+        allNaps: allNapsOfDay,  // ✅ Hechos + Predicciones juntos
+        totalExpected: totalExpectedNaps,
+        completed: napsToday.length,
+        remaining: allNapsOfDay.filter(n => n.status === 'upcoming').length,
+        progress: {
+          completed: napsToday.length,
+          total: totalExpectedNaps,
+          percentage: Math.round((napsToday.length / totalExpectedNaps) * 100)
+        }
       },
       bedtime: bedtimePrediction,
       patterns,
