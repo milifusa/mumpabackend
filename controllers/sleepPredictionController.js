@@ -467,6 +467,25 @@ class SleepPredictionController {
       // Calcular próxima siesta basada en ventana de sueño óptima
       const nextNapTime = addMinutes(lastNapEnd, optimalWakeWindow * 60);
       
+      // VALIDACIÓN CRÍTICA: Si la próxima siesta calculada es después de las 7 PM, predecir para mañana
+      const nextNapHour = nextNapTime.getHours();
+      
+      if (nextNapHour >= 19 || nextNapHour < 6) {
+        // Es muy tarde o muy temprano, predecir primera siesta de mañana
+        const tomorrowMorning = addDays(now, 1);
+        tomorrowMorning.setHours(9, 0, 0, 0); // 9:00 AM
+        
+        return {
+          time: tomorrowMorning.toISOString(),
+          windowStart: addMinutes(tomorrowMorning, -30).toISOString(),
+          windowEnd: addMinutes(tomorrowMorning, 30).toISOString(),
+          expectedDuration: this.getTypicalNapDuration(ageInMonths),
+          confidence: 70,
+          type: 'Próxima siesta (mañana)',
+          reason: `Última siesta fue tarde (${lastNapEnd.toLocaleTimeString()}). Próxima siesta mañana por la mañana`
+        };
+      }
+      
       return {
         time: nextNapTime.toISOString(),
         windowStart: addMinutes(nextNapTime, -20).toISOString(),
