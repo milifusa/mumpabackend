@@ -495,8 +495,7 @@ class SleepPredictionController {
    */
   predictDailyNaps(naps, now, ageInMonths) {
     // IMPORTANTE: Las fechas ya vienen en UTC desde Firestore
-    // Pero necesitamos considerar la hora LOCAL del usuario para decidir
-    // si predecir hoy o mañana
+    // Pero necesitamos considerar la hora LOCAL del usuario
     
     // Obtener hora UTC actual
     const utcHour = now.getUTCHours() + now.getUTCMinutes() / 60;
@@ -504,8 +503,9 @@ class SleepPredictionController {
     // Ajustar a UTC-6 (zona horaria del usuario)
     const localHour = ((utcHour - 6) + 24) % 24;
     
-    // Si es tarde en hora LOCAL (después de las 7 PM), predecir para MAÑANA
-    const predictionDate = localHour >= 19 ? addDays(now, 1) : now;
+    // ✅ CAMBIO: Solo predecir para mañana si ya es MUY tarde (después de las 9 PM)
+    // Porque aún falta la hora de dormir de hoy (6-9 PM)
+    const predictionDate = localHour >= 21 ? addDays(now, 1) : now;
     const todayStart = startOfDay(predictionDate);
 
     // Obtener número esperado de siestas por edad
@@ -1035,11 +1035,16 @@ class SleepPredictionController {
       if (bedtimeHour < 18) bedtimeHour = 18;
       if (bedtimeHour > 21) bedtimeHour = 21;
       
-      const tomorrow = addDays(new Date(), 1);
-      const bedtimeDate = new Date(tomorrow);
+      // ✅ IMPORTANTE: La hora de dormir debe ser para HOY (si aún no pasó) o MAÑANA
+      const bedtimeDate = new Date();
       bedtimeDate.setHours(Math.floor(bedtimeHour));
       bedtimeDate.setMinutes(Math.round((bedtimeHour % 1) * 60));
       bedtimeDate.setSeconds(0);
+      
+      // Si ya pasó hoy, programar para mañana
+      if (bedtimeDate <= new Date()) {
+        bedtimeDate.setDate(bedtimeDate.getDate() + 1);
+      }
       
       const lastNapEndFormatted = format(lastNapEnd, 'h:mm a');
       
