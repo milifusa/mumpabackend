@@ -1006,8 +1006,53 @@ class SleepPredictionController {
   /**
    * Predecir hora de dormir nocturna
    */
-  predictBedtime(nightSleeps, ageInMonths) {
-    // Si no hay datos de sueño nocturno, usar horarios por defecto
+  predictBedtime(nightSleeps, ageInMonths, allSleepHistory = []) {
+    // PRIMERO: Calcular basándose en las siestas de HOY
+    const today = startOfDay(new Date());
+    const napsToday = allSleepHistory
+      .filter(s => s.type === 'nap' && s.endTime)
+      .filter(s => {
+        const napDate = parseISO(s.startTime);
+        return napDate >= today;
+      })
+      .sort((a, b) => parseISO(b.endTime).getTime() - parseISO(a.endTime).getTime());
+    
+    // Si hay siestas HOY, calcular hora de dormir basándose en la ÚLTIMA siesta
+    if (napsToday.length > 0) {
+      const lastNapToday = napsToday[0];
+      const lastNapEnd = parseISO(lastNapToday.endTime);
+      const lastNapHour = lastNapEnd.getHours() + lastNapEnd.getMinutes() / 60;
+      
+      // Calcular hora de dormir: última siesta + 2.5-3 horas
+      // Ajustar según edad (bebés más pequeños duermen antes)
+      let hoursAfterNap = 2.75; // Por defecto
+      if (ageInMonths <= 3) hoursAfterNap = 2.5;
+      if (ageInMonths >= 12) hoursAfterNap = 3.0;
+      
+      let bedtimeHour = lastNapHour + hoursAfterNap;
+      
+      // Ajustar al rango válido (6 PM - 9 PM)
+      if (bedtimeHour < 18) bedtimeHour = 18;
+      if (bedtimeHour > 21) bedtimeHour = 21;
+      
+      const tomorrow = addDays(new Date(), 1);
+      const bedtimeDate = new Date(tomorrow);
+      bedtimeDate.setHours(Math.floor(bedtimeHour));
+      bedtimeDate.setMinutes(Math.round((bedtimeHour % 1) * 60));
+      bedtimeDate.setSeconds(0);
+      
+      const lastNapEndFormatted = format(lastNapEnd, 'h:mm a');
+      
+      return {
+        time: bedtimeDate.toISOString(),
+        confidence: 75,
+        reason: `Última siesta hoy: ${lastNapEndFormatted} + ${hoursAfterNap}h`,
+        basedOn: 'today-naps',
+        lastNapEnd: lastNapEnd.toISOString()
+      };
+    }
+    
+    // SEGUNDO: Si no hay datos de sueño nocturno, usar horarios por defecto
     if (nightSleeps.length === 0) {
       const defaultBedtime = this.getDefaultBedtime(ageInMonths);
       return {
