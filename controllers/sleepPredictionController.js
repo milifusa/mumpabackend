@@ -1031,19 +1031,19 @@ class SleepPredictionController {
       
       let bedtimeHour = lastNapHour + hoursAfterNap;
       
-      // Ajustar al rango válido (6 PM - 9 PM)
+      // Ajustar al rango válido (6 PM - 9 PM) EN HORA LOCAL
       if (bedtimeHour < 18) bedtimeHour = 18;
       if (bedtimeHour > 21) bedtimeHour = 21;
       
-      // ✅ IMPORTANTE: La hora de dormir debe ser para HOY (si aún no pasó) o MAÑANA
-      const bedtimeDate = new Date();
-      bedtimeDate.setHours(Math.floor(bedtimeHour));
-      bedtimeDate.setMinutes(Math.round((bedtimeHour % 1) * 60));
-      bedtimeDate.setSeconds(0);
+      // ✅ Crear fecha para HOY en UTC
+      // lastNapEnd ya está en UTC, así que usamos su fecha base
+      const bedtimeDate = new Date(lastNapEnd);
+      bedtimeDate.setUTCHours(Math.floor(bedtimeHour), Math.round((bedtimeHour % 1) * 60), 0, 0);
       
-      // Si ya pasó hoy, programar para mañana
-      if (bedtimeDate <= new Date()) {
-        bedtimeDate.setDate(bedtimeDate.getDate() + 1);
+      // Si ya pasó, programar para mañana
+      const now = new Date();
+      if (bedtimeDate <= now) {
+        bedtimeDate.setUTCDate(bedtimeDate.getUTCDate() + 1);
       }
       
       const lastNapEndFormatted = format(lastNapEnd, 'h:mm a');
