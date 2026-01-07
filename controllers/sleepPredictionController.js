@@ -201,11 +201,18 @@ class SleepPredictionController {
         });
       }
 
-      // Generar predicción
+      // Generar predicción (pasar userId y childId)
+      const childInfo = {
+        id: childId,
+        userId: userId,
+        name: childData.name,
+        ageInMonths: ageInMonths
+      };
+      
       const prediction = await this.generateSleepPrediction(
         sleepHistory,
         ageInMonths,
-        childData
+        childInfo
       );
 
       res.json({
@@ -685,23 +692,34 @@ class SleepPredictionController {
     const wakeWindows = this.getWakeWindows(ageInMonths);
     const predictedNaps = [];
     
+    console.log(`[WAKE TIME] Predicción basada en despertar: ${wakeTime.toISOString()}`);
+    console.log(`[WAKE TIME] Wake windows: ${JSON.stringify(wakeWindows)}`);
+    console.log(`[WAKE TIME] Target nap count: ${targetNapCount}`);
+    
     // Comenzar desde la hora de despertar
     let currentTime = new Date(wakeTime);
     
     // Generar siestas basándose en wake windows
     for (let i = 0; i < targetNapCount; i++) {
-      // Calcular cuándo debería ser la próxima siesta
+      // Primera siesta: desde despertar + wake window
+      // Siguientes: desde fin de siesta anterior + wake window
+      const wakeWindow = wakeWindows.optimal;
       const napTime = new Date(currentTime);
-      const wakeWindow = i === 0 ? wakeWindows.optimal : wakeWindows.optimal;
       napTime.setMinutes(napTime.getMinutes() + (wakeWindow * 60));
       
-      // Solo si es dentro del día y antes de las 7 PM
-      const napHour = napTime.getHours();
-      if (napHour < 7 || napHour >= 19) {
+      // Validar hora en UTC (considerar zona horaria)
+      const napHourUTC = napTime.getUTCHours();
+      const napHourLocal = ((napHourUTC - 6) + 24) % 24;
+      
+      console.log(`[WAKE TIME] Siesta ${i + 1}: ${napTime.toISOString()} (${napHourLocal}:${napTime.getUTCMinutes()} local)`);
+      
+      // Solo si es dentro de horario razonable (7 AM - 7 PM local)
+      if (napHourLocal < 7 || napHourLocal >= 19) {
+        console.log(`[WAKE TIME] Siesta ${i + 1} fuera de rango (${napHourLocal}h local), deteniendo`);
         break;
       }
       
-      const napType = this.getNapTypeByTime(napHour);
+      const napType = this.getNapTypeByTime(napHourLocal);
       
       // Aprender duración para este tipo de siesta
       const durationLearned = this.learnNapDuration(allNaps, napType, ageInMonths);
@@ -722,10 +740,12 @@ class SleepPredictionController {
       });
       
       // Actualizar currentTime para la próxima siesta
-      // (hora actual + duración de siesta + wake window)
+      // (hora actual de siesta + duración de siesta)
       currentTime = new Date(napTime);
-      currentTime.setMinutes(currentTime.getMinutes() + expectedDuration + (wakeWindow * 60));
+      currentTime.setMinutes(currentTime.getMinutes() + expectedDuration);
     }
+    
+    console.log(`[WAKE TIME] Total siestas predichas: ${predictedNaps.length}`);
     
     return {
       naps: predictedNaps,
