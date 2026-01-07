@@ -192,15 +192,9 @@ class SleepPredictionController {
       // Obtener historial de sueño (últimos 14 días)
       const sleepHistory = await this.getSleepHistory(userId, childId, 14);
 
-      if (sleepHistory.length < 3) {
-        return res.status(200).json({
-          success: true,
-          message: 'Necesitamos más datos para hacer predicciones precisas',
-          recommendation: this.getDefaultScheduleByAge(ageInMonths),
-          dataPoints: sleepHistory.length,
-          minimumRequired: 3
-        });
-      }
+      // ✅ SIEMPRE generar predicción, incluso sin datos históricos
+      // Si no hay datos, usará horarios por defecto basados en edad
+      console.log(`📊 [PREDICT] Generando predicción con ${sleepHistory.length} eventos en historial`);
 
       // Generar predicción (pasar userId y childId)
       const childInfo = {
