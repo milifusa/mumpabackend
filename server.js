@@ -25668,6 +25668,11 @@ app.post('/api/sleep/record', authenticateToken, (req, res) => {
   sleepController.recordSleepEvent(req, res);
 });
 
+// Registrar hora de despertar
+app.post('/api/sleep/wake-time', authenticateToken, (req, res) => {
+  sleepController.recordWakeTime(req, res);
+});
+
 // Obtener predicción de sueño
 app.get('/api/sleep/predict/:childId', authenticateToken, (req, res) => {
   sleepController.predictSleep(req, res);

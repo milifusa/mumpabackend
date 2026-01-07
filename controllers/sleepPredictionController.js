@@ -27,6 +27,48 @@ class SleepPredictionController {
   }
 
   /**
+   * Registrar hora de despertar del día
+   * POST /api/sleep/wake-time
+   */
+  async recordWakeTime(req, res) {
+    try {
+      const userId = req.user.uid;
+      const { childId, wakeTime } = req.body;
+
+      // Validaciones
+      if (!childId || !wakeTime) {
+        return res.status(400).json({
+          error: 'childId y wakeTime son requeridos'
+        });
+      }
+
+      const wakeTimeData = {
+        userId,
+        childId,
+        wakeTime: admin.firestore.Timestamp.fromDate(new Date(wakeTime)),
+        type: 'wake',
+        createdAt: admin.firestore.Timestamp.now()
+      };
+
+      const docRef = await this.db.collection('wakeEvents').add(wakeTimeData);
+
+      res.json({
+        success: true,
+        id: docRef.id,
+        message: 'Hora de despertar registrada exitosamente',
+        wakeTime: wakeTime
+      });
+
+    } catch (error) {
+      console.error('❌ Error al registrar hora de despertar:', error);
+      res.status(500).json({
+        error: 'Error al registrar hora de despertar',
+        details: error.message
+      });
+    }
+  }
+
+  /**
    * Registrar un nuevo evento de sueño
    * POST /api/sleep/record
    */
@@ -389,17 +431,93 @@ class SleepPredictionController {
   }
 
   /**
+   * Obtener hora de despertar de hoy o predecirla
+   */
+  async getWakeTimeForToday(childId, userId) {
+    try {
+      const todayStart = startOfDay(new Date());
+      
+      // Buscar hora de despertar registrada HOY
+      const wakeSnapshot = await this.db
+        .collection('wakeEvents')
+        .where('userId', '==', userId)
+        .where('childId', '==', childId)
+        .where('wakeTime', '>=', admin.firestore.Timestamp.fromDate(todayStart))
+        .orderBy('wakeTime', 'desc')
+        .limit(1)
+        .get();
+
+      if (!wakeSnapshot.empty) {
+        const wakeData = wakeSnapshot.docs[0].data();
+        return {
+          time: wakeData.wakeTime.toDate(),
+          source: 'recorded'
+        };
+      }
+
+      // Si no hay registro de hoy, predecir basándose en historial
+      const last30Days = subDays(new Date(), 30);
+      const historicalWakes = await this.db
+        .collection('wakeEvents')
+        .where('userId', '==', userId)
+        .where('childId', '==', childId)
+        .where('wakeTime', '>=', admin.firestore.Timestamp.fromDate(last30Days))
+        .orderBy('wakeTime', 'desc')
+        .limit(30)
+        .get();
+
+      if (!historicalWakes.empty) {
+        // Calcular hora promedio de despertar
+        const wakeTimes = historicalWakes.docs.map(doc => {
+          const wakeDate = doc.data().wakeTime.toDate();
+          return wakeDate.getHours() + wakeDate.getMinutes() / 60;
+        });
+        
+        const avgWakeHour = stats.mean(wakeTimes);
+        const wakeDate = new Date(todayStart);
+        wakeDate.setHours(Math.floor(avgWakeHour));
+        wakeDate.setMinutes(Math.round((avgWakeHour % 1) * 60));
+        
+        return {
+          time: wakeDate,
+          source: 'predicted-historical'
+        };
+      }
+
+      // Sin historial, usar default por edad
+      const defaultWakeHour = 7; // 7 AM por defecto
+      const wakeDate = new Date(todayStart);
+      wakeDate.setHours(defaultWakeHour, 0, 0, 0);
+      
+      return {
+        time: wakeDate,
+        source: 'default'
+      };
+    } catch (error) {
+      console.error('Error obteniendo hora de despertar:', error);
+      const todayStart = startOfDay(new Date());
+      return {
+        time: new Date(todayStart.setHours(7, 0, 0, 0)),
+        source: 'error-default'
+      };
+    }
+  }
+
+  /**
    * Generar predicción inteligente de sueño
    */
   async generateSleepPrediction(sleepHistory, ageInMonths, childData) {
     const now = new Date();
 
+    // Obtener hora de despertar de hoy
+    const wakeTimeInfo = await this.getWakeTimeForToday(childData.id, childData.userId);
+
     // Separar siestas y sueño nocturno
     const naps = sleepHistory.filter(s => s.type === 'nap');
     const nightSleeps = sleepHistory.filter(s => s.type === 'nightsleep');
 
-    // 1. PREDECIR TODAS LAS SIESTAS DEL DÍA
-    const dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths);
+    // 1. PREDECIR TODAS LAS SIESTAS DEL DÍA (usando hora de despertar)
+    const dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo);
 
     // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
     const napPrediction = dailyNapSchedule.naps.find(nap => {
@@ -492,8 +610,9 @@ class SleepPredictionController {
 
   /**
    * Predecir TODAS las siestas del día (horario completo)
+   * Ahora usa la hora de despertar + wake windows por edad
    */
-  predictDailyNaps(naps, now, ageInMonths) {
+  predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo = null) {
     // IMPORTANTE: Las fechas ya vienen en UTC desde Firestore
     // Pero necesitamos considerar la hora LOCAL del usuario
     
@@ -545,6 +664,11 @@ class SleepPredictionController {
       return napDate >= todayStart && napDate < addDays(todayStart, 1);
     });
 
+    // ✅ NUEVA LÓGICA: Si hay hora de despertar, calcular basándose en wake windows
+    if (wakeTimeInfo && wakeTimeInfo.source !== 'error-default') {
+      return this.predictDailyNapsFromWakeTime(wakeTimeInfo.time, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps);
+    }
+
     // Si hay suficiente historial, usar patrones aprendidos
     if (naps.length >= 7) {
       return this.predictDailyNapsFromPatterns(naps, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount);
@@ -552,6 +676,63 @@ class SleepPredictionController {
 
     // Si no hay suficiente historial, usar horarios por defecto (pero pasar naps para aprender duraciones)
     return this.predictDailyNapsFromDefaults(predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps);
+  }
+
+  /**
+   * Predecir siestas basándose en hora de despertar + wake windows
+   */
+  predictDailyNapsFromWakeTime(wakeTime, predictionDate, ageInMonths, napsOfDay, targetNapCount, allNaps) {
+    const wakeWindows = this.getWakeWindows(ageInMonths);
+    const predictedNaps = [];
+    
+    // Comenzar desde la hora de despertar
+    let currentTime = new Date(wakeTime);
+    
+    // Generar siestas basándose en wake windows
+    for (let i = 0; i < targetNapCount; i++) {
+      // Calcular cuándo debería ser la próxima siesta
+      const napTime = new Date(currentTime);
+      const wakeWindow = i === 0 ? wakeWindows.optimal : wakeWindows.optimal;
+      napTime.setMinutes(napTime.getMinutes() + (wakeWindow * 60));
+      
+      // Solo si es dentro del día y antes de las 7 PM
+      const napHour = napTime.getHours();
+      if (napHour < 7 || napHour >= 19) {
+        break;
+      }
+      
+      const napType = this.getNapTypeByTime(napHour);
+      
+      // Aprender duración para este tipo de siesta
+      const durationLearned = this.learnNapDuration(allNaps, napType, ageInMonths);
+      const expectedDuration = typeof durationLearned === 'object' 
+        ? durationLearned.duration 
+        : durationLearned;
+      
+      predictedNaps.push({
+        time: napTime.toISOString(),
+        windowStart: addMinutes(napTime, -20).toISOString(),
+        windowEnd: addMinutes(napTime, 20).toISOString(),
+        expectedDuration,
+        confidence: 80,
+        napNumber: i + 1,
+        type: napType,
+        status: 'upcoming',
+        basedOn: 'wake-time-windows'
+      });
+      
+      // Actualizar currentTime para la próxima siesta
+      // (hora actual + duración de siesta + wake window)
+      currentTime = new Date(napTime);
+      currentTime.setMinutes(currentTime.getMinutes() + expectedDuration + (wakeWindow * 60));
+    }
+    
+    return {
+      naps: predictedNaps,
+      totalNaps: predictedNaps.length,
+      basedOn: 'wake-time',
+      wakeTime: wakeTime.toISOString()
+    };
   }
 
   /**
