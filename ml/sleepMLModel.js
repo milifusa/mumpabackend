@@ -7,7 +7,7 @@
  * - Predicciones personalizadas por edad y patrones
  */
 
-const { MultivariateLinearRegression } = require('ml-regression-multivariate');
+const { MultivariateLinearRegression } = require('ml-regression');
 const { Matrix } = require('ml-matrix');
 
 class SleepMLModel {
