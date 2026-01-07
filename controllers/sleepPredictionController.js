@@ -9,6 +9,7 @@
 
 const admin = require('firebase-admin');
 const stats = require('simple-statistics');
+const sleepMLModel = require('../ml/sleepMLModel'); // 🧠 MODELO DE MACHINE LEARNING
 const { 
   parseISO, 
   differenceInMinutes, 
@@ -516,6 +517,17 @@ class SleepPredictionController {
   async generateSleepPrediction(sleepHistory, ageInMonths, childData) {
     const now = new Date();
 
+    // 🧠 INTENTAR USAR MACHINE LEARNING PRIMERO
+    console.log(`🧠 [ML] Intentando entrenar modelo con ${sleepHistory.length} eventos...`);
+    const mlTraining = await sleepMLModel.train(sleepHistory, ageInMonths);
+    const useML = mlTraining.success;
+    
+    if (useML) {
+      console.log(`✅ [ML] Usando predicciones con MACHINE LEARNING`);
+    } else {
+      console.log(`⚠️ [ML] Usando sistema estadístico (razón: ${mlTraining.reason})`);
+    }
+
     // Obtener hora de despertar de hoy
     const wakeTimeInfo = await this.getWakeTimeForToday(childData.id, childData.userId);
 
@@ -523,8 +535,36 @@ class SleepPredictionController {
     const naps = sleepHistory.filter(s => s.type === 'nap');
     const nightSleeps = sleepHistory.filter(s => s.type === 'nightsleep');
 
-    // 1. PREDECIR TODAS LAS SIESTAS DEL DÍA (usando hora de despertar)
-    const dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo);
+    // 1. PREDECIR TODAS LAS SIESTAS DEL DÍA
+    let dailyNapSchedule;
+    if (useML && wakeTimeInfo.wakeTime) {
+      // USAR ML para predecir
+      const todayStart = startOfDay(now);
+      const napsToday = naps.filter(nap => {
+        const napDate = parseISO(nap.startTime);
+        return napDate >= todayStart && nap.endTime;
+      });
+      
+      const mlPredictions = sleepMLModel.predictDailyNaps(
+        wakeTimeInfo.wakeTime,
+        ageInMonths,
+        napsToday
+      );
+      
+      if (mlPredictions && mlPredictions.length > 0) {
+        dailyNapSchedule = {
+          naps: mlPredictions,
+          source: 'ml_model',
+          confidence: 85
+        };
+      } else {
+        // Fallback a estadístico
+        dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo);
+      }
+    } else {
+      // Usar sistema estadístico
+      dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo);
+    }
 
     // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
     const napPrediction = dailyNapSchedule.naps.find(nap => {
@@ -532,18 +572,46 @@ class SleepPredictionController {
       return napTime > now;
     }) || null;
 
-    // 3. PREDECIR HORA DE DORMIR NOCTURNA (pasar historial completo para mejor predicción)
-    const bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory);
+    // 3. PREDECIR HORA DE DORMIR NOCTURNA
+    let bedtimePrediction;
+    if (useML) {
+      const todayStart = startOfDay(now);
+      const napsToday = naps.filter(nap => {
+        const napDate = parseISO(nap.startTime);
+        return napDate >= todayStart && nap.endTime;
+      });
+      
+      const mlBedtime = sleepMLModel.predictBedtime(ageInMonths, napsToday);
+      bedtimePrediction = mlBedtime || this.predictBedtime(nightSleeps, ageInMonths, sleepHistory);
+    } else {
+      bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory);
+    }
 
     // 4. ANALIZAR PATRONES DE SUEÑO
     const patterns = this.analyzeSleepPatterns(sleepHistory, ageInMonths);
 
-    // 5. GENERAR RECOMENDACIONES
-    const recommendations = this.generateRecommendations(
-      patterns,
-      ageInMonths,
-      sleepHistory
-    );
+    // 5. GENERAR RECOMENDACIONES (usar ML si está disponible)
+    let recommendations;
+    if (useML) {
+      const mlRecommendations = sleepMLModel.generateMLRecommendations(
+        sleepHistory,
+        dailyNapSchedule.naps,
+        ageInMonths
+      );
+      const statisticalRecommendations = this.generateRecommendations(
+        patterns,
+        ageInMonths,
+        sleepHistory
+      );
+      // Combinar ambas (priorizar ML)
+      recommendations = [...mlRecommendations, ...statisticalRecommendations].slice(0, 5);
+    } else {
+      recommendations = this.generateRecommendations(
+        patterns,
+        ageInMonths,
+        sleepHistory
+      );
+    }
 
     // 6. CALCULAR PRESIÓN DE SUEÑO
     const sleepPressure = this.calculateSleepPressure(sleepHistory, now);
