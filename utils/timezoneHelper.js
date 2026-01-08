@@ -3,16 +3,44 @@
  * 
  * Maneja la conversión entre UTC (servidor) y timezone del usuario
  * para evitar problemas con "hoy", "ayer", etc.
+ * 
+ * NOTA: Usa cálculo manual de offsets en lugar de date-fns-tz
+ * para mejor compatibilidad con Vercel
  */
 
-// Importar funciones de date-fns-tz correctamente
-const dateFnsTz = require('date-fns-tz');
-const { startOfDay, endOfDay } = require('date-fns');
+const { startOfDay, endOfDay, format } = require('date-fns');
 
-// Extraer funciones de date-fns-tz
-const zonedTimeToUtc = dateFnsTz.zonedTimeToUtc;
-const utcToZonedTime = dateFnsTz.utcToZonedTime;
-const format = dateFnsTz.format;
+// Mapa de offsets comunes (en horas)
+const TIMEZONE_OFFSETS = {
+  // México
+  'America/Mexico_City': -6,
+  'America/Cancun': -5,
+  'America/Tijuana': -8,
+  'America/Hermosillo': -7,
+  // USA
+  'America/New_York': -5,
+  'America/Chicago': -6,
+  'America/Los_Angeles': -8,
+  'America/Denver': -7,
+  // Europa
+  'Europe/Madrid': 1,
+  'Europe/London': 0,
+  'Europe/Berlin': 1,
+  'Europe/Paris': 1,
+  // América Latina
+  'America/Argentina/Buenos_Aires': -3,
+  'America/Sao_Paulo': -3,
+  'America/Bogota': -5,
+  'America/Lima': -5,
+  // Asia
+  'Asia/Tokyo': 9,
+  'Asia/Shanghai': 8,
+  'Asia/Dubai': 4,
+  // Oceanía
+  'Australia/Sydney': 10,
+  // UTC
+  'UTC': 0
+};
 
 class TimezoneHelper {
   /**
@@ -42,22 +70,26 @@ class TimezoneHelper {
    * @returns {Object} { start: Date, end: Date } - Inicio y fin del día en UTC
    */
   static getTodayInUserTimezone(userTimezone = 'UTC') {
-    // Obtener fecha/hora actual en la timezone del usuario
     const now = new Date();
-    const nowInUserTZ = utcToZonedTime(now, userTimezone);
+    const offset = this.getTimezoneOffsetHours(userTimezone);
     
-    // Inicio del día en timezone del usuario
-    const startOfDayInUserTZ = startOfDay(nowInUserTZ);
+    // Obtener fecha/hora actual en la timezone del usuario
+    const nowInUserTZ = new Date(now.getTime() + offset * 60 * 60 * 1000);
     
-    // Fin del día en timezone del usuario
-    const endOfDayInUserTZ = endOfDay(nowInUserTZ);
+    // Inicio del día en timezone del usuario (medianoche)
+    const startOfDayInUserTZ = new Date(nowInUserTZ);
+    startOfDayInUserTZ.setHours(0, 0, 0, 0);
     
-    // Convertir a UTC (para queries de Firestore)
-    const startOfDayUTC = zonedTimeToUtc(startOfDayInUserTZ, userTimezone);
-    const endOfDayUTC = zonedTimeToUtc(endOfDayInUserTZ, userTimezone);
+    // Fin del día en timezone del usuario (23:59:59)
+    const endOfDayInUserTZ = new Date(nowInUserTZ);
+    endOfDayInUserTZ.setHours(23, 59, 59, 999);
     
-    console.log(`📅 [TIMEZONE] "Hoy" en ${userTimezone}:`);
-    console.log(`   - Hora local: ${format(nowInUserTZ, 'yyyy-MM-dd HH:mm:ss', { timeZone: userTimezone })}`);
+    // Convertir de vuelta a UTC (restar el offset)
+    const startOfDayUTC = new Date(startOfDayInUserTZ.getTime() - offset * 60 * 60 * 1000);
+    const endOfDayUTC = new Date(endOfDayInUserTZ.getTime() - offset * 60 * 60 * 1000);
+    
+    console.log(`📅 [TIMEZONE] "Hoy" en ${userTimezone} (offset: ${offset}h):`);
+    console.log(`   - Hora local: ${format(nowInUserTZ, 'yyyy-MM-dd HH:mm:ss')}`);
     console.log(`   - Inicio del día (UTC): ${startOfDayUTC.toISOString()}`);
     console.log(`   - Fin del día (UTC): ${endOfDayUTC.toISOString()}`);
     
@@ -72,14 +104,16 @@ class TimezoneHelper {
    * Convertir fecha UTC a hora local del usuario
    */
   static utcToUserTime(utcDate, userTimezone = 'UTC') {
-    return utcToZonedTime(utcDate, userTimezone);
+    const offset = this.getTimezoneOffsetHours(userTimezone);
+    return new Date(utcDate.getTime() + offset * 60 * 60 * 1000);
   }
 
   /**
    * Convertir hora local del usuario a UTC
    */
   static userTimeToUtc(localDate, userTimezone = 'UTC') {
-    return zonedTimeToUtc(localDate, userTimezone);
+    const offset = this.getTimezoneOffsetHours(userTimezone);
+    return new Date(localDate.getTime() - offset * 60 * 60 * 1000);
   }
 
   /**
@@ -87,7 +121,8 @@ class TimezoneHelper {
    */
   static getNowInUserTimezone(userTimezone = 'UTC') {
     const now = new Date();
-    return utcToZonedTime(now, userTimezone);
+    const offset = this.getTimezoneOffsetHours(userTimezone);
+    return new Date(now.getTime() + offset * 60 * 60 * 1000);
   }
 
   /**
@@ -103,20 +138,40 @@ class TimezoneHelper {
    */
   static formatInUserTimezone(utcDate, userTimezone = 'UTC', formatString = 'yyyy-MM-dd HH:mm:ss') {
     const userDate = this.utcToUserTime(utcDate, userTimezone);
-    return format(userDate, formatString, { timeZone: userTimezone });
+    return format(userDate, formatString);
   }
 
   /**
    * Obtener diferencia de horas entre UTC y timezone del usuario
    */
   static getTimezoneOffset(userTimezone = 'UTC') {
-    const now = new Date();
-    const utcTime = now.getTime();
-    const userTime = utcToZonedTime(now, userTimezone).getTime();
-    const offsetHours = (userTime - utcTime) / (1000 * 60 * 60);
-    
+    const offsetHours = this.getTimezoneOffsetHours(userTimezone);
     console.log(`⏰ [TIMEZONE] Offset de ${userTimezone}: ${offsetHours} horas vs UTC`);
     return offsetHours;
+  }
+  
+  /**
+   * Obtener offset en horas para una timezone
+   * @private
+   */
+  static getTimezoneOffsetHours(userTimezone) {
+    // Buscar en el mapa de offsets
+    const offset = TIMEZONE_OFFSETS[userTimezone];
+    
+    if (offset !== undefined) {
+      return offset;
+    }
+    
+    // Si no está en el mapa, intentar extraer el offset del nombre
+    // Ejemplo: "UTC-6" -> -6, "UTC+1" -> 1
+    const utcMatch = userTimezone.match(/UTC([+-]\d+)/);
+    if (utcMatch) {
+      return parseInt(utcMatch[1]);
+    }
+    
+    // Por defecto, usar 0 (UTC)
+    console.warn(`⚠️ [TIMEZONE] Timezone "${userTimezone}" no encontrada en mapa. Usando UTC (0)`);
+    return 0;
   }
 }
 
