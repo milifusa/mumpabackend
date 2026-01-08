@@ -194,7 +194,12 @@ class SleepPredictionController {
 
       // ✅ SIEMPRE generar predicción, incluso sin datos históricos
       // Si no hay datos, usará horarios por defecto basados en edad
-      console.log(`📊 [PREDICT] Generando predicción con ${sleepHistory.length} eventos en historial`);
+      console.log(`📊 [PREDICT] ========================================`);
+      console.log(`📊 [PREDICT] Solicitud de predicción`);
+      console.log(`📊 [PREDICT] Usuario: ${userId}`);
+      console.log(`📊 [PREDICT] Niño: ${childData.name} (${ageInMonths} meses)`);
+      console.log(`📊 [PREDICT] Eventos en historial: ${sleepHistory.length}`);
+      console.log(`📊 [PREDICT] ========================================`);
 
       // Generar predicción (pasar userId y childId)
       const childInfo = {
@@ -209,6 +214,10 @@ class SleepPredictionController {
         ageInMonths,
         childInfo
       );
+
+      console.log(`✅ [PREDICT] Predicción generada exitosamente`);
+      console.log(`✅ [PREDICT] Total de siestas predichas: ${prediction.dailySchedule?.allNaps?.length || 0}`);
+      console.log(`✅ [PREDICT] Confianza: ${prediction.confidence}%`);
 
       res.json({
         success: true,
@@ -439,6 +448,8 @@ class SleepPredictionController {
     try {
       const todayStart = startOfDay(new Date());
       
+      console.log(`🌅 [WAKE TIME] Buscando hora de despertar para hoy (${todayStart.toISOString()})`);
+      
       // Buscar hora de despertar registrada HOY
       const wakeSnapshot = await this.db
         .collection('wakeEvents')
@@ -451,11 +462,16 @@ class SleepPredictionController {
 
       if (!wakeSnapshot.empty) {
         const wakeData = wakeSnapshot.docs[0].data();
+        const wakeTime = wakeData.wakeTime.toDate();
+        console.log(`✅ [WAKE TIME] Hora de despertar REGISTRADA HOY: ${wakeTime.toISOString()}`);
         return {
-          time: wakeData.wakeTime.toDate(),
+          time: wakeTime,
           source: 'recorded'
         };
       }
+      
+      console.log(`⚠️ [WAKE TIME] No hay registro de despertar HOY`);
+      console.log(`🔍 [WAKE TIME] Buscando historial de últimos 30 días...`);
 
       // Si no hay registro de hoy, predecir basándose en historial
       const last30Days = subDays(new Date(), 30);
@@ -480,6 +496,8 @@ class SleepPredictionController {
         wakeDate.setHours(Math.floor(avgWakeHour));
         wakeDate.setMinutes(Math.round((avgWakeHour % 1) * 60));
         
+        console.log(`📊 [WAKE TIME] Hora predicha por historial (${historicalWakes.size} registros): ${wakeDate.toISOString()}`);
+        
         return {
           time: wakeDate,
           source: 'predicted-historical'
@@ -490,6 +508,8 @@ class SleepPredictionController {
       const defaultWakeHour = 7; // 7 AM por defecto
       const wakeDate = new Date(todayStart);
       wakeDate.setHours(defaultWakeHour, 0, 0, 0);
+      
+      console.log(`⚙️ [WAKE TIME] Usando hora por defecto: ${wakeDate.toISOString()}`);
       
       return {
         time: wakeDate,
