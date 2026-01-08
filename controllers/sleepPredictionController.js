@@ -528,7 +528,7 @@ class SleepPredictionController {
   /**
    * Generar predicción inteligente de sueño
    */
-  async generateSleepPrediction(sleepHistory, ageInMonths, childData) {
+  async generateSleepPrediction(sleepHistory, ageInMonths, childInfo) {
     const now = new Date();
 
     // 🧠 INTENTAR USAR MACHINE LEARNING PRIMERO
@@ -543,7 +543,8 @@ class SleepPredictionController {
     }
 
     // Obtener hora de despertar de hoy
-    const wakeTimeInfo = await this.getWakeTimeForToday(childData.id, childData.userId);
+    console.log(`🔍 [PREDICT] Buscando hora de despertar para childId: ${childInfo.id}, userId: ${childInfo.userId}`);
+    const wakeTimeInfo = await this.getWakeTimeForToday(childInfo.id, childInfo.userId);
 
     // Separar siestas y sueño nocturno
     const naps = sleepHistory.filter(s => s.type === 'nap');
