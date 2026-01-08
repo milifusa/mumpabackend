@@ -5,8 +5,14 @@
  * para evitar problemas con "hoy", "ayer", etc.
  */
 
-const { zonedTimeToUtc, utcToZonedTime, format } = require('date-fns-tz');
+// Importar funciones de date-fns-tz correctamente
+const dateFnsTz = require('date-fns-tz');
 const { startOfDay, endOfDay } = require('date-fns');
+
+// Extraer funciones de date-fns-tz
+const zonedTimeToUtc = dateFnsTz.zonedTimeToUtc;
+const utcToZonedTime = dateFnsTz.utcToZonedTime;
+const format = dateFnsTz.format;
 
 class TimezoneHelper {
   /**
