@@ -209,6 +209,19 @@ class SleepPredictionController {
         ageInMonths: ageInMonths
       };
       
+      console.log(`✅ [PREDICT] childInfo construido:`, JSON.stringify(childInfo));
+      
+      // ✅ VALIDACIÓN: Asegurar que childId y userId no sean undefined
+      if (!childId || !userId) {
+        console.error(`❌ [PREDICT] ERROR: childId o userId undefined`);
+        console.error(`❌ [PREDICT] childId: ${childId}, userId: ${userId}`);
+        return res.status(400).json({
+          error: 'childId o userId no válidos',
+          childId: childId,
+          userId: userId
+        });
+      }
+      
       const prediction = await this.generateSleepPrediction(
         sleepHistory,
         ageInMonths,
@@ -446,9 +459,17 @@ class SleepPredictionController {
    */
   async getWakeTimeForToday(childId, userId) {
     try {
+      // ✅ VALIDACIÓN CRÍTICA: Verificar que childId y userId no sean undefined
+      if (!childId || !userId) {
+        console.error(`❌ [WAKE TIME] ERROR: Parámetros inválidos`);
+        console.error(`❌ [WAKE TIME] childId: ${childId}, userId: ${userId}`);
+        throw new Error(`getWakeTimeForToday requiere childId y userId válidos. Recibido: childId=${childId}, userId=${userId}`);
+      }
+      
       const todayStart = startOfDay(new Date());
       
       console.log(`🌅 [WAKE TIME] Buscando hora de despertar para hoy (${todayStart.toISOString()})`);
+      console.log(`🌅 [WAKE TIME] Parámetros: childId=${childId}, userId=${userId}`);
       
       // Buscar hora de despertar registrada HOY
       const wakeSnapshot = await this.db
@@ -543,6 +564,14 @@ class SleepPredictionController {
     }
 
     // Obtener hora de despertar de hoy
+    console.log(`🔍 [PREDICT] childInfo completo:`, JSON.stringify(childInfo));
+    
+    // ✅ VALIDACIÓN: Asegurar que childInfo tenga id y userId
+    if (!childInfo || !childInfo.id || !childInfo.userId) {
+      console.error(`❌ [PREDICT] ERROR: childInfo inválido:`, childInfo);
+      throw new Error(`childInfo debe tener id y userId. Recibido: ${JSON.stringify(childInfo)}`);
+    }
+    
     console.log(`🔍 [PREDICT] Buscando hora de despertar para childId: ${childInfo.id}, userId: ${childInfo.userId}`);
     const wakeTimeInfo = await this.getWakeTimeForToday(childInfo.id, childInfo.userId);
 
