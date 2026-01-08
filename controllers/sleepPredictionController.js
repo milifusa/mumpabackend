@@ -476,16 +476,47 @@ class SleepPredictionController {
       }
       
       const todayStart = startOfDay(new Date());
+      const todayStartTimestamp = admin.firestore.Timestamp.fromDate(todayStart);
       
-      console.log(`🌅 [WAKE TIME] Buscando hora de despertar para hoy (${todayStart.toISOString()})`);
-      console.log(`🌅 [WAKE TIME] Parámetros: childId=${childId}, userId=${userId}`);
+      console.log(`🌅 [WAKE TIME] ==============================================`);
+      console.log(`🌅 [WAKE TIME] Buscando hora de despertar para HOY`);
+      console.log(`🌅 [WAKE TIME] todayStart (Date): ${todayStart.toISOString()}`);
+      console.log(`🌅 [WAKE TIME] todayStart (Timestamp): ${todayStartTimestamp.toDate().toISOString()}`);
+      console.log(`🌅 [WAKE TIME] childId: ${childId}`);
+      console.log(`🌅 [WAKE TIME] userId: ${userId}`);
+      console.log(`🌅 [WAKE TIME] ==============================================`);
+      
+      // Primero, ver TODOS los registros de wakeEvents para este niño
+      const allWakeSnapshot = await this.db
+        .collection('wakeEvents')
+        .where('userId', '==', userId)
+        .where('childId', '==', childId)
+        .orderBy('wakeTime', 'desc')
+        .limit(5)
+        .get();
+      
+      console.log(`🔍 [WAKE TIME] Total de registros de despertar encontrados: ${allWakeSnapshot.size}`);
+      
+      if (!allWakeSnapshot.empty) {
+        allWakeSnapshot.docs.forEach((doc, index) => {
+          const data = doc.data();
+          const wakeDate = data.wakeTime.toDate();
+          console.log(`📅 [WAKE TIME] Registro ${index + 1}:`);
+          console.log(`   - ID: ${doc.id}`);
+          console.log(`   - Fecha: ${wakeDate.toISOString()}`);
+          console.log(`   - ¿Es hoy?: ${wakeDate >= todayStart}`);
+          console.log(`   - Diferencia con todayStart: ${(wakeDate - todayStart) / 1000 / 60 / 60} horas`);
+        });
+      } else {
+        console.log(`⚠️ [WAKE TIME] NO hay NINGÚN registro de despertar en la BD`);
+      }
       
       // Buscar hora de despertar registrada HOY
       const wakeSnapshot = await this.db
         .collection('wakeEvents')
         .where('userId', '==', userId)
         .where('childId', '==', childId)
-        .where('wakeTime', '>=', admin.firestore.Timestamp.fromDate(todayStart))
+        .where('wakeTime', '>=', todayStartTimestamp)
         .orderBy('wakeTime', 'desc')
         .limit(1)
         .get();
@@ -493,14 +524,14 @@ class SleepPredictionController {
       if (!wakeSnapshot.empty) {
         const wakeData = wakeSnapshot.docs[0].data();
         const wakeTime = wakeData.wakeTime.toDate();
-        console.log(`✅ [WAKE TIME] Hora de despertar REGISTRADA HOY: ${wakeTime.toISOString()}`);
+        console.log(`✅ [WAKE TIME] Hora de despertar REGISTRADA HOY encontrada: ${wakeTime.toISOString()}`);
         return {
           time: wakeTime,
           source: 'recorded'
         };
       }
       
-      console.log(`⚠️ [WAKE TIME] No hay registro de despertar HOY`);
+      console.log(`⚠️ [WAKE TIME] No hay registro de despertar HOY (después de ${todayStart.toISOString()})`);
       console.log(`🔍 [WAKE TIME] Buscando historial de últimos 30 días...`);
 
       // Si no hay registro de hoy, predecir basándose en historial
