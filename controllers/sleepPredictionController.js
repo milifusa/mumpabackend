@@ -10,6 +10,7 @@
 const admin = require('firebase-admin');
 const stats = require('simple-statistics');
 const sleepMLModel = require('../ml/sleepMLModel'); // 🧠 MODELO DE MACHINE LEARNING
+const TimezoneHelper = require('../utils/timezoneHelper'); // 🌍 HELPER DE ZONAS HORARIAS
 const { 
   parseISO, 
   differenceInMinutes, 
@@ -77,6 +78,7 @@ class SleepPredictionController {
     try {
       const userId = req.user.uid;
       const { childId } = req.params;
+      const userTimezone = TimezoneHelper.getUserTimezone(req);
 
       if (!childId) {
         return res.status(400).json({
@@ -85,20 +87,24 @@ class SleepPredictionController {
       }
 
       console.log(`🌅 [GET WAKE TIME] Consultando hora de despertar para childId: ${childId}`);
+      console.log(`🌍 [GET WAKE TIME] Timezone del usuario: ${userTimezone}`);
 
-      const wakeTimeInfo = await this.getWakeTimeForToday(childId, userId);
+      const wakeTimeInfo = await this.getWakeTimeForToday(childId, userId, userTimezone);
 
       console.log(`✅ [GET WAKE TIME] Resultado:`, {
         hasTime: !!wakeTimeInfo.time,
         source: wakeTimeInfo.source,
-        time: wakeTimeInfo.time ? wakeTimeInfo.time.toISOString() : null
+        time: wakeTimeInfo.time ? wakeTimeInfo.time.toISOString() : null,
+        timeInUserTZ: wakeTimeInfo.time ? TimezoneHelper.formatInUserTimezone(wakeTimeInfo.time, userTimezone, 'HH:mm') : null
       });
 
       res.json({
         success: true,
         wakeTime: wakeTimeInfo.time ? wakeTimeInfo.time.toISOString() : null,
+        wakeTimeLocal: wakeTimeInfo.time ? TimezoneHelper.formatInUserTimezone(wakeTimeInfo.time, userTimezone) : null,
         source: wakeTimeInfo.source,
         hasRegisteredToday: wakeTimeInfo.source === 'recorded',
+        timezone: userTimezone,
         message: wakeTimeInfo.source === 'recorded' 
           ? 'Hora de despertar registrada hoy'
           : wakeTimeInfo.source === 'predicted-historical'
@@ -276,10 +282,15 @@ class SleepPredictionController {
       
       console.log(`✅ [PREDICT] childInfo construido:`, JSON.stringify(childInfo));
       
+      // 🌍 Obtener timezone del usuario
+      const userTimezone = TimezoneHelper.getUserTimezone(req);
+      console.log(`🌍 [PREDICT] Usando timezone: ${userTimezone}`);
+      
       const prediction = await this.generateSleepPrediction(
         sleepHistory,
         ageInMonths,
-        childInfo
+        childInfo,
+        userTimezone  // ✅ Pasar timezone
       );
 
       console.log(`✅ [PREDICT] Predicción generada exitosamente`);
@@ -511,7 +522,7 @@ class SleepPredictionController {
   /**
    * Obtener hora de despertar de hoy o predecirla
    */
-  async getWakeTimeForToday(childId, userId) {
+  async getWakeTimeForToday(childId, userId, userTimezone = 'America/Mexico_City') {
     try {
       // ✅ VALIDACIÓN CRÍTICA: Verificar que childId y userId no sean undefined
       if (!childId || !userId) {
@@ -520,7 +531,9 @@ class SleepPredictionController {
         throw new Error(`getWakeTimeForToday requiere childId y userId válidos. Recibido: childId=${childId}, userId=${userId}`);
       }
       
-      const todayStart = startOfDay(new Date());
+      // ✅ Obtener "hoy" según la timezone del usuario
+      const today = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+      const todayStart = today.start;
       const todayStartTimestamp = admin.firestore.Timestamp.fromDate(todayStart);
       
       console.log(`🌅 [WAKE TIME] ==============================================`);
@@ -634,8 +647,10 @@ class SleepPredictionController {
   /**
    * Generar predicción inteligente de sueño
    */
-  async generateSleepPrediction(sleepHistory, ageInMonths, childInfo) {
+  async generateSleepPrediction(sleepHistory, ageInMonths, childInfo, userTimezone = 'America/Mexico_City') {
     const now = new Date();
+
+    console.log(`🌍 [PREDICT] Timezone del usuario: ${userTimezone}`);
 
     // 🧠 INTENTAR USAR MACHINE LEARNING PRIMERO
     console.log(`🧠 [ML] Intentando entrenar modelo con ${sleepHistory.length} eventos...`);
@@ -658,7 +673,7 @@ class SleepPredictionController {
     }
     
     console.log(`🔍 [PREDICT] Buscando hora de despertar para childId: ${childInfo.id}, userId: ${childInfo.userId}`);
-    const wakeTimeInfo = await this.getWakeTimeForToday(childInfo.id, childInfo.userId);
+    const wakeTimeInfo = await this.getWakeTimeForToday(childInfo.id, childInfo.userId, userTimezone);
 
     // Separar siestas y sueño nocturno
     const naps = sleepHistory.filter(s => s.type === 'nap');

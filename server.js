@@ -26077,10 +26077,15 @@ app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => 
     // ✅ CAMBIO: Siempre generar predicción (eliminar validación de 3 datos)
     // Incluso sin historial, dará horarios por defecto
 
+    // 🌍 Obtener timezone del usuario
+    const TimezoneHelper = require('./utils/timezoneHelper');
+    const userTimezone = TimezoneHelper.getUserTimezone(req);
+
     const prediction = await sleepController.generateSleepPrediction(
       sleepHistory,
       ageInMonths,
-      childInfo  // ✅ Pasar childInfo, no childData
+      childInfo,  // ✅ Pasar childInfo, no childData
+      userTimezone  // ✅ Pasar timezone
     );
 
     const reminders = [];
