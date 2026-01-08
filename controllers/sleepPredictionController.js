@@ -759,11 +759,11 @@ class SleepPredictionController {
         };
       } else {
         // Fallback a estadístico
-        dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo);
+        dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
       }
     } else {
       // Usar sistema estadístico
-      dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo);
+      dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
     }
 
     // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
@@ -845,7 +845,9 @@ class SleepPredictionController {
       })
       .map((predictedNap, index) => ({
         ...predictedNap,
-        napNumber: napsToday.length + index + 1,
+        // ✅ Respetar napNumber si ya viene definido (desde wake-time)
+        // Si no, calcularlo basándose en las siestas registradas
+        napNumber: predictedNap.napNumber || (napsToday.length + index + 1),
         type: 'prediction',
         status: 'upcoming',
         isReal: false
@@ -896,17 +898,17 @@ class SleepPredictionController {
    * Predecir TODAS las siestas del día (horario completo)
    * Ahora usa la hora de despertar + wake windows por edad
    */
-  predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo = null) {
+  predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo = null, userTimezone = 'UTC') {
     // IMPORTANTE: Las fechas ya vienen en UTC desde Firestore
     // Pero necesitamos considerar la hora LOCAL del usuario
     
-    // Obtener hora UTC actual
-    const utcHour = now.getUTCHours() + now.getUTCMinutes() / 60;
+    // 🌍 Convertir 'now' a hora local del usuario
+    const userLocalTime = TimezoneHelper.utcToUserTime(now, userTimezone);
+    const localHour = userLocalTime.getHours() + userLocalTime.getMinutes() / 60;
     
-    // Ajustar a UTC-6 (zona horaria del usuario)
-    const localHour = ((utcHour - 6) + 24) % 24;
+    console.log(`🌍 [PREDICT NAPS] UTC: ${now.toISOString()}, Local (${userTimezone}): ${userLocalTime.toLocaleString()}, Hour: ${localHour.toFixed(2)}`);
     
-    // ✅ CAMBIO: Solo predecir para mañana si ya es MUY tarde (después de las 9 PM)
+    // ✅ CAMBIO: Solo predecir para mañana si ya es MUY tarde (después de las 9 PM local)
     // Porque aún falta la hora de dormir de hoy (6-9 PM)
     const predictionDate = localHour >= 21 ? addDays(now, 1) : now;
     const todayStart = startOfDay(predictionDate);
@@ -950,7 +952,7 @@ class SleepPredictionController {
 
     // ✅ NUEVA LÓGICA: Si hay hora de despertar, calcular basándose en wake windows
     if (wakeTimeInfo && wakeTimeInfo.source !== 'error-default') {
-      return this.predictDailyNapsFromWakeTime(wakeTimeInfo.time, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps);
+      return this.predictDailyNapsFromWakeTime(wakeTimeInfo.time, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps, userTimezone);
     }
 
     // Si hay suficiente historial, usar patrones aprendidos
@@ -965,38 +967,74 @@ class SleepPredictionController {
   /**
    * Predecir siestas basándose en hora de despertar + wake windows
    */
-  predictDailyNapsFromWakeTime(wakeTime, predictionDate, ageInMonths, napsOfDay, targetNapCount, allNaps) {
+  predictDailyNapsFromWakeTime(wakeTime, predictionDate, ageInMonths, napsOfDay, targetNapCount, allNaps, userTimezone = 'UTC') {
     const wakeWindows = this.getWakeWindows(ageInMonths);
     const predictedNaps = [];
     
     console.log(`[WAKE TIME] Predicción basada en despertar: ${wakeTime.toISOString()}`);
     console.log(`[WAKE TIME] Wake windows: ${JSON.stringify(wakeWindows)}`);
     console.log(`[WAKE TIME] Target nap count: ${targetNapCount}`);
+    console.log(`[WAKE TIME] Siestas ya registradas hoy: ${napsOfDay.length}`);
+    console.log(`[WAKE TIME] Timezone: ${userTimezone}`);
     
-    // Comenzar desde la hora de despertar
-    let currentTime = new Date(wakeTime);
+    // ✅ AJUSTE DINÁMICO: Si ya hay siestas registradas, usar la ÚLTIMA como punto de partida
+    let currentTime;
+    let startNapNumber;
+    
+    if (napsOfDay.length > 0) {
+      // Ordenar por hora de inicio
+      const sortedNaps = [...napsOfDay].sort((a, b) => 
+        parseISO(a.startTime).getTime() - parseISO(b.startTime).getTime()
+      );
+      const lastNap = sortedNaps[sortedNaps.length - 1];
+      
+      // Empezar desde el fin de la última siesta registrada
+      currentTime = lastNap.endTime ? parseISO(lastNap.endTime) : parseISO(lastNap.startTime);
+      startNapNumber = napsOfDay.length + 1;  // La siguiente siesta será #4, #5, etc.
+      
+      console.log(`[WAKE TIME] ✅ Recalculando desde última siesta (#${napsOfDay.length})`);
+      console.log(`[WAKE TIME] Última siesta terminó: ${currentTime.toISOString()}`);
+    } else {
+      // No hay siestas registradas, empezar desde el despertar
+      currentTime = new Date(wakeTime);
+      startNapNumber = 1;
+      
+      console.log(`[WAKE TIME] ✅ Calculando desde despertar (sin siestas registradas)`);
+    }
+    
+    // ✅ AJUSTE: Determinar límite máximo de hora según edad
+    // - Bebés pequeños (0-6 meses): última siesta puede ser hasta las 8 PM
+    // - Bebés mayores (6+ meses): última siesta hasta 7 PM
+    const maxNapHourLocal = ageInMonths <= 6 ? 20 : 19;
+    
+    // ✅ Calcular cuántas siestas FALTAN por predecir
+    const remainingNaps = targetNapCount - napsOfDay.length;
+    
+    console.log(`[WAKE TIME] Siestas a predecir: ${remainingNaps} (target: ${targetNapCount}, registradas: ${napsOfDay.length})`);
     
     // Generar siestas basándose en wake windows
-    for (let i = 0; i < targetNapCount; i++) {
-      // Primera siesta: desde despertar + wake window
-      // Siguientes: desde fin de siesta anterior + wake window
+    for (let i = 0; i < remainingNaps; i++) {
+      const napNumber = startNapNumber + i;
+      
+      // Calcular tiempo desde el último evento de sueño + wake window
       const wakeWindow = wakeWindows.optimal;
       const napTime = new Date(currentTime);
       napTime.setMinutes(napTime.getMinutes() + (wakeWindow * 60));
       
-      // Validar hora en UTC (considerar zona horaria)
-      const napHourUTC = napTime.getUTCHours();
-      const napHourLocal = ((napHourUTC - 6) + 24) % 24;
+      // Validar hora usando TimezoneHelper
+      const napTimeLocal = TimezoneHelper.utcToUserTime(napTime, userTimezone);
+      const napHourLocal = napTimeLocal.getHours() + napTimeLocal.getMinutes() / 60;
       
-      console.log(`[WAKE TIME] Siesta ${i + 1}: ${napTime.toISOString()} (${napHourLocal}:${napTime.getUTCMinutes()} local)`);
+      console.log(`[WAKE TIME] Siesta ${napNumber}: ${napTime.toISOString()} (${Math.floor(napHourLocal)}:${napTimeLocal.getMinutes()} local)`);
       
-      // Solo si es dentro de horario razonable (7 AM - 7 PM local)
-      if (napHourLocal < 7 || napHourLocal >= 19) {
-        console.log(`[WAKE TIME] Siesta ${i + 1} fuera de rango (${napHourLocal}h local), deteniendo`);
+      // ✅ Solo validar que no sea DESPUÉS de la hora límite
+      // No validar el mínimo (7 AM) porque podemos estar prediciendo para mañana
+      if (napHourLocal >= maxNapHourLocal) {
+        console.log(`[WAKE TIME] Siesta ${napNumber} después de límite (${Math.floor(napHourLocal)}h >= ${maxNapHourLocal}h local), deteniendo`);
         break;
       }
       
-      const napType = this.getNapTypeByTime(napHourLocal);
+      const napType = this.getNapTypeByTime(Math.floor(napHourLocal));
       
       // Aprender duración para este tipo de siesta
       const durationLearned = this.learnNapDuration(allNaps, napType, ageInMonths);
@@ -1010,7 +1048,7 @@ class SleepPredictionController {
         windowEnd: addMinutes(napTime, 20).toISOString(),
         expectedDuration,
         confidence: 80,
-        napNumber: i + 1,
+        napNumber: napNumber,
         type: napType,
         status: 'upcoming',
         basedOn: 'wake-time-windows'
