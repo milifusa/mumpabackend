@@ -897,9 +897,9 @@ FORMATO DE RESPUESTA (JSON):
       });
       
       const mlBedtime = sleepMLModel.predictBedtime(ageInMonths, napsToday);
-      bedtimePrediction = mlBedtime || this.predictBedtime(nightSleeps, ageInMonths, sleepHistory);
+      bedtimePrediction = mlBedtime || this.predictBedtime(nightSleeps, ageInMonths, sleepHistory, userTimezone);
     } else {
-      bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory);
+      bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory, userTimezone);
     }
 
     // 4. ANALIZAR PATRONES DE SUEÑO
@@ -1693,7 +1693,7 @@ FORMATO DE RESPUESTA (JSON):
   /**
    * Predecir hora de dormir nocturna
    */
-  predictBedtime(nightSleeps, ageInMonths, allSleepHistory = []) {
+  predictBedtime(nightSleeps, ageInMonths, allSleepHistory = [], userTimezone = 'UTC') {
     // PRIMERO: Calcular basándose en las siestas de HOY
     const today = startOfDay(new Date());
     const napsToday = allSleepHistory
@@ -1708,7 +1708,12 @@ FORMATO DE RESPUESTA (JSON):
     if (napsToday.length > 0) {
       const lastNapToday = napsToday[0];
       const lastNapEnd = parseISO(lastNapToday.endTime);
-      const lastNapHour = lastNapEnd.getHours() + lastNapEnd.getMinutes() / 60;
+      
+      // 🌍 Convertir a hora local del usuario para cálculos
+      const lastNapEndLocal = TimezoneHelper.utcToUserTime(lastNapEnd, userTimezone);
+      const lastNapHour = lastNapEndLocal.getHours() + lastNapEndLocal.getMinutes() / 60;
+      
+      console.log(`🌙 [BEDTIME] Última siesta (local): ${lastNapEndLocal.toLocaleString()} (${lastNapHour.toFixed(2)}h)`);
       
       // Calcular hora de dormir: última siesta + 2.5-3 horas
       // Ajustar según edad (bebés más pequeños duermen antes)
@@ -1722,25 +1727,34 @@ FORMATO DE RESPUESTA (JSON):
       if (bedtimeHour < 18) bedtimeHour = 18;
       if (bedtimeHour > 21) bedtimeHour = 21;
       
-      console.log(`🌙 [BEDTIME] Hora calculada: ${bedtimeHour} (${Math.floor(bedtimeHour)}:${Math.round((bedtimeHour % 1) * 60).toString().padStart(2, '0')})`);
+      const bedtimeHours = Math.floor(bedtimeHour);
+      const bedtimeMinutes = Math.round((bedtimeHour % 1) * 60);
       
-      // ✅ Crear fecha para HOY en HORA LOCAL, luego convertir a UTC
-      const bedtimeDate = new Date(lastNapEnd);
-      // Usar setHours (local) en lugar de setUTCHours
-      bedtimeDate.setHours(Math.floor(bedtimeHour), Math.round((bedtimeHour % 1) * 60), 0, 0);
+      console.log(`🌙 [BEDTIME] Hora calculada: ${bedtimeHour.toFixed(2)} (${bedtimeHours}:${bedtimeMinutes.toString().padStart(2, '0')})`);
       
-      console.log(`🌙 [BEDTIME] Fecha creada: ${bedtimeDate.toISOString()} (${format(bedtimeDate, 'h:mm a')})`);
+      // ✅ CREAR FECHA EN HORA LOCAL DEL USUARIO
+      // Copiar la fecha de la última siesta (en local)
+      const bedtimeDateLocal = new Date(lastNapEndLocal);
+      bedtimeDateLocal.setHours(bedtimeHours, bedtimeMinutes, 0, 0);
+      
+      console.log(`🌙 [BEDTIME] Fecha local calculada: ${bedtimeDateLocal.toLocaleString()}`);
+      
+      // ✅ CONVERTIR A UTC
+      const bedtimeDateUTC = TimezoneHelper.userTimeToUtc(bedtimeDateLocal, userTimezone);
+      
+      console.log(`🌙 [BEDTIME] Fecha UTC final: ${bedtimeDateUTC.toISOString()}`);
       
       // Si ya pasó, programar para mañana
       const now = new Date();
-      if (bedtimeDate <= now) {
-        bedtimeDate.setUTCDate(bedtimeDate.getUTCDate() + 1);
+      if (bedtimeDateUTC <= now) {
+        bedtimeDateUTC.setUTCDate(bedtimeDateUTC.getUTCDate() + 1);
+        console.log(`🌙 [BEDTIME] Ya pasó, movido a mañana: ${bedtimeDateUTC.toISOString()}`);
       }
       
-      const lastNapEndFormatted = format(lastNapEnd, 'h:mm a');
+      const lastNapEndFormatted = format(lastNapEndLocal, 'h:mm a');
       
       return {
-        time: bedtimeDate.toISOString(),
+        time: bedtimeDateUTC.toISOString(),
         confidence: 75,
         reason: `Última siesta hoy: ${lastNapEndFormatted} + ${hoursAfterNap}h`,
         basedOn: 'today-naps',
