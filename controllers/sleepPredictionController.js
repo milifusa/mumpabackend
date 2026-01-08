@@ -1457,10 +1457,14 @@ class SleepPredictionController {
       if (bedtimeHour < 18) bedtimeHour = 18;
       if (bedtimeHour > 21) bedtimeHour = 21;
       
-      // ✅ Crear fecha para HOY en UTC
-      // lastNapEnd ya está en UTC, así que usamos su fecha base
+      console.log(`🌙 [BEDTIME] Hora calculada: ${bedtimeHour} (${Math.floor(bedtimeHour)}:${Math.round((bedtimeHour % 1) * 60).toString().padStart(2, '0')})`);
+      
+      // ✅ Crear fecha para HOY en HORA LOCAL, luego convertir a UTC
       const bedtimeDate = new Date(lastNapEnd);
-      bedtimeDate.setUTCHours(Math.floor(bedtimeHour), Math.round((bedtimeHour % 1) * 60), 0, 0);
+      // Usar setHours (local) en lugar de setUTCHours
+      bedtimeDate.setHours(Math.floor(bedtimeHour), Math.round((bedtimeHour % 1) * 60), 0, 0);
+      
+      console.log(`🌙 [BEDTIME] Fecha creada: ${bedtimeDate.toISOString()} (${format(bedtimeDate, 'h:mm a')})`);
       
       // Si ya pasó, programar para mañana
       const now = new Date();
