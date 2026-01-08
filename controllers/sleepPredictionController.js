@@ -71,6 +71,58 @@ class SleepPredictionController {
   }
 
   /**
+   * Convertir todas las fechas de la predicción a la zona horaria del usuario
+   */
+  localizePredictionDates(prediction, userTimezone) {
+    console.log(`🌍 [LOCALIZE] Convirtiendo fechas a timezone: ${userTimezone}`);
+    
+    // Función helper para convertir una fecha ISO a la timezone del usuario
+    const convertDate = (isoDate) => {
+      if (!isoDate) return null;
+      const utcDate = new Date(isoDate);
+      const localDate = TimezoneHelper.utcToUserTime(utcDate, userTimezone);
+      return localDate.toISOString();
+    };
+    
+    // Clonar predicción para no mutar el original
+    const localized = JSON.parse(JSON.stringify(prediction));
+    
+    // Convertir nextNap
+    if (localized.nextNap?.time) {
+      localized.nextNap.time = convertDate(localized.nextNap.time);
+      if (localized.nextNap.windowStart) localized.nextNap.windowStart = convertDate(localized.nextNap.windowStart);
+      if (localized.nextNap.windowEnd) localized.nextNap.windowEnd = convertDate(localized.nextNap.windowEnd);
+    }
+    
+    // Convertir dailySchedule.allNaps
+    if (localized.dailySchedule?.allNaps) {
+      localized.dailySchedule.allNaps = localized.dailySchedule.allNaps.map(nap => ({
+        ...nap,
+        time: convertDate(nap.time),
+        startTime: nap.startTime ? convertDate(nap.startTime) : undefined,
+        endTime: nap.endTime ? convertDate(nap.endTime) : undefined,
+        windowStart: nap.windowStart ? convertDate(nap.windowStart) : undefined,
+        windowEnd: nap.windowEnd ? convertDate(nap.windowEnd) : undefined
+      }));
+    }
+    
+    // Convertir bedtime
+    if (localized.bedtime?.time) {
+      localized.bedtime.time = convertDate(localized.bedtime.time);
+      if (localized.bedtime.lastNapEnd) localized.bedtime.lastNapEnd = convertDate(localized.bedtime.lastNapEnd);
+    }
+    
+    // Convertir sleepPressure.lastSleepTime
+    if (localized.sleepPressure?.lastSleepTime) {
+      localized.sleepPressure.lastSleepTime = convertDate(localized.sleepPressure.lastSleepTime);
+    }
+    
+    console.log(`✅ [LOCALIZE] Fechas convertidas a ${userTimezone}`);
+    
+    return localized;
+  }
+
+  /**
    * Obtener hora de despertar del día
    * GET /api/sleep/wake-time/:childId
    */
@@ -297,14 +349,18 @@ class SleepPredictionController {
       console.log(`✅ [PREDICT] Total de siestas predichas: ${prediction.dailySchedule?.allNaps?.length || 0}`);
       console.log(`✅ [PREDICT] Confianza: ${prediction.confidence}%`);
 
+      // 🌍 Convertir todas las fechas a la zona horaria del usuario
+      const localizedPrediction = this.localizePredictionDates(prediction, userTimezone);
+
       res.json({
         success: true,
-        prediction,
+        prediction: localizedPrediction,
         childInfo: {
           name: childData.name,
           ageInMonths,
           dataPoints: sleepHistory.length
-        }
+        },
+        timezone: userTimezone  // ✅ Indicar la timezone usada
       });
 
     } catch (error) {

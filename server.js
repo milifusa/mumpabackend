@@ -26135,14 +26135,18 @@ app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => 
       });
     }
 
+    // 🌍 Localizar las fechas a la timezone del usuario
+    const localizedPrediction = sleepController.localizePredictionDates(prediction, userTimezone);
+    
     res.json({
       success: true,
       reminders,
-      sleepPressure: prediction.sleepPressure,
+      sleepPressure: localizedPrediction.sleepPressure,
       nextPrediction: {
-        nap: prediction.nextNap,
-        bedtime: prediction.bedtime
-      }
+        nap: localizedPrediction.nextNap,
+        bedtime: localizedPrediction.bedtime
+      },
+      timezone: userTimezone  // ✅ Indicar timezone
     });
 
   } catch (error) {
