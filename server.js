@@ -26061,18 +26061,21 @@ app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => 
     const ageInMonths = sleepController.calculateAgeInMonths(birthDate);
     const sleepHistory = await sleepController.getSleepHistory(userId, childId, 7);
 
-    if (sleepHistory.length < 3) {
-      return res.json({
-        success: true,
-        reminders: [],
-        message: 'Necesitamos más datos para generar recordatorios'
-      });
-    }
+    // ✅ Construir childInfo correctamente (con id y userId)
+    const childInfo = {
+      id: childId,
+      userId: userId,
+      name: childData.name,
+      ageInMonths: ageInMonths
+    };
+
+    // ✅ CAMBIO: Siempre generar predicción (eliminar validación de 3 datos)
+    // Incluso sin historial, dará horarios por defecto
 
     const prediction = await sleepController.generateSleepPrediction(
       sleepHistory,
       ageInMonths,
-      childData
+      childInfo  // ✅ Pasar childInfo, no childData
     );
 
     const reminders = [];
