@@ -11,6 +11,7 @@ const admin = require('firebase-admin');
 const stats = require('simple-statistics');
 const sleepMLModel = require('../ml/sleepMLModel'); // 🧠 MODELO DE MACHINE LEARNING
 const TimezoneHelper = require('../utils/timezoneHelper'); // 🌍 HELPER DE ZONAS HORARIAS
+const OpenAI = require('openai'); // 🤖 CHATGPT PARA MEJORAR PREDICCIONES
 const { 
   parseISO, 
   differenceInMinutes, 
@@ -26,6 +27,120 @@ const {
 class SleepPredictionController {
   constructor() {
     this.db = admin.firestore();
+    this.openai = null;
+    this.initOpenAI();
+  }
+
+  /**
+   * Inicializar conexión a OpenAI
+   */
+  initOpenAI() {
+    try {
+      if (process.env.OPENAI_API_KEY) {
+        this.openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+        console.log('🤖 [SLEEP AI] OpenAI inicializado para predicciones mejoradas');
+      } else {
+        console.log('⚠️ [SLEEP AI] OpenAI no disponible - usando predicciones estadísticas');
+      }
+    } catch (error) {
+      console.error('❌ [SLEEP AI] Error inicializando OpenAI:', error.message);
+    }
+  }
+
+  /**
+   * 🤖 CONSULTAR A CHATGPT PARA MEJORAR PREDICCIONES
+   * Usa bases de datos de patrones de sueño infantil
+   */
+  async enhancePredictionsWithAI(childInfo, currentNaps, wakeTime, userTimezone) {
+    // Si no hay OpenAI, retornar null (usar predicciones estadísticas)
+    if (!this.openai) {
+      return null;
+    }
+
+    try {
+      const now = new Date();
+      const localTime = TimezoneHelper.utcToUserTime(now, userTimezone);
+      const currentHour = localTime.getHours() + localTime.getMinutes() / 60;
+
+      // Construir el prompt con información real del bebé
+      const prompt = `Eres un experto en patrones de sueño infantil con acceso a bases de datos pediátricas.
+
+INFORMACIÓN DEL BEBÉ:
+- Edad: ${childInfo.ageInMonths} meses
+- Hora actual: ${localTime.toLocaleString('es-MX')} (${currentHour.toFixed(2)}h)
+- Hora de despertar hoy: ${wakeTime ? new Date(wakeTime).toLocaleTimeString('es-MX') : 'No registrada'}
+- Siestas ya registradas hoy: ${currentNaps.length}
+
+SIESTAS COMPLETADAS HOY:
+${currentNaps.length > 0 ? currentNaps.map((nap, i) => {
+  const start = new Date(nap.startTime).toLocaleTimeString('es-MX');
+  const end = nap.endTime ? new Date(nap.endTime).toLocaleTimeString('es-MX') : 'en curso';
+  return `  Siesta ${i + 1}: ${start} - ${end} (${nap.duration || 0} min)`;
+}).join('\n') : '  Ninguna'}
+
+PREGUNTA:
+Basándote en patrones de sueño infantil reales y recomendaciones pediátricas:
+1. ¿Cuántas siestas más debería tener este bebé HOY?
+2. ¿A qué horas deberían ser las siestas restantes?
+3. ¿Cuánto deberían durar cada una?
+4. ¿A qué hora debería ser la hora de dormir nocturna?
+
+IMPORTANTE:
+- Usa datos de patrones reales de bebés de ${childInfo.ageInMonths} meses
+- Considera que son las ${currentHour.toFixed(2)}h en su hora local
+- Las siestas deben ser DESPUÉS de la hora actual
+- Bebés de esta edad típicamente necesitan ventanas de vigilia de 2-2.5 horas
+- La última siesta puede ser entre 5-7 PM para esta edad
+
+FORMATO DE RESPUESTA (JSON):
+{
+  "remainingNaps": [
+    {
+      "napNumber": 3,
+      "time": "17:00",
+      "duration": 45,
+      "reason": "Catnap antes de dormir"
+    }
+  ],
+  "bedtime": {
+    "time": "20:00",
+    "reason": "2.5h después de última siesta"
+  },
+  "confidence": 85,
+  "explanation": "Para un bebé de ${childInfo.ageInMonths} meses a las ${currentHour.toFixed(2)}h..."
+}`;
+
+      console.log('🤖 [AI PREDICTION] Consultando a ChatGPT...');
+
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "Eres un experto en patrones de sueño infantil con conocimiento de bases de datos pediátricas (AAP, NSF, CDC). Respondes SOLO en formato JSON válido."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.3,  // Más determinístico
+        max_tokens: 1000
+      });
+
+      const aiResponse = JSON.parse(response.choices[0].message.content);
+      
+      console.log('✅ [AI PREDICTION] Respuesta de ChatGPT:', JSON.stringify(aiResponse, null, 2));
+
+      return aiResponse;
+
+    } catch (error) {
+      console.error('❌ [AI PREDICTION] Error consultando ChatGPT:', error.message);
+      return null;  // Fallar silenciosamente y usar predicciones estadísticas
+    }
   }
 
   /**
@@ -759,11 +874,11 @@ class SleepPredictionController {
         };
       } else {
         // Fallback a estadístico
-        dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
+        dailyNapSchedule = await this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
       }
     } else {
       // Usar sistema estadístico
-      dailyNapSchedule = this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
+      dailyNapSchedule = await this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
     }
 
     // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
@@ -897,8 +1012,9 @@ class SleepPredictionController {
   /**
    * Predecir TODAS las siestas del día (horario completo)
    * Ahora usa la hora de despertar + wake windows por edad
+   * 🤖 CON MEJORA DE CHATGPT
    */
-  predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo = null, userTimezone = 'UTC') {
+  async predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo = null, userTimezone = 'UTC') {
     // IMPORTANTE: Las fechas ya vienen en UTC desde Firestore
     // Pero necesitamos considerar la hora LOCAL del usuario
     
@@ -952,7 +1068,7 @@ class SleepPredictionController {
 
     // ✅ NUEVA LÓGICA: Si hay hora de despertar, calcular basándose en wake windows
     if (wakeTimeInfo && wakeTimeInfo.source !== 'error-default') {
-      return this.predictDailyNapsFromWakeTime(wakeTimeInfo.time, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps, userTimezone);
+      return await this.predictDailyNapsFromWakeTime(wakeTimeInfo.time, predictionDate, ageInMonths, napsOfPredictionDay, targetNapCount, naps, userTimezone);
     }
 
     // Si hay suficiente historial, usar patrones aprendidos
@@ -966,16 +1082,71 @@ class SleepPredictionController {
 
   /**
    * Predecir siestas basándose en hora de despertar + wake windows
+   * 🤖 AHORA CON MEJORA DE CHATGPT
    */
-  predictDailyNapsFromWakeTime(wakeTime, predictionDate, ageInMonths, napsOfDay, targetNapCount, allNaps, userTimezone = 'UTC') {
+  async predictDailyNapsFromWakeTime(wakeTime, predictionDate, ageInMonths, napsOfDay, targetNapCount, allNaps, userTimezone = 'UTC') {
     const wakeWindows = this.getWakeWindows(ageInMonths);
-    const predictedNaps = [];
+    let predictedNaps = [];
     
     console.log(`[WAKE TIME] Predicción basada en despertar: ${wakeTime.toISOString()}`);
     console.log(`[WAKE TIME] Wake windows: ${JSON.stringify(wakeWindows)}`);
     console.log(`[WAKE TIME] Target nap count: ${targetNapCount}`);
     console.log(`[WAKE TIME] Siestas ya registradas hoy: ${napsOfDay.length}`);
     console.log(`[WAKE TIME] Timezone: ${userTimezone}`);
+    
+    // 🤖 PASO 1: INTENTAR CON CHATGPT PRIMERO
+    const aiPrediction = await this.enhancePredictionsWithAI(
+      { ageInMonths, name: 'Bebé' },
+      napsOfDay,
+      wakeTime,
+      userTimezone
+    );
+
+    if (aiPrediction && aiPrediction.remainingNaps && aiPrediction.remainingNaps.length > 0) {
+      console.log('🤖 [AI PREDICTION] Usando predicciones mejoradas con ChatGPT');
+      
+      // Convertir predicciones de ChatGPT al formato esperado
+      const now = new Date();
+      const localToday = TimezoneHelper.utcToUserTime(now, userTimezone);
+      
+      predictedNaps = aiPrediction.remainingNaps.map(aiNap => {
+        // Parsear la hora de la respuesta de ChatGPT (formato "HH:MM")
+        const [hours, minutes] = aiNap.time.split(':').map(Number);
+        
+        // Crear fecha en la timezone del usuario
+        const napDate = new Date(localToday);
+        napDate.setHours(hours, minutes, 0, 0);
+        
+        // Convertir a UTC para almacenar
+        const napTimeUTC = TimezoneHelper.userTimeToUtc(napDate, userTimezone);
+        
+        return {
+          time: napTimeUTC.toISOString(),
+          windowStart: addMinutes(napTimeUTC, -20).toISOString(),
+          windowEnd: addMinutes(napTimeUTC, 20).toISOString(),
+          expectedDuration: aiNap.duration,
+          confidence: aiPrediction.confidence || 85,
+          napNumber: aiNap.napNumber,
+          type: aiNap.reason || 'ai-predicted',
+          status: 'upcoming',
+          basedOn: 'chatgpt-enhanced',
+          aiReason: aiNap.reason
+        };
+      });
+
+      console.log(`✅ [AI PREDICTION] ${predictedNaps.length} siestas predichas con IA`);
+      
+      return {
+        naps: predictedNaps,
+        totalNaps: predictedNaps.length,
+        basedOn: 'chatgpt-ai',
+        wakeTime: wakeTime.toISOString(),
+        aiExplanation: aiPrediction.explanation
+      };
+    }
+
+    // 📊 PASO 2: SI NO HAY AI, USAR MÉTODO ESTADÍSTICO (FALLBACK)
+    console.log('📊 [STATISTICAL] Usando método estadístico (ChatGPT no disponible)');
     
     // ✅ AJUSTE DINÁMICO: Si ya hay siestas registradas, usar la ÚLTIMA como punto de partida
     let currentTime;
