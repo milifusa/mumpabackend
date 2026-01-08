@@ -25673,6 +25673,11 @@ app.post('/api/sleep/wake-time', authenticateToken, (req, res) => {
   sleepController.recordWakeTime(req, res);
 });
 
+// Obtener hora de despertar de hoy
+app.get('/api/sleep/wake-time/:childId', authenticateToken, (req, res) => {
+  sleepController.getWakeTime(req, res);
+});
+
 // Obtener predicción de sueño (GET con childId en URL)
 app.get('/api/sleep/predict/:childId', authenticateToken, (req, res) => {
   sleepController.predictSleep(req, res);

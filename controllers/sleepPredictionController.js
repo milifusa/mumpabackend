@@ -70,6 +70,51 @@ class SleepPredictionController {
   }
 
   /**
+   * Obtener hora de despertar del día
+   * GET /api/sleep/wake-time/:childId
+   */
+  async getWakeTime(req, res) {
+    try {
+      const userId = req.user.uid;
+      const { childId } = req.params;
+
+      if (!childId) {
+        return res.status(400).json({
+          error: 'childId es requerido'
+        });
+      }
+
+      console.log(`🌅 [GET WAKE TIME] Consultando hora de despertar para childId: ${childId}`);
+
+      const wakeTimeInfo = await this.getWakeTimeForToday(childId, userId);
+
+      console.log(`✅ [GET WAKE TIME] Resultado:`, {
+        hasTime: !!wakeTimeInfo.time,
+        source: wakeTimeInfo.source,
+        time: wakeTimeInfo.time ? wakeTimeInfo.time.toISOString() : null
+      });
+
+      res.json({
+        success: true,
+        wakeTime: wakeTimeInfo.time ? wakeTimeInfo.time.toISOString() : null,
+        source: wakeTimeInfo.source,
+        hasRegisteredToday: wakeTimeInfo.source === 'recorded',
+        message: wakeTimeInfo.source === 'recorded' 
+          ? 'Hora de despertar registrada hoy'
+          : wakeTimeInfo.source === 'predicted-historical'
+          ? 'Hora de despertar predicha por historial'
+          : 'Hora de despertar por defecto (7:00 AM)'
+      });
+    } catch (error) {
+      console.error('❌ Error obteniendo hora de despertar:', error);
+      res.status(500).json({
+        error: 'Error al obtener hora de despertar',
+        details: error.message
+      });
+    }
+  }
+
+  /**
    * Registrar un nuevo evento de sueño
    * POST /api/sleep/record
    */
