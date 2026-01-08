@@ -168,8 +168,33 @@ class SleepPredictionController {
    */
   async predictSleep(req, res) {
     try {
-      const userId = req.user.uid;
-      const { childId } = req.params;
+      const userId = req.user?.uid;
+      // Intentar obtener childId de params (GET) o body (POST)
+      let childId = req.params.childId || req.body?.childId;
+
+      console.log(`📊 [PREDICT] ========================================`);
+      console.log(`📊 [PREDICT] Solicitud de predicción`);
+      console.log(`📊 [PREDICT] Método: ${req.method}`);
+      console.log(`📊 [PREDICT] req.params:`, req.params);
+      console.log(`📊 [PREDICT] req.body:`, req.body);
+      console.log(`📊 [PREDICT] req.user:`, req.user ? `uid=${req.user.uid}` : 'undefined');
+      console.log(`📊 [PREDICT] childId extraído: ${childId}`);
+      console.log(`📊 [PREDICT] userId extraído: ${userId}`);
+      
+      // ✅ VALIDACIÓN PRIMERA: Asegurar que childId y userId existan
+      if (!childId || !userId) {
+        console.error(`❌ [PREDICT] ERROR: childId o userId undefined`);
+        console.error(`❌ [PREDICT] childId: ${childId}`);
+        console.error(`❌ [PREDICT] userId: ${userId}`);
+        console.error(`❌ [PREDICT] req.params:`, JSON.stringify(req.params));
+        console.error(`❌ [PREDICT] req.user:`, req.user);
+        return res.status(400).json({
+          error: 'childId o userId no válidos',
+          childId: childId,
+          userId: userId,
+          details: 'Verifica que la URL incluya el childId y que el token de autenticación sea válido'
+        });
+      }
 
       // Obtener información del niño
       const childDoc = await this.db
@@ -192,11 +217,6 @@ class SleepPredictionController {
       // Obtener historial de sueño (últimos 14 días)
       const sleepHistory = await this.getSleepHistory(userId, childId, 14);
 
-      // ✅ SIEMPRE generar predicción, incluso sin datos históricos
-      // Si no hay datos, usará horarios por defecto basados en edad
-      console.log(`📊 [PREDICT] ========================================`);
-      console.log(`📊 [PREDICT] Solicitud de predicción`);
-      console.log(`📊 [PREDICT] Usuario: ${userId}`);
       console.log(`📊 [PREDICT] Niño: ${childData.name} (${ageInMonths} meses)`);
       console.log(`📊 [PREDICT] Eventos en historial: ${sleepHistory.length}`);
       console.log(`📊 [PREDICT] ========================================`);
@@ -210,17 +230,6 @@ class SleepPredictionController {
       };
       
       console.log(`✅ [PREDICT] childInfo construido:`, JSON.stringify(childInfo));
-      
-      // ✅ VALIDACIÓN: Asegurar que childId y userId no sean undefined
-      if (!childId || !userId) {
-        console.error(`❌ [PREDICT] ERROR: childId o userId undefined`);
-        console.error(`❌ [PREDICT] childId: ${childId}, userId: ${userId}`);
-        return res.status(400).json({
-          error: 'childId o userId no válidos',
-          childId: childId,
-          userId: userId
-        });
-      }
       
       const prediction = await this.generateSleepPrediction(
         sleepHistory,

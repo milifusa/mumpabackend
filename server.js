@@ -25673,8 +25673,17 @@ app.post('/api/sleep/wake-time', authenticateToken, (req, res) => {
   sleepController.recordWakeTime(req, res);
 });
 
-// Obtener predicción de sueño
+// Obtener predicción de sueño (GET con childId en URL)
 app.get('/api/sleep/predict/:childId', authenticateToken, (req, res) => {
+  sleepController.predictSleep(req, res);
+});
+
+// Obtener predicción de sueño (POST con childId en body) - compatibilidad
+app.post('/api/sleep/predict', authenticateToken, (req, res) => {
+  // Mover childId del body a params para compatibilidad
+  if (req.body.childId) {
+    req.params.childId = req.body.childId;
+  }
   sleepController.predictSleep(req, res);
 });
 
