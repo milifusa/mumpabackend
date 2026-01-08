@@ -721,38 +721,37 @@ class SleepPredictionController {
       isReal: true
     }));
 
-    // 8. OBTENER TODAS LAS PREDICCIONES DEL DÍA ACTUAL (futuras Y pasadas)
-    const allPredictions = dailyNapSchedule.naps.map((predictedNap, index) => {
-      const predTime = parseISO(predictedNap.time);
-      const isFuture = predTime > now;
-      
-      return {
+    // 8. OBTENER PREDICCIONES FUTURAS DEL DÍA ACTUAL (solo las que NO han pasado)
+    const futurePredictions = dailyNapSchedule.naps
+      .filter(predictedNap => {
+        const predTime = parseISO(predictedNap.time);
+        return predTime > now;  // ✅ Solo siestas futuras
+      })
+      .map((predictedNap, index) => ({
         ...predictedNap,
         napNumber: napsToday.length + index + 1,
         type: 'prediction',
-        status: isFuture ? 'upcoming' : 'missed',  // ✅ Marcar como 'missed' si ya pasó
-        isReal: false,
-        isFuture: isFuture  // ✅ Flag para saber si es futura
-      };
-    });
+        status: 'upcoming',
+        isReal: false
+      }));
 
-    console.log(`📊 [PREDICT] Total de predicciones generadas: ${allPredictions.length}`);
-    console.log(`📊 [PREDICT] Predicciones futuras: ${allPredictions.filter(p => p.isFuture).length}`);
-    console.log(`📊 [PREDICT] Predicciones pasadas (missed): ${allPredictions.filter(p => !p.isFuture).length}`);
+    console.log(`📊 [PREDICT] Total de predicciones del día: ${dailyNapSchedule.naps.length}`);
+    console.log(`📊 [PREDICT] Predicciones futuras (mostradas): ${futurePredictions.length}`);
+    console.log(`📊 [PREDICT] Predicciones ya pasadas (ocultas): ${dailyNapSchedule.naps.length - futurePredictions.length}`);
 
-    // 9. COMBINAR HECHOS + PREDICCIONES EN UN SOLO ARRAY
+    // 9. COMBINAR HECHOS + PREDICCIONES FUTURAS EN UN SOLO ARRAY
     const allNapsOfDay = [
       ...napsToday,           // HECHOS (siestas registradas)
-      ...allPredictions       // PREDICCIONES (todas: futuras + pasadas)
+      ...futurePredictions    // PREDICCIONES (solo futuras)
     ].sort((a, b) => parseISO(a.time).getTime() - parseISO(b.time).getTime());
 
     console.log(`📊 [PREDICT] Total en allNapsOfDay: ${allNapsOfDay.length}`);
     console.log(`📊 [PREDICT] Breakdown:`);
     console.log(`   - Registradas (completed): ${napsToday.length}`);
-    console.log(`   - Predichas (todas): ${allPredictions.length}`);
+    console.log(`   - Predichas futuras (upcoming): ${futurePredictions.length}`);
 
     // 10. CALCULAR PROGRESO DEL DÍA
-    const totalExpectedNaps = napsToday.length + allPredictions.length;
+    const totalExpectedNaps = napsToday.length + futurePredictions.length;
 
     return {
       nextNap: napPrediction,
