@@ -522,7 +522,7 @@ class SleepPredictionController {
   /**
    * Obtener hora de despertar de hoy o predecirla
    */
-  async getWakeTimeForToday(childId, userId, userTimezone = 'America/Mexico_City') {
+  async getWakeTimeForToday(childId, userId, userTimezone = 'UTC') {
     try {
       // ✅ VALIDACIÓN CRÍTICA: Verificar que childId y userId no sean undefined
       if (!childId || !userId) {
@@ -647,7 +647,7 @@ class SleepPredictionController {
   /**
    * Generar predicción inteligente de sueño
    */
-  async generateSleepPrediction(sleepHistory, ageInMonths, childInfo, userTimezone = 'America/Mexico_City') {
+  async generateSleepPrediction(sleepHistory, ageInMonths, childInfo, userTimezone = 'UTC') {
     const now = new Date();
 
     console.log(`🌍 [PREDICT] Timezone del usuario: ${userTimezone}`);

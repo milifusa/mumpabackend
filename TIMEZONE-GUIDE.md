@@ -4,9 +4,10 @@
 
 Antes teníamos problemas donde:
 - El servidor está en UTC
-- Los usuarios están en diferentes zonas horarias (ej: UTC-6, México)
-- "Hoy" en UTC no es "hoy" en México
+- Los usuarios están en diferentes zonas horarias (ej: UTC-6 en México, UTC+1 en España, UTC-5 en Nueva York)
+- "Hoy" en UTC no es "hoy" para el usuario
 - Las predicciones mostraban horarios incorrectos
+- Un usuario en Tokio veía horarios completamente desfasados
 
 ## ✅ Solución Implementada
 
@@ -22,12 +23,18 @@ El backend ahora acepta la **zona horaria del usuario** y hace todos los cálcul
 // React Native / Expo
 import * as Localization from 'expo-localization';
 
-const timezone = Localization.timezone; // 'America/Mexico_City'
+// El dispositivo automáticamente detecta su timezone
+const timezone = Localization.timezone; 
+// Ejemplos según ubicación:
+// 'America/Mexico_City' (México)
+// 'America/New_York' (USA Este)
+// 'Europe/Madrid' (España)
+// 'Asia/Tokyo' (Japón)
 
 const response = await fetch('/api/sleep/predict/K6vfrj...', {
   headers: {
     'Authorization': `Bearer ${token}`,
-    'X-Timezone': timezone  // ✅ Enviar timezone
+    'X-Timezone': timezone  // ✅ Enviar timezone del dispositivo
   }
 });
 ```
@@ -63,24 +70,46 @@ const response = await fetch('/api/sleep/wake-time', {
 
 ## 🌎 ZONAS HORARIAS SOPORTADAS
 
-El sistema acepta cualquier timezone válida de IANA:
+El sistema acepta **cualquier timezone válida de IANA** (más de 400 zonas horarias). Funciona para **cualquier país del mundo**.
 
-### **México:**
+### **Ejemplos por región:**
+
+**🇲🇽 México:**
 - `America/Mexico_City` (UTC-6)
 - `America/Cancun` (UTC-5)
 - `America/Tijuana` (UTC-8)
 - `America/Hermosillo` (UTC-7)
 
-### **USA:**
-- `America/New_York` (UTC-5)
-- `America/Chicago` (UTC-6)
-- `America/Los_Angeles` (UTC-8)
+**🇺🇸 USA:**
+- `America/New_York` (UTC-5, Eastern)
+- `America/Chicago` (UTC-6, Central)
+- `America/Los_Angeles` (UTC-8, Pacific)
+- `America/Denver` (UTC-7, Mountain)
 
-### **España:**
+**🇪🇸 España:**
 - `Europe/Madrid` (UTC+1)
+- `Atlantic/Canary` (UTC+0, Islas Canarias)
 
-### **Argentina:**
+**🇦🇷 Argentina:**
 - `America/Argentina/Buenos_Aires` (UTC-3)
+
+**🇧🇷 Brasil:**
+- `America/Sao_Paulo` (UTC-3)
+- `America/Manaus` (UTC-4)
+
+**🇬🇧 Reino Unido:**
+- `Europe/London` (UTC+0)
+
+**🇩🇪 Alemania:**
+- `Europe/Berlin` (UTC+1)
+
+**🇯🇵 Japón:**
+- `Asia/Tokyo` (UTC+9)
+
+**🇦🇺 Australia:**
+- `Australia/Sydney` (UTC+10)
+
+**📝 Nota:** Tu dispositivo automáticamente detecta su timezone. Solo necesitas obtenerla con `expo-localization` o `Intl.DateTimeFormat().resolvedOptions().timeZone`.
 
 **Lista completa:** https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 
@@ -262,10 +291,16 @@ En los logs de Vercel verás:
 Si NO envías timezone, el sistema usa por defecto:
 
 ```
-America/Mexico_City (UTC-6)
+UTC (Tiempo Universal Coordinado)
 ```
 
-Es mejor SIEMPRE enviar el timezone para predicciones precisas.
+**🚨 IMPORTANTE:** Es **ALTAMENTE RECOMENDADO** que siempre envíes el timezone del usuario para:
+- ✅ Predicciones precisas en hora local
+- ✅ "Hoy" calculado correctamente
+- ✅ Hora de despertar encontrada
+- ✅ Mejor experiencia de usuario
+
+**Sin timezone:** El sistema funcionará pero todo estará en UTC, lo que puede confundir al usuario.
 
 ---
 
