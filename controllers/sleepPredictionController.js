@@ -915,7 +915,13 @@ FORMATO DE RESPUESTA (JSON):
 
     // 3. PREDECIR HORA DE DORMIR NOCTURNA
     let bedtimePrediction;
-    if (useML) {
+    
+    // 🤖 Si ChatGPT proporcionó bedtime, usarlo
+    if (dailyNapSchedule.aiBedtime) {
+      console.log('🤖 [BEDTIME] Usando hora de dormir de ChatGPT');
+      bedtimePrediction = dailyNapSchedule.aiBedtime;
+    } else if (useML) {
+      // ML fallback
       const todayStart = startOfDay(now);
       const napsToday = naps.filter(nap => {
         const napDate = parseISO(nap.startTime);
@@ -925,6 +931,7 @@ FORMATO DE RESPUESTA (JSON):
       const mlBedtime = sleepMLModel.predictBedtime(ageInMonths, napsToday);
       bedtimePrediction = mlBedtime || this.predictBedtime(nightSleeps, ageInMonths, sleepHistory, userTimezone);
     } else {
+      // Estadístico fallback
       bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory, userTimezone);
     }
 
@@ -1168,12 +1175,31 @@ FORMATO DE RESPUESTA (JSON):
 
       console.log(`✅ [AI PREDICTION] ${predictedNaps.length} siestas predichas con IA`);
       
+      // 🌙 Procesar bedtime de ChatGPT
+      let aiBedtime = null;
+      if (aiPrediction.bedtime && aiPrediction.bedtime.time) {
+        const [bedHours, bedMinutes] = aiPrediction.bedtime.time.split(':').map(Number);
+        const bedtimeDate = new Date(localToday);
+        bedtimeDate.setHours(bedHours, bedMinutes, 0, 0);
+        const bedtimeUTC = TimezoneHelper.userTimeToUtc(bedtimeDate, userTimezone);
+        
+        aiBedtime = {
+          time: bedtimeUTC.toISOString(),
+          confidence: aiPrediction.confidence || 85,
+          reason: aiPrediction.bedtime.reason || 'Sugerido por IA',
+          basedOn: 'chatgpt-ai'
+        };
+        
+        console.log(`✅ [AI PREDICTION] Hora de dormir sugerida: ${aiPrediction.bedtime.time} (${bedtimeUTC.toISOString()})`);
+      }
+      
       return {
         naps: predictedNaps,
         totalNaps: predictedNaps.length,
         basedOn: 'chatgpt-ai',
         wakeTime: wakeTime.toISOString(),
-        aiExplanation: aiPrediction.explanation
+        aiExplanation: aiPrediction.explanation,
+        aiBedtime: aiBedtime  // ✅ Incluir bedtime de IA
       };
     }
 
