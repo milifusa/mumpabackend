@@ -206,11 +206,23 @@ FORMATO DE RESPUESTA (JSON):
     console.log(`🌍 [LOCALIZE] Convirtiendo fechas a timezone: ${userTimezone}`);
     
     // Función helper para convertir una fecha ISO a la timezone del usuario
+    // Devuelve ISO string que REPRESENTA la hora local (no UTC real)
     const convertDate = (isoDate) => {
       if (!isoDate) return null;
+      
       const utcDate = new Date(isoDate);
       const localDate = TimezoneHelper.utcToUserTime(utcDate, userTimezone);
-      return localDate.toISOString();
+      
+      // Crear ISO string que represente la hora LOCAL
+      // Ejemplo: Si son las 8:03 AM local, devolver "2026-01-09T08:03:00.000Z"
+      const year = localDate.getFullYear();
+      const month = String(localDate.getMonth() + 1).padStart(2, '0');
+      const day = String(localDate.getDate()).padStart(2, '0');
+      const hours = String(localDate.getHours()).padStart(2, '0');
+      const minutes = String(localDate.getMinutes()).padStart(2, '0');
+      const seconds = String(localDate.getSeconds()).padStart(2, '0');
+      
+      return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.000Z`;
     };
     
     // Clonar predicción para no mutar el original
@@ -246,7 +258,7 @@ FORMATO DE RESPUESTA (JSON):
       localized.sleepPressure.lastSleepTime = convertDate(localized.sleepPressure.lastSleepTime);
     }
     
-    console.log(`✅ [LOCALIZE] Fechas convertidas a ${userTimezone}`);
+    console.log(`✅ [LOCALIZE] Fechas convertidas. Todas las horas ahora representan ${userTimezone}`);
     
     return localized;
   }
