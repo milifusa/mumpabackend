@@ -123,7 +123,7 @@ FORMATO DE RESPUESTA (JSON):
       const startTime = Date.now();
 
       const response = await this.openai.chat.completions.create({
-        model: "gpt-4-turbo",  // ✅ Cambiado de gpt-4o a gpt-4-turbo (más compatible)
+        model: "gpt-3.5-turbo",  // ✅ Modelo más compatible (disponible en cuentas free)
         messages: [
           {
             role: "system",
