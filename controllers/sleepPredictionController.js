@@ -56,6 +56,7 @@ class SleepPredictionController {
   async enhancePredictionsWithAI(childInfo, currentNaps, wakeTime, userTimezone) {
     // Si no hay OpenAI, retornar null (usar predicciones estadísticas)
     if (!this.openai) {
+      console.log('⚠️ [AI PREDICTION] OpenAI no inicializado - usando fallback estadístico');
       return null;
     }
 
@@ -63,6 +64,11 @@ class SleepPredictionController {
       const now = new Date();
       const localTime = TimezoneHelper.utcToUserTime(now, userTimezone);
       const currentHour = localTime.getHours() + localTime.getMinutes() / 60;
+
+      console.log('🤖 [AI PREDICTION] Preparando consulta a ChatGPT...');
+      console.log(`   - Edad: ${childInfo.ageInMonths} meses`);
+      console.log(`   - Hora actual: ${localTime.toLocaleString('es-MX')}`);
+      console.log(`   - Siestas completadas: ${currentNaps.length}`);
 
       // Construir el prompt con información real del bebé
       const prompt = `Eres un experto en patrones de sueño infantil con acceso a bases de datos pediátricas.
@@ -113,6 +119,8 @@ FORMATO DE RESPUESTA (JSON):
 }`;
 
       console.log('🤖 [AI PREDICTION] Consultando a ChatGPT...');
+      
+      const startTime = Date.now();
 
       const response = await this.openai.chat.completions.create({
         model: "gpt-4o",
@@ -131,14 +139,20 @@ FORMATO DE RESPUESTA (JSON):
         max_tokens: 1000
       });
 
+      const elapsed = Date.now() - startTime;
+      console.log(`✅ [AI PREDICTION] Respuesta recibida en ${elapsed}ms`);
+
       const aiResponse = JSON.parse(response.choices[0].message.content);
       
       console.log('✅ [AI PREDICTION] Respuesta de ChatGPT:', JSON.stringify(aiResponse, null, 2));
+      console.log(`✅ [AI PREDICTION] Siestas sugeridas: ${aiResponse.remainingNaps?.length || 0}`);
+      console.log(`✅ [AI PREDICTION] Confianza: ${aiResponse.confidence}%`);
 
       return aiResponse;
 
     } catch (error) {
       console.error('❌ [AI PREDICTION] Error consultando ChatGPT:', error.message);
+      console.error('❌ [AI PREDICTION] Stack:', error.stack);
       return null;  // Fallar silenciosamente y usar predicciones estadísticas
     }
   }
@@ -1095,6 +1109,7 @@ FORMATO DE RESPUESTA (JSON):
     console.log(`[WAKE TIME] Timezone: ${userTimezone}`);
     
     // 🤖 PASO 1: INTENTAR CON CHATGPT PRIMERO
+    console.log('🤖 [PREDICTION] Intentando obtener predicciones con ChatGPT...');
     const aiPrediction = await this.enhancePredictionsWithAI(
       { ageInMonths, name: 'Bebé' },
       napsOfDay,
@@ -1102,8 +1117,13 @@ FORMATO DE RESPUESTA (JSON):
       userTimezone
     );
 
+    console.log(`🤖 [PREDICTION] Resultado de IA: ${aiPrediction ? 'RECIBIDO ✅' : 'NULL ❌'}`);
+    if (aiPrediction) {
+      console.log(`🤖 [PREDICTION] IA devolvió ${aiPrediction.remainingNaps?.length || 0} siestas`);
+    }
+
     if (aiPrediction && aiPrediction.remainingNaps && aiPrediction.remainingNaps.length > 0) {
-      console.log('🤖 [AI PREDICTION] Usando predicciones mejoradas con ChatGPT');
+      console.log('🤖 [AI PREDICTION] ✅ Usando predicciones mejoradas con ChatGPT');
       
       // Convertir predicciones de ChatGPT al formato esperado
       const now = new Date();
