@@ -22,6 +22,7 @@ const TIMEZONE_OFFSETS = {
   'America/Chicago': -6,
   'America/Los_Angeles': -8,
   'America/Denver': -7,
+  'US/Pacific': -8,
   // Europa
   'Europe/Madrid': 1,
   'Europe/London': 0,
@@ -31,6 +32,7 @@ const TIMEZONE_OFFSETS = {
   'America/Argentina/Buenos_Aires': -3,
   'America/Sao_Paulo': -3,
   'America/Bogota': -5,
+  'America/Guayaquil': -5,
   'America/Lima': -5,
   // Asia
   'Asia/Tokyo': 9,

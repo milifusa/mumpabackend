@@ -1,7 +1,7 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = 'https://mumpabackend-lyop389dp-mishu-lojans-projects.vercel.app';
+const API_BASE_URL = 'https://mumpabackend-68488dt6v-mishu-lojans-projects.vercel.app';
 
 // Crear instancia de axios
 const api = axios.create({
@@ -192,6 +192,28 @@ export const learningService = {
       return response.data;
     } catch (error) {
       console.error('❌ [DEVELOPMENT] Error obteniendo información:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  // ===== GUÍA DE HOY (BEBÉ/EMBARAZO) =====
+  getTodayGuide: async ({ childId = null, birthDate = null, ageWeeks = null, gestationWeeks = null, isPregnant = false, name = null } = {}) => {
+    try {
+      console.log('📖 [GUIDE] Obteniendo guía de hoy...');
+      const payload = {};
+
+      if (childId) payload.childId = childId;
+      if (birthDate) payload.birthDate = birthDate;
+      if (ageWeeks || ageWeeks === 0) payload.ageWeeks = ageWeeks;
+      if (gestationWeeks || gestationWeeks === 0) payload.gestationWeeks = gestationWeeks;
+      if (isPregnant) payload.isPregnant = true;
+      if (name) payload.name = name;
+
+      const response = await api.post('/api/guide/today', payload);
+      console.log('✅ [GUIDE] Guía recibida:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('❌ [GUIDE] Error obteniendo guía de hoy:', error.response?.data || error.message);
       throw error;
     }
   },

@@ -16,12 +16,14 @@ const {
   parseISO, 
   differenceInMinutes, 
   differenceInHours,
-  addMinutes, 
+  addMinutes,
+  addHours,
   addDays,
+  subDays,
+  subHours,
   format,
   startOfDay,
-  isToday,
-  subDays
+  isToday
 } = require('date-fns');
 
 class SleepPredictionController {
@@ -64,70 +66,255 @@ class SleepPredictionController {
       const now = new Date();
       const localTime = TimezoneHelper.utcToUserTime(now, userTimezone);
       const currentHour = localTime.getHours() + localTime.getMinutes() / 60;
+      const timezoneOffset = TimezoneHelper.getTimezoneOffset(userTimezone);
+
+      // ✅ Obtener datos pediátricos específicos
+      const expectedNaps = this.getExpectedNapsPerDay(childInfo.ageInMonths);
+      const wakeWindows = this.getWakeWindows(childInfo.ageInMonths);
+
+      // 🔄 CALCULAR CUÁNTAS SIESTAS CABEN REALMENTE basándose en hora de despertar
+      const wakeTimeLocal = wakeTime ? TimezoneHelper.utcToUserTime(new Date(wakeTime), userTimezone) : null;
+      const wakeHour = wakeTimeLocal ? wakeTimeLocal.getHours() + wakeTimeLocal.getMinutes() / 60 : 7; // Default 7 AM
+      
+      // Hora de dormir óptima para esta edad (7:30 PM para 4-6 meses)
+      let optimalBedtime;
+      if (childInfo.ageInMonths <= 6) {
+        optimalBedtime = 19.5; // 7:30 PM
+      } else if (childInfo.ageInMonths <= 12) {
+        optimalBedtime = 20; // 8:00 PM
+      } else {
+        optimalBedtime = 20.5; // 8:30 PM
+      }
+      
+      // Calcular horas disponibles TOTALES del día (desde despertar hasta bedtime)
+      const totalHoursInDay = optimalBedtime - wakeHour;
+      
+      // Calcular cuántas siestas caben EN TOTAL en el día
+      const avgNapDuration = childInfo.ageInMonths <= 6 ? 1.25 : 1.5; // horas
+      const cycleTime = wakeWindows.optimal + avgNapDuration; // tiempo total entre siestas
+      
+      // ✅ REDONDEAR AL MÁS CERCANO en lugar de floor (más realista)
+      // Si quedan 3.8 ciclos, es más realista recomendar 4 siestas que 3
+      const theoreticalNapsTotalDay = Math.round(totalHoursInDay / cycleTime);
+      
+      // Ajustar al rango esperado por edad para obtener TOTAL de siestas del día
+      const totalNapsForDay = Math.min(
+        Math.max(theoreticalNapsTotalDay, expectedNaps.min),
+        expectedNaps.max
+      );
+      
+      // 🎯 CALCULAR SIESTAS RESTANTES (lo importante)
+      const remainingNapsNeeded = Math.max(0, totalNapsForDay - currentNaps.length);
 
       console.log('🤖 [AI PREDICTION] Preparando consulta a ChatGPT...');
       console.log(`   - Edad: ${childInfo.ageInMonths} meses`);
       console.log(`   - Hora actual: ${localTime.toLocaleString('es-MX')}`);
+      console.log(`   - Hora de despertar: ${wakeHour.toFixed(2)}h`);
+      console.log(`   - Horas totales del día: ${totalHoursInDay.toFixed(2)}h`);
+      console.log(`   - Siestas que caben en el día: ${theoreticalNapsTotalDay}`);
+      console.log(`   - Total de siestas para HOY: ${totalNapsForDay} (ajustado de ${expectedNaps.min}-${expectedNaps.max})`);
       console.log(`   - Siestas completadas: ${currentNaps.length}`);
+      console.log(`   - Siestas RESTANTES a predecir: ${remainingNapsNeeded}`);
+      console.log(`   - Ventanas de vigilia: ${wakeWindows.min}-${wakeWindows.max}h`);
 
-      // Construir el prompt con información real del bebé
-      const prompt = `Eres un experto en patrones de sueño infantil con acceso a bases de datos pediátricas.
+      // ✅ Construir prompt mejorado con datos pediátricos explícitos
+      const prompt = `Eres un experto en patrones de sueño infantil con acceso a bases de datos pediátricas (AAP, NSF, CDC).
 
 INFORMACIÓN DEL BEBÉ:
 - Edad: ${childInfo.ageInMonths} meses
-- Hora actual: ${localTime.toLocaleString('es-MX')} (${currentHour.toFixed(2)}h)
-- Hora de despertar hoy: ${wakeTime ? new Date(wakeTime).toLocaleTimeString('es-MX') : 'No registrada'}
-- Siestas ya registradas hoy: ${currentNaps.length}
+- Timezone: UTC${timezoneOffset >= 0 ? '+' : ''}${timezoneOffset}
+- Hora actual: ${localTime.toLocaleString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true })} (${currentHour.toFixed(2)}h)
+- Hora de despertar hoy: ${wakeTimeLocal ? wakeTimeLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'No registrada'} (${wakeHour.toFixed(2)}h)
+- Hora de dormir objetivo: ${Math.floor(optimalBedtime)}:${Math.round((optimalBedtime % 1) * 60).toString().padStart(2, '0')} (${optimalBedtime.toFixed(2)}h)
+- Horas totales del día: ${totalHoursInDay.toFixed(2)} horas
 
-SIESTAS COMPLETADAS HOY:
+DATOS PEDIÁTRICOS PARA ${childInfo.ageInMonths} MESES:
+- Siestas típicas por día: ${expectedNaps.min} a ${expectedNaps.max} siestas
+- Ventana de vigilia óptima: ${wakeWindows.optimal} horas
+- Ventana de vigilia mínima: ${wakeWindows.min} horas
+- Ventana de vigilia máxima: ${wakeWindows.max} horas
+
+ANÁLISIS DEL DÍA DE HOY:
+- Despertó a las ${wakeHour.toFixed(2)}h
+- Debe dormir a las ${optimalBedtime.toFixed(2)}h
+- Tiempo total disponible: ${totalHoursInDay.toFixed(2)} horas
+- Total de siestas para HOY: ${totalNapsForDay} siestas (considerando hora de despertar)
+- Ya completó: ${currentNaps.length} siestas
+- FALTAN: ${remainingNapsNeeded} siestas más
+
+SIESTAS COMPLETADAS HOY (${currentNaps.length} de ${totalNapsForDay}):
 ${currentNaps.length > 0 ? currentNaps.map((nap, i) => {
-  const start = new Date(nap.startTime).toLocaleTimeString('es-MX');
-  const end = nap.endTime ? new Date(nap.endTime).toLocaleTimeString('es-MX') : 'en curso';
-  return `  Siesta ${i + 1}: ${start} - ${end} (${nap.duration || 0} min)`;
-}).join('\n') : '  Ninguna'}
+  const startLocal = TimezoneHelper.utcToUserTime(new Date(nap.startTime), userTimezone);
+  const endLocal = nap.endTime ? TimezoneHelper.utcToUserTime(new Date(nap.endTime), userTimezone) : null;
+  const startTime = startLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const endTime = endLocal ? endLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'en progreso';
+  const endTimeHour = endLocal ? (endLocal.getHours() + endLocal.getMinutes() / 60).toFixed(2) : 'N/A';
+  const status = nap.endTime ? '✅' : '🔄';
+  return `  ${status} Siesta ${i + 1}: ${startTime} - ${endTime} (${nap.duration || nap.expectedDuration || 0} min) [${nap.endTime ? 'terminó a las ' + endTimeHour + 'h' : 'terminaría aprox a las ' + (() => {
+    const estimatedEnd = addMinutes(new Date(nap.startTime), nap.expectedDuration || 75);
+    const estimatedEndLocal = TimezoneHelper.utcToUserTime(estimatedEnd, userTimezone);
+    return (estimatedEndLocal.getHours() + estimatedEndLocal.getMinutes() / 60).toFixed(2) + 'h';
+  })()}]`;
+}).join('\n') : '  Ninguna todavía'}
 
-PREGUNTA:
-Basándote en patrones de sueño infantil reales y recomendaciones pediátricas:
-1. ¿Cuántas siestas más debería tener este bebé HOY?
-2. ¿A qué horas deberían ser las siestas restantes?
-3. ¿Cuánto deberían durar cada una?
-4. ¿A qué hora debería ser la hora de dormir nocturna?
+${currentNaps.length > 0 ? (() => {
+  const napInProgress = currentNaps.find(n => !n.endTime);
+  if (napInProgress) {
+    const startLocal = TimezoneHelper.utcToUserTime(new Date(napInProgress.startTime), userTimezone);
+    const estimatedDuration = napInProgress.expectedDuration || 75;
+    const estimatedEnd = addMinutes(new Date(napInProgress.startTime), estimatedDuration);
+    const estimatedEndLocal = TimezoneHelper.utcToUserTime(estimatedEnd, userTimezone);
+    const endTimeStr = estimatedEndLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const endHour = estimatedEndLocal.getHours() + estimatedEndLocal.getMinutes() / 60;
+    return `
+🔄 SIESTA EN PROGRESO:
+- Inició: ${startLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true })}
+- Duración estimada: ${estimatedDuration} min
+- TERMINARÍA aproximadamente: ${endTimeStr} (${endHour.toFixed(2)}h)
+- Hora actual: ${localTime.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true })}
+- Tiempo transcurrido: ${Math.floor(differenceInMinutes(localTime, new Date(napInProgress.startTime)))} min
+`;
+  }
+  
+  const lastCompletedNap = currentNaps.filter(n => n.endTime).slice(-1)[0];
+  if (lastCompletedNap) {
+    const endLocal = TimezoneHelper.utcToUserTime(new Date(lastCompletedNap.endTime), userTimezone);
+    const endTimeStr = endLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const endHour = endLocal.getHours() + endLocal.getMinutes() / 60;
+    const minutesSince = Math.floor(differenceInMinutes(localTime, endLocal));
+    const hours = Math.floor(minutesSince / 60);
+    const mins = minutesSince % 60;
+    return `
+⏰ ÚLTIMA SIESTA COMPLETADA TERMINÓ: ${endTimeStr} (${endHour.toFixed(2)}h)
+⏰ HORA ACTUAL: ${localTime.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true })} (${currentHour.toFixed(2)}h)
+⏰ TIEMPO DESDE ÚLTIMA SIESTA COMPLETADA: ${hours > 0 ? `${hours}h ${mins}min` : `${mins}min`}
+`;
+  }
+  return '';
+})() : ''}
 
-IMPORTANTE:
-- Usa datos de patrones reales de bebés de ${childInfo.ageInMonths} meses
-- Considera que son las ${currentHour.toFixed(2)}h en su hora local
-- Las siestas deben ser DESPUÉS de la hora actual
-- Bebés de esta edad típicamente necesitan ventanas de vigilia de 2-2.5 horas
-- La última siesta puede ser entre 5-7 PM para esta edad
+PREGUNTA CRÍTICA:
+Basándote en que el bebé despertó a las ${wakeHour.toFixed(2)}h y debe tener ${totalNapsForDay} siestas TOTALES hoy:
 
-FORMATO DE RESPUESTA (JSON):
+1. Ya completó ${currentNaps.length} siestas${currentNaps.length > 0 && currentNaps[currentNaps.length - 1].endTime ? ` (última terminó hace ${(() => {
+  const lastNap = currentNaps[currentNaps.length - 1];
+  const endLocal = TimezoneHelper.utcToUserTime(new Date(lastNap.endTime), userTimezone);
+  const minutesSince = Math.floor((localTime - endLocal) / (1000 * 60));
+  const hours = Math.floor(minutesSince / 60);
+  const mins = minutesSince % 60;
+  return hours > 0 ? `${hours}h ${mins}min` : `${mins}min`;
+})()})` : ''}
+2. DEBEN predecirse EXACTAMENTE ${remainingNapsNeeded} siestas MÁS (no más, no menos)
+3. Cada siesta debe respetar ventanas de vigilia de ${wakeWindows.optimal}h (±30 min)
+4. La última siesta debe terminar AL MENOS ${wakeWindows.optimal}h antes de bedtime (${optimalBedtime.toFixed(2)}h)
+5. ${currentNaps.length > 0 && currentNaps[currentNaps.length - 1].endTime ? `La próxima siesta debe ser ${wakeWindows.optimal}h DESPUÉS de que terminó la última siesta (${(() => {
+  const lastNap = currentNaps[currentNaps.length - 1];
+  const endLocal = TimezoneHelper.utcToUserTime(new Date(lastNap.endTime), userTimezone);
+  const nextNapTime = new Date(endLocal.getTime() + wakeWindows.optimal * 60 * 60 * 1000);
+  return `${nextNapTime.getHours()}:${nextNapTime.getMinutes().toString().padStart(2, '0')} aprox`;
+})()})` : 'La primera siesta debe ser después de las ' + Math.floor(currentHour) + 'h'}
+5. ¿A qué HORAS LOCALES deberían ser las ${remainingNapsNeeded} siestas restantes? (formato 24h: "HH:MM")
+6. ¿Cuánto deberían DURAR? (minutos)
+
+REGLAS ESTRICTAS:
+✅ DEBE predecir EXACTAMENTE ${remainingNapsNeeded} siestas (las que faltan para completar ${totalNapsForDay})
+✅ Si ${remainingNapsNeeded} = 0, devuelve remainingNaps: [] (array vacío)
+✅ Si ${remainingNapsNeeded} = 1, devuelve remainingNaps con SOLO 1 siesta
+✅ Si ${remainingNapsNeeded} = 2, devuelve remainingNaps con SOLO 2 siestas
+✅ NO puedes devolver 0 siestas si remainingNapsNeeded > 0
+✅ Cada siesta debe estar separada por ${wakeWindows.optimal}h (±30 min) desde la última siesta
+✅ Última siesta debe terminar antes de las ${(optimalBedtime - wakeWindows.optimal).toFixed(2)}h
+✅ Solo predice siestas DESPUÉS de las ${Math.floor(currentHour)}h
+✅ Todas las horas en formato 24h LOCAL (UTC${timezoneOffset >= 0 ? '+' : ''}${timezoneOffset})
+
+FORMATO DE RESPUESTA (JSON estricto):
 {
-  "remainingNaps": [
+  "remainingNaps": [${remainingNapsNeeded === 0 ? '' : `
     {
-      "napNumber": 3,
-      "time": "17:00",
+      "napNumber": ${currentNaps.length + 1},
+      "time": "${(() => {
+        if (currentNaps.length > 0 && currentNaps[currentNaps.length - 1].endTime) {
+          const lastNap = currentNaps[currentNaps.length - 1];
+          const endLocal = TimezoneHelper.utcToUserTime(new Date(lastNap.endTime), userTimezone);
+          const nextNapTime = new Date(endLocal.getTime() + wakeWindows.optimal * 60 * 60 * 1000);
+          return `${nextNapTime.getHours().toString().padStart(2, '0')}:${nextNapTime.getMinutes().toString().padStart(2, '0')}`;
+        }
+        return '15:00';
+      })()}",
+      "duration": 60,
+      "reason": "Siesta de tarde, ${wakeWindows.optimal}h después de última siesta"
+    }`}${remainingNapsNeeded > 1 ? `,
+    {
+      "napNumber": ${currentNaps.length + 2},
+      "time": "${(() => {
+        if (currentNaps.length > 0 && currentNaps[currentNaps.length - 1].endTime) {
+          const lastNap = currentNaps[currentNaps.length - 1];
+          const endLocal = TimezoneHelper.utcToUserTime(new Date(lastNap.endTime), userTimezone);
+          const nextNapTime = new Date(endLocal.getTime() + (wakeWindows.optimal * 2 + 1) * 60 * 60 * 1000);
+          return `${nextNapTime.getHours().toString().padStart(2, '0')}:${nextNapTime.getMinutes().toString().padStart(2, '0')}`;
+        }
+        return '17:30';
+      })()}",
       "duration": 45,
-      "reason": "Catnap antes de dormir"
-    }
+      "reason": "Última siesta del día"
+    }` : ''}
   ],
   "bedtime": {
-    "time": "20:00",
-    "reason": "2.5h después de última siesta"
+    "time": "${Math.floor(optimalBedtime)}:${Math.round((optimalBedtime % 1) * 60).toString().padStart(2, '0')}",
+    "reason": "${wakeWindows.optimal}h después de última siesta"
   },
   "confidence": 85,
-  "explanation": "Para un bebé de ${childInfo.ageInMonths} meses a las ${currentHour.toFixed(2)}h..."
-}`;
+  "explanation": "Breve explicación del por qué"
+}
+
+CRÍTICO - CALCULAR HORARIOS CORRECTAMENTE:
+- La próxima siesta debe ser ${wakeWindows.optimal}h DESPUÉS de que TERMINÓ la última siesta
+- NO uses horarios fijos como 15:00 o 17:30
+- CALCULA basándote en cuándo TERMINÓ la última siesta (${currentNaps.length > 0 && currentNaps[currentNaps.length - 1].endTime ? (() => {
+  const lastNap = currentNaps[currentNaps.length - 1];
+  const endLocal = TimezoneHelper.utcToUserTime(new Date(lastNap.endTime), userTimezone);
+  return `${endLocal.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}`;
+})() : 'N/A'})
+
+🌙 CRÍTICO - CALCULAR BEDTIME CORRECTAMENTE:
+${currentNaps.find(n => !n.endTime) ? (() => {
+  const napInProgress = currentNaps.find(n => !n.endTime);
+  const startLocal = TimezoneHelper.utcToUserTime(new Date(napInProgress.startTime), userTimezone);
+  const estimatedDuration = napInProgress.expectedDuration || 75;
+  const estimatedEnd = addMinutes(new Date(napInProgress.startTime), estimatedDuration);
+  const estimatedEndLocal = TimezoneHelper.utcToUserTime(estimatedEnd, userTimezone);
+  const bedtimeCalc = addMinutes(estimatedEnd, wakeWindows.optimal * 60);
+  const bedtimeLocal = TimezoneHelper.utcToUserTime(bedtimeCalc, userTimezone);
+  return `- HAY SIESTA EN PROGRESO que terminaría a las ${estimatedEndLocal.getHours()}:${estimatedEndLocal.getMinutes().toString().padStart(2, '0')}
+- Bedtime debe ser ${wakeWindows.optimal}h DESPUÉS: ${bedtimeLocal.getHours()}:${bedtimeLocal.getMinutes().toString().padStart(2, '0')}
+- NO uses ${Math.floor(optimalBedtime)}:${Math.round((optimalBedtime % 1) * 60).toString().padStart(2, '0')} si no coincide con el cálculo`;
+})() : `- Bedtime debe ser ${Math.floor(optimalBedtime)}:${Math.round((optimalBedtime % 1) * 60).toString().padStart(2, '0')} (${wakeWindows.optimal}h después de última siesta)`}
+
+IMPORTANTE: 
+- Debes devolver EXACTAMENTE ${remainingNapsNeeded} siestas en remainingNaps[]
+- Si remainingNapsNeeded = 1, remainingNaps debe tener 1 objeto
+- Si remainingNapsNeeded = 2, remainingNaps debe tener 2 objetos
+- Si remainingNapsNeeded = 0, remainingNaps debe ser un array vacío []
+IMPORTANTE: 
+- Debes devolver EXACTAMENTE ${remainingNapsNeeded} siestas en remainingNaps[]
+- Si remainingNapsNeeded = 1, remainingNaps debe tener 1 objeto
+- Si remainingNapsNeeded = 2, remainingNaps debe tener 2 objetos
+- Si remainingNapsNeeded = 0, remainingNaps debe ser un array vacío []
+- La hora de dormir (bedtime) SIEMPRE debe ser ${Math.floor(optimalBedtime)}:${Math.round((optimalBedtime % 1) * 60).toString().padStart(2, '0')}
+- ${currentNaps.find(n => !n.endTime) ? `🔄 HAY UNA SIESTA EN PROGRESO: Calcula bedtime desde cuando TERMINARÍA la siesta (no desde cuando inició)` : 'Calcula bedtime desde cuando terminó la última siesta'}
+- NUNCA devuelvas menos siestas de las solicitadas (${remainingNapsNeeded})`;
 
       console.log('🤖 [AI PREDICTION] Consultando a ChatGPT...');
+      console.log(`🎯 [AI PREDICTION] Total de siestas para hoy: ${totalNapsForDay}, Completadas: ${currentNaps.length}, Restantes a predecir: ${remainingNapsNeeded}`);
       
       const startTime = Date.now();
 
       const response = await this.openai.chat.completions.create({
-        model: "gpt-3.5-turbo",  // ✅ Modelo más compatible (disponible en cuentas free)
+        model: "gpt-3.5-turbo",
         messages: [
           {
             role: "system",
-            content: "Eres un experto en patrones de sueño infantil con conocimiento de bases de datos pediátricas (AAP, NSF, CDC). Respondes SOLO en formato JSON válido."
+            content: `Eres un experto en patrones de sueño infantil con conocimiento de bases de datos pediátricas (AAP, NSF, CDC). Respondes SOLO en formato JSON válido. CRÍTICO: Debes calcular dinámicamente cuántas siestas caben basándote en la hora de despertar real y el tiempo disponible hasta bedtime. Si ya hay siestas completadas, solo predice las RESTANTES. Por ejemplo: si el bebé debe tener 4 siestas totales y ya completó 2, predice SOLO 2 más. La hora de dormir (bedtime) siempre debe ser consistente y no cambiar.`
           },
           {
             role: "user",
@@ -135,7 +322,7 @@ FORMATO DE RESPUESTA (JSON):
           }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.3,  // Más determinístico
+        temperature: 0.3,
         max_tokens: 1000
       });
 
@@ -147,6 +334,70 @@ FORMATO DE RESPUESTA (JSON):
       console.log('✅ [AI PREDICTION] Respuesta de ChatGPT:', JSON.stringify(aiResponse, null, 2));
       console.log(`✅ [AI PREDICTION] Siestas sugeridas: ${aiResponse.remainingNaps?.length || 0}`);
       console.log(`✅ [AI PREDICTION] Confianza: ${aiResponse.confidence}%`);
+      console.log(`✅ [AI PREDICTION] Explicación: ${aiResponse.explanation || 'N/A'}`);
+
+      // ✅ Validar que es un número razonable de siestas
+      if (aiResponse.remainingNaps) {
+        const totalNapsActual = currentNaps.length + aiResponse.remainingNaps.length;
+        console.log(`📊 [AI PREDICTION] Total de siestas para hoy: ${totalNapsActual} (${currentNaps.length} completadas + ${aiResponse.remainingNaps.length} predichas)`);
+        
+        if (totalNapsActual < expectedNaps.min) {
+          console.warn(`⚠️ [AI PREDICTION] Total de siestas (${totalNapsActual}) es menor que el mínimo recomendado (${expectedNaps.min})`);
+        } else if (totalNapsActual > expectedNaps.max) {
+          console.warn(`⚠️ [AI PREDICTION] Total de siestas (${totalNapsActual}) excede el máximo recomendado (${expectedNaps.max})`);
+        } else {
+          console.log(`✅ [AI PREDICTION] Total de siestas dentro del rango esperado (${expectedNaps.min}-${expectedNaps.max})`);
+        }
+      }
+      
+      // ⚠️ Si ChatGPT devolvió menos siestas, COMPLETAR automáticamente
+      if (aiResponse.remainingNaps && aiResponse.remainingNaps.length < remainingNapsNeeded) {
+        console.warn(`⚠️ [AI PREDICTION] ChatGPT devolvió ${aiResponse.remainingNaps.length} siestas (se esperaban ${remainingNapsNeeded})`);
+        console.warn(`⚠️ [AI PREDICTION] COMPLETANDO automáticamente las ${remainingNapsNeeded - aiResponse.remainingNaps.length} siestas faltantes...`);
+        
+        // ✅ Completar las siestas faltantes usando lógica estadística
+        const missingSiestas = remainingNapsNeeded - aiResponse.remainingNaps.length;
+        const lastNapFromAI = aiResponse.remainingNaps[aiResponse.remainingNaps.length - 1];
+        
+        // Calcular hora de inicio de la última siesta predicha por ChatGPT
+        const [lastHours, lastMinutes] = lastNapFromAI.time.split(':').map(Number);
+        let lastNapEndHour = lastHours + (lastNapFromAI.duration || 60) / 60; // Hora local
+        
+        // Agregar siestas faltantes con ventanas de vigilia correctas
+        for (let i = 0; i < missingSiestas; i++) {
+          const nextNapStartHour = lastNapEndHour + wakeWindows.optimal; // Siguiente siesta
+          const nextHour = Math.floor(nextNapStartHour);
+          const nextMinute = Math.round((nextNapStartHour % 1) * 60);
+          const nextTimeStr = `${nextHour.toString().padStart(2, '0')}:${nextMinute.toString().padStart(2, '0')}`;
+          
+          const newNap = {
+            napNumber: currentNaps.length + aiResponse.remainingNaps.length + i + 1,
+            time: nextTimeStr,
+            duration: childInfo.ageInMonths <= 6 ? 60 : 75, // Duración típica
+            reason: `Siesta adicional (${wakeWindows.optimal}h después de siesta anterior)`
+          };
+          
+          aiResponse.remainingNaps.push(newNap);
+          lastNapEndHour = nextNapStartHour + newNap.duration / 60; // Actualizar para próxima iteración
+          
+          console.log(`✅ [AI PREDICTION] Siesta ${newNap.napNumber} agregada: ${nextTimeStr} (${newNap.duration} min)`);
+        }
+        
+        // Recalcular bedtime basándose en la última siesta ajustada
+        const finalNap = aiResponse.remainingNaps[aiResponse.remainingNaps.length - 1];
+        const [finalHours, finalMinutes] = finalNap.time.split(':').map(Number);
+        const finalNapEndHour = finalHours + (finalNap.duration || 60) / 60;
+        const newBedtimeHour = finalNapEndHour + wakeWindows.optimal;
+        const bedHour = Math.floor(newBedtimeHour);
+        const bedMinute = Math.round((newBedtimeHour % 1) * 60);
+        
+        aiResponse.bedtime = {
+          time: `${bedHour.toString().padStart(2, '0')}:${bedMinute.toString().padStart(2, '0')}`,
+          reason: `${wakeWindows.optimal}h después de última siesta`
+        };
+        
+        console.log(`✅ [AI PREDICTION] Bedtime ajustado: ${aiResponse.bedtime.time}`);
+      }
 
       return aiResponse;
 
@@ -164,7 +415,11 @@ FORMATO DE RESPUESTA (JSON):
   async recordWakeTime(req, res) {
     try {
       const userId = req.user.uid;
-      const { childId, wakeTime } = req.body;
+      const { childId, wakeTime, timezone } = req.body;
+
+      console.log('🔍 [WAKE TIME DEBUG] ====================================');
+      console.log('📥 Received wakeTime:', wakeTime);
+      console.log('🌍 Received timezone:', timezone);
 
       // Validaciones
       if (!childId || !wakeTime) {
@@ -173,21 +428,159 @@ FORMATO DE RESPUESTA (JSON):
         });
       }
 
+      // Obtener información del niño para el timezone
+      const childDoc = await this.db.collection('children').doc(childId).get();
+      if (!childDoc.exists) {
+        return res.status(404).json({
+          error: 'Niño no encontrado'
+        });
+      }
+
+      const childData = childDoc.data();
+      const userTimezone = timezone || childData.timezone || 'UTC';
+
+      console.log('👶 Child timezone:', userTimezone);
+
+      // Parsear la hora de despertar
+      let wakeTimeDate;
+      let parsedSource = 'unknown';
+
+      const hasTimezoneInfo = (value) =>
+        typeof value === 'string' && /([zZ]|[+-]\d{2}:\d{2})$/.test(value);
+      const isTimeOnly = (value) =>
+        typeof value === 'string' && /^\d{1,2}:\d{2}(:\d{2})?$/.test(value);
+      const parseLocalDateTime = (value) => {
+        // Acepta "YYYY-MM-DD HH:mm" o "YYYY-MM-DDTHH:mm[:ss]"
+        const match = value.match(
+          /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?$/
+        );
+        if (!match) return null;
+        const [, y, m, d, hh, mm, ss] = match;
+        return new Date(Date.UTC(
+          Number(y),
+          Number(m) - 1,
+          Number(d),
+          Number(hh),
+          Number(mm),
+          Number(ss || 0)
+        ));
+      };
+
+      if (typeof wakeTime === 'string') {
+        if (hasTimezoneInfo(wakeTime)) {
+          wakeTimeDate = new Date(wakeTime);
+          parsedSource = 'string-with-tz';
+
+          // Heurística: si parece venir como UTC pero en realidad es hora local
+          const localHour = TimezoneHelper.utcToUserTime(wakeTimeDate, userTimezone).getHours();
+          const utcHour = wakeTimeDate.getUTCHours();
+          const isSuspicious = localHour <= 4 && utcHour >= 10 && userTimezone !== 'UTC';
+          if (isSuspicious) {
+            const withoutZ = wakeTime.replace(/[zZ]$/, '');
+            const localDate = parseLocalDateTime(withoutZ);
+            if (localDate) {
+              wakeTimeDate = TimezoneHelper.userTimeToUtc(localDate, userTimezone);
+              parsedSource = 'string-with-tz-corrected-to-local';
+            }
+          }
+        } else if (isTimeOnly(wakeTime)) {
+          // Si llega solo hora (HH:mm), usar la fecha "hoy" del usuario
+          const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+          const [h, m, s] = wakeTime.split(':').map(Number);
+          const localDate = new Date(Date.UTC(
+            todayInfo.userLocalTime.getFullYear(),
+            todayInfo.userLocalTime.getMonth(),
+            todayInfo.userLocalTime.getDate(),
+            h,
+            m,
+            s || 0
+          ));
+          wakeTimeDate = TimezoneHelper.userTimeToUtc(localDate, userTimezone);
+          parsedSource = 'time-only-local';
+        } else {
+          const localDate = parseLocalDateTime(wakeTime);
+          if (localDate) {
+            wakeTimeDate = TimezoneHelper.userTimeToUtc(localDate, userTimezone);
+            parsedSource = 'string-no-tz-local';
+          } else {
+            wakeTimeDate = new Date(wakeTime);
+            parsedSource = 'string-fallback';
+          }
+        }
+
+        console.log('📅 Parsed Date Object:', wakeTimeDate);
+        console.log('📅 ISO String:', wakeTimeDate.toISOString());
+        console.log('📅 UTC String:', wakeTimeDate.toUTCString());
+        console.log('📅 Hours (UTC):', wakeTimeDate.getUTCHours());
+        console.log('📅 Hours (Local):', wakeTimeDate.getHours());
+        console.log('📅 Parsed Source:', parsedSource);
+      } else if (wakeTime._seconds) {
+        // Si es un Timestamp de Firebase
+        wakeTimeDate = new Date(wakeTime._seconds * 1000);
+        parsedSource = 'firebase-timestamp';
+      } else {
+        // Intentar parsear
+        wakeTimeDate = new Date(wakeTime);
+        parsedSource = 'non-string';
+      }
+
+      // Validar que la fecha sea válida
+      if (isNaN(wakeTimeDate.getTime())) {
+        return res.status(400).json({
+          error: 'wakeTime inválido',
+          received: wakeTime,
+          details: 'No se pudo parsear la fecha'
+        });
+      }
+
+      // Validar que la hora esté en un rango razonable (5 AM - 12 PM)
+      const hours = wakeTimeDate.getHours();
+      const utcHours = wakeTimeDate.getUTCHours();
+      
+      console.log('⏰ Validation - Local Hours:', hours);
+      console.log('⏰ Validation - UTC Hours:', utcHours);
+
+      // Si la hora local está entre 2 AM y 5 AM, probablemente hay un error de AM/PM
+      if (hours >= 2 && hours < 5) {
+        console.warn('⚠️ ALERTA: Hora de despertar sospechosa (2 AM - 5 AM)');
+        console.warn('⚠️ Es posible que haya un problema con AM/PM en el frontend');
+      }
+
       const wakeTimeData = {
         userId,
         childId,
-        wakeTime: admin.firestore.Timestamp.fromDate(new Date(wakeTime)),
+        wakeTime: admin.firestore.Timestamp.fromDate(wakeTimeDate),
         type: 'wake',
-        createdAt: admin.firestore.Timestamp.now()
+        timezone: userTimezone,
+        createdAt: admin.firestore.Timestamp.now(),
+        // Guardar debug info
+        debugInfo: {
+          receivedWakeTime: wakeTime,
+          parsedISOString: wakeTimeDate.toISOString(),
+          localHours: hours,
+          utcHours: utcHours
+        }
       };
 
       const docRef = await this.db.collection('wakeEvents').add(wakeTimeData);
+
+      console.log('✅ [WAKE TIME] Registrado exitosamente');
+      console.log('🔍 [WAKE TIME DEBUG] ====================================');
 
       res.json({
         success: true,
         id: docRef.id,
         message: 'Hora de despertar registrada exitosamente',
-        wakeTime: wakeTime
+        wakeTime: wakeTimeDate.toISOString(),
+        localTime: TimezoneHelper.formatInUserTimezone(wakeTimeDate, userTimezone, 'h:mm a'),
+        debug: {
+          receivedWakeTime: wakeTime,
+          parsedISOString: wakeTimeDate.toISOString(),
+          localHours: hours,
+          utcHours: utcHours,
+          timezone: userTimezone,
+          parsedSource
+        }
       });
 
     } catch (error) {
@@ -261,6 +654,28 @@ FORMATO DE RESPUESTA (JSON):
     console.log(`✅ [LOCALIZE] Fechas convertidas. Todas las horas ahora representan ${userTimezone}`);
     
     return localized;
+  }
+
+  /**
+   * Sanitizar datos para Firestore (no permite undefined)
+   */
+  sanitizeForFirestore(value) {
+    if (value === undefined) return null;
+    if (value === null) return null;
+    if (value instanceof Date) return value;
+    if (Array.isArray(value)) {
+      return value.map(item => this.sanitizeForFirestore(item));
+    }
+    if (typeof value === 'object') {
+      const sanitized = {};
+      Object.entries(value).forEach(([key, val]) => {
+        const cleanVal = this.sanitizeForFirestore(val);
+        // Mantener la llave aunque sea null para evitar undefined
+        sanitized[key] = cleanVal;
+      });
+      return sanitized;
+    }
+    return value;
   }
 
   /**
@@ -382,8 +797,72 @@ FORMATO DE RESPUESTA (JSON):
       // Guardar en Firestore
       const docRef = await this.db.collection('sleepEvents').add(sleepEvent);
 
+      console.log(`✅ [RECORD SLEEP] Evento registrado: ${docRef.id}`);
+
       // Actualizar estadísticas del niño
       await this.updateChildSleepStats(userId, childId);
+
+      // 🔄 RECALCULAR PREDICCIONES si la siesta tiene endTime
+      let updatedPredictions = null;
+      if (endTime && type === 'nap') {
+        console.log(`🔄 [RECORD SLEEP] Recalculando predicciones después de registrar siesta...`);
+        
+        try {
+          // Obtener información del niño para el timezone
+          const childDoc = await this.db.collection('children').doc(childId).get();
+          const childData = childDoc.data();
+          const userTimezone = childData.timezone || 'UTC';
+          const ageInMonths = this.calculateAgeInMonths(childData.birthDate.toDate());
+          
+          // Obtener historial actualizado
+          const sleepHistory = await this.getSleepHistory(userId, childId, 14);
+          
+          const childInfo = {
+            id: childId,
+            userId: userId,
+            name: childData.name,
+            ageInMonths: ageInMonths
+          };
+          
+          // Generar nuevas predicciones
+          const prediction = await this.generateSleepPrediction(
+            sleepHistory,
+            childInfo,
+            userTimezone
+          );
+          const localizedPrediction = this.localizePredictionDates(prediction, userTimezone);
+          const sanitizedFullPrediction = this.sanitizeForFirestore(localizedPrediction);
+          
+          // Guardar predicciones actualizadas
+          const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+          const todayStr = format(todayInfo.userLocalTime, 'yyyy-MM-dd');
+          
+          const predictionDocData = {
+            ...prediction,
+            childId,
+            userId,
+            date: todayStr,
+            timezone: userTimezone,
+            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+            recalculatedAfter: 'nap_registration',
+            sleepHistoryCount: sleepHistory.length,
+            fullPrediction: sanitizedFullPrediction
+          };
+          const safePredictionDocData = this.sanitizeForFirestore(predictionDocData);
+
+          await this.db
+            .collection('sleepPredictions')
+            .doc(`${childId}_${todayStr}`)
+            .set(safePredictionDocData, { merge: true });
+          
+          updatedPredictions = localizedPrediction;
+          console.log(`✅ [RECORD SLEEP] Predicciones recalculadas: ${prediction.predictedNaps?.length || 0} siestas restantes`);
+          
+        } catch (predError) {
+          console.error(`⚠️ [RECORD SLEEP] Error recalculando predicciones:`, predError);
+          // No fallar el registro de sueño por error en predicciones
+        }
+      }
 
       res.status(201).json({
         success: true,
@@ -394,7 +873,9 @@ FORMATO DE RESPUESTA (JSON):
           ...sleepEvent,
           startTime: startTime,
           endTime: endTime
-        }
+        },
+        predictionsUpdated: updatedPredictions ? true : false,
+        updatedPredictions: updatedPredictions
       });
 
     } catch (error) {
@@ -440,12 +921,17 @@ FORMATO DE RESPUESTA (JSON):
         });
       }
 
-      // Obtener información del niño
-      const childDoc = await this.db
+      // 🌍 Obtener timezone del usuario lo antes posible
+      const userTimezone = TimezoneHelper.getUserTimezone(req);
+      console.log(`🌍 [PREDICT] Usando timezone: ${userTimezone}`);
+
+      // Obtener información del niño (en paralelo cuando sea posible)
+      const childDocPromise = this.db
         .collection('children')
         .doc(childId)
         .get();
 
+      const childDoc = await childDocPromise;
       if (!childDoc.exists) {
         return res.status(404).json({
           error: 'Niño no encontrado'
@@ -454,9 +940,61 @@ FORMATO DE RESPUESTA (JSON):
 
       const childData = childDoc.data();
       
-      // Calcular edad en meses
-      const birthDate = childData.birthDate.toDate();
-      const ageInMonths = this.calculateAgeInMonths(birthDate);
+      // Calcular edad en meses (con fallback seguro)
+      let ageInMonths = null;
+      let birthDate = null;
+      if (childData.birthDate?.toDate) {
+        birthDate = childData.birthDate.toDate();
+      } else if (childData.birthDate) {
+        const parsed = new Date(childData.birthDate);
+        if (!isNaN(parsed.getTime())) birthDate = parsed;
+      }
+
+      if (birthDate) {
+        ageInMonths = this.calculateAgeInMonths(birthDate);
+      } else if (typeof childData.ageInMonths === 'number') {
+        ageInMonths = childData.ageInMonths;
+      }
+
+      if (ageInMonths === null || ageInMonths === undefined) {
+        return res.status(400).json({
+          error: 'No se pudo determinar la edad del bebé',
+          details: 'Falta birthDate o ageInMonths en el perfil del niño'
+        });
+      }
+
+      // ⚡ Fast-cache: devolver predicción reciente si existe (evita ML/IA)
+      const { format } = require('date-fns');
+      const todayInfoForCache = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+      const cacheKeyDate = format(todayInfoForCache.userLocalTime, 'yyyy-MM-dd');
+      const predictionDocRef = this.db
+        .collection('sleepPredictions')
+        .doc(`${childId}_${cacheKeyDate}`);
+      const predictionDoc = await predictionDocRef.get();
+      const forceRefresh = req.query?.force === 'true' || req.headers['x-force-refresh'] === 'true';
+      const cacheTtlMinutes = 5;
+
+      if (!forceRefresh && predictionDoc.exists) {
+        const cached = predictionDoc.data();
+        const lastUpdated = cached.lastUpdated?.toDate ? cached.lastUpdated.toDate() : null;
+        const cacheAgeMinutes = lastUpdated
+          ? differenceInMinutes(new Date(), lastUpdated)
+          : null;
+        if (cached.fullPrediction && cacheAgeMinutes !== null && cacheAgeMinutes <= cacheTtlMinutes) {
+          console.log(`⚡ [PREDICT] Usando cache (${cacheAgeMinutes} min)`);
+          return res.json({
+            success: true,
+            prediction: cached.fullPrediction,
+            childInfo: {
+              name: childData.name,
+              ageInMonths,
+              dataPoints: cached.sleepHistoryCount ?? null
+            },
+            timezone: userTimezone,
+            cached: true
+          });
+        }
+      }
 
       // Obtener historial de sueño (últimos 14 días)
       const sleepHistory = await this.getSleepHistory(userId, childId, 14);
@@ -475,10 +1013,6 @@ FORMATO DE RESPUESTA (JSON):
       
       console.log(`✅ [PREDICT] childInfo construido:`, JSON.stringify(childInfo));
       
-      // 🌍 Obtener timezone del usuario
-      const userTimezone = TimezoneHelper.getUserTimezone(req);
-      console.log(`🌍 [PREDICT] Usando timezone: ${userTimezone}`);
-      
       const prediction = await this.generateSleepPrediction(
         sleepHistory,
         ageInMonths,
@@ -492,6 +1026,62 @@ FORMATO DE RESPUESTA (JSON):
 
       // 🌍 Convertir todas las fechas a la zona horaria del usuario
       const localizedPrediction = this.localizePredictionDates(prediction, userTimezone);
+      const sanitizedFullPrediction = this.sanitizeForFirestore(localizedPrediction);
+      
+      // 💾 GUARDAR PREDICCIONES EN FIRESTORE para notificaciones
+      try {
+        const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+        const todayStr = format(todayInfo.userLocalTime, 'yyyy-MM-dd');
+        const predictionDocId = `${childId}_${todayStr}`;
+        
+        // Filtrar solo las siestas predichas (upcoming)
+        const predictedNaps = prediction.dailySchedule?.allNaps
+          ?.filter(nap => nap.status === 'upcoming')
+          .map(nap => ({
+            napNumber: nap.napNumber,
+            time: nap.time,
+            windowStart: nap.windowStart,
+            windowEnd: nap.windowEnd,
+            expectedDuration: nap.expectedDuration,
+            confidence: nap.confidence,
+            type: nap.type || nap.aiReason,
+            aiReason: nap.aiReason,
+            wakeWindow: nap.wakeWindow
+          })) || [];
+        
+        const predictionData = {
+          childId: childId,
+          userId: userId,
+          date: todayStr,
+          predictedNaps: predictedNaps,
+          predictedBedtime: prediction.bedtime ? {
+            time: prediction.bedtime.time,
+            confidence: prediction.bedtime.confidence,
+            reason: prediction.bedtime.reason
+          } : null,
+          totalExpected: prediction.dailySchedule?.totalExpected || predictedNaps.length,
+          completed: prediction.dailySchedule?.completed || 0,
+          remaining: predictedNaps.length,
+          confidence: prediction.confidence,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+          timezone: userTimezone,
+          sleepHistoryCount: sleepHistory.length,
+          fullPrediction: sanitizedFullPrediction
+        };
+        const safePredictionData = this.sanitizeForFirestore(predictionData);
+
+        await this.db
+          .collection('sleepPredictions')
+          .doc(predictionDocId)
+          .set(safePredictionData, { merge: true });
+        
+        console.log(`💾 [PREDICT] Predicciones guardadas en Firestore: ${predictionDocId}`);
+        console.log(`💾 [PREDICT] Siestas predichas guardadas: ${predictedNaps.length}`);
+      } catch (saveError) {
+        console.error('⚠️ [PREDICT] Error guardando predicciones en Firestore:', saveError);
+        // No fallar la petición si hay error al guardar
+      }
 
       res.json({
         success: true,
@@ -695,9 +1285,88 @@ FORMATO DE RESPUESTA (JSON):
   // ==========================================
 
   /**
+   * Terminar automáticamente siestas que lleven más de 6 horas activas
+   * Esto previene siestas "olvidadas" que distorsionen las predicciones
+   */
+  async autoTerminateLongSleeps(userId, childId) {
+    try {
+      const MAX_SLEEP_HOURS = 6;
+      const now = new Date();
+      const sixHoursAgo = subHours(now, MAX_SLEEP_HOURS);
+      
+      console.log(`🔍 [AUTO-TERMINATE] Buscando siestas activas mayores a ${MAX_SLEEP_HOURS}h para childId: ${childId}`);
+      
+      // Buscar eventos de sueño sin endTime que iniciaron hace más de 6 horas
+      const snapshot = await this.db
+        .collection('sleepEvents')
+        .where('userId', '==', userId)
+        .where('childId', '==', childId)
+        .where('endTime', '==', null)
+        .where('startTime', '<=', admin.firestore.Timestamp.fromDate(sixHoursAgo))
+        .get();
+      
+      if (snapshot.empty) {
+        console.log(`✅ [AUTO-TERMINATE] No hay siestas activas mayores a ${MAX_SLEEP_HOURS}h`);
+        return 0;
+      }
+      
+      console.log(`⚠️ [AUTO-TERMINATE] Encontradas ${snapshot.size} siestas activas mayores a ${MAX_SLEEP_HOURS}h`);
+      
+      let terminatedCount = 0;
+      const batch = this.db.batch();
+      
+      snapshot.docs.forEach(doc => {
+        const eventData = doc.data();
+        const startTime = eventData.startTime.toDate();
+        const durationHours = differenceInHours(now, startTime);
+        
+        console.log(`⚠️ [AUTO-TERMINATE] Siesta ID: ${doc.id}`);
+        console.log(`   - Inicio: ${startTime.toISOString()}`);
+        console.log(`   - Duración actual: ${durationHours.toFixed(1)}h`);
+        console.log(`   - Tipo: ${eventData.type}`);
+        
+        // Terminarla automáticamente en startTime + 6 horas
+        const autoEndTime = addHours(startTime, MAX_SLEEP_HOURS);
+        const duration = MAX_SLEEP_HOURS * 60; // 360 minutos
+        
+        batch.update(doc.ref, {
+          endTime: admin.firestore.Timestamp.fromDate(autoEndTime),
+          duration: duration,
+          grossDuration: duration,
+          netDuration: duration,
+          autoTerminated: true, // Marcar como terminada automáticamente
+          autoTerminatedReason: `Siesta activa por más de ${MAX_SLEEP_HOURS} horas`,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        console.log(`✅ [AUTO-TERMINATE] Siesta ${doc.id} será terminada en: ${autoEndTime.toISOString()}`);
+        terminatedCount++;
+      });
+      
+      if (terminatedCount > 0) {
+        await batch.commit();
+        console.log(`✅ [AUTO-TERMINATE] ${terminatedCount} siestas terminadas automáticamente`);
+        
+        // Actualizar estadísticas del niño
+        await this.updateChildSleepStats(userId, childId);
+      }
+      
+      return terminatedCount;
+      
+    } catch (error) {
+      console.error('❌ [AUTO-TERMINATE] Error:', error);
+      // No lanzar error, solo loguearlo
+      return 0;
+    }
+  }
+
+  /**
    * Obtener historial de sueño de un niño
    */
   async getSleepHistory(userId, childId, days = 14) {
+    // ✅ Primero, terminar automáticamente siestas mayores a 6 horas
+    await this.autoTerminateLongSleeps(userId, childId);
+    
     const startDate = subDays(new Date(), days);
     
     const snapshot = await this.db
@@ -873,8 +1542,14 @@ FORMATO DE RESPUESTA (JSON):
     const wakeTimeInfo = await this.getWakeTimeForToday(childInfo.id, childInfo.userId, userTimezone);
 
     // Separar siestas y sueño nocturno
+    console.log(`📊 [DEBUG] sleepHistory total: ${sleepHistory.length} eventos`);
+    console.log(`📊 [DEBUG] Tipos encontrados:`, sleepHistory.map(s => ({ id: s.id, type: s.type, startTime: s.startTime })));
+    
     const naps = sleepHistory.filter(s => s.type === 'nap');
     const nightSleeps = sleepHistory.filter(s => s.type === 'nightsleep');
+    
+    console.log(`📊 [DEBUG] Naps filtradas: ${naps.length}`);
+    console.log(`📊 [DEBUG] Night sleeps filtradas: ${nightSleeps.length}`);
 
     // 1. PREDECIR TODAS LAS SIESTAS DEL DÍA
     let dailyNapSchedule;
@@ -907,11 +1582,8 @@ FORMATO DE RESPUESTA (JSON):
       dailyNapSchedule = await this.predictDailyNaps(naps, now, ageInMonths, wakeTimeInfo, userTimezone);
     }
 
-    // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
-    const napPrediction = dailyNapSchedule.naps.find(nap => {
-      const napTime = parseISO(nap.time);
-      return napTime > now;
-    }) || null;
+    // 2. PREDECIR PRÓXIMA SIESTA (se recalcula después de ajustes de bedtime)
+    let napPrediction = null;
 
     // 3. PREDECIR HORA DE DORMIR NOCTURNA
     let bedtimePrediction;
@@ -934,6 +1606,52 @@ FORMATO DE RESPUESTA (JSON):
       // Estadístico fallback
       bedtimePrediction = this.predictBedtime(nightSleeps, ageInMonths, sleepHistory, userTimezone);
     }
+
+    // ✅ Ajustar bedtime final a rango razonable por edad (aplica a TODOS los caminos)
+    if (bedtimePrediction?.time) {
+      const bedtimeUTC = new Date(bedtimePrediction.time);
+      const bedtimeClamp = this.adjustBedtimeToAgeRange(bedtimeUTC, ageInMonths, userTimezone);
+      if (bedtimeClamp.adjusted) {
+        bedtimePrediction.time = bedtimeClamp.adjustedUTC.toISOString();
+        bedtimePrediction.reason = bedtimePrediction.reason
+          ? `${bedtimePrediction.reason} (ajustado a horario recomendado)`
+          : 'Hora de dormir ajustada a horario recomendado por edad';
+      }
+    }
+
+    // ✅ Ajustar siestas que terminan después del bedtime y asegurar bedtime > última siesta real
+    const wakeWindows = this.getWakeWindows(ageInMonths);
+    if (bedtimePrediction?.time) {
+      let bedtimeUTC = new Date(bedtimePrediction.time);
+      const lastRealNapEnd = this.getLatestNapEndForToday(naps, userTimezone);
+      if (lastRealNapEnd && bedtimeUTC <= lastRealNapEnd) {
+        const adjustedBedtime = addMinutes(lastRealNapEnd, wakeWindows.min * 60);
+        bedtimePrediction.time = adjustedBedtime.toISOString();
+        bedtimePrediction.reason = bedtimePrediction.reason
+          ? `${bedtimePrediction.reason} (ajustado porque la última siesta terminó tarde)`
+          : 'Hora de dormir ajustada porque la última siesta terminó tarde';
+        bedtimeUTC = adjustedBedtime;
+      }
+
+      const minBufferMinutes = wakeWindows.min * 60;
+      const latestAllowedEnd = addMinutes(bedtimeUTC, -minBufferMinutes);
+      const beforeCount = dailyNapSchedule.naps.length;
+      dailyNapSchedule.naps = dailyNapSchedule.naps.filter((nap) => {
+        const napStart = new Date(nap.time);
+        const duration = nap.expectedDuration || nap.duration || 60;
+        const napEnd = addMinutes(napStart, duration);
+        return napEnd <= latestAllowedEnd;
+      });
+      if (dailyNapSchedule.naps.length !== beforeCount) {
+        console.warn(`⚠️ [BEDTIME] Removidas ${beforeCount - dailyNapSchedule.naps.length} siesta(s) por terminar después de bedtime`);
+      }
+    }
+
+    // 2. PREDECIR PRÓXIMA SIESTA (la más cercana que no ha pasado)
+    napPrediction = dailyNapSchedule.naps.find(nap => {
+      const napTime = parseISO(nap.time);
+      return napTime > now;
+    }) || null;
 
     // 4. ANALIZAR PATRONES DE SUEÑO
     const patterns = this.analyzeSleepPatterns(sleepHistory, ageInMonths);
@@ -965,25 +1683,61 @@ FORMATO DE RESPUESTA (JSON):
     const sleepPressure = this.calculateSleepPressure(sleepHistory, now);
 
     // 7. OBTENER SIESTAS YA REGISTRADAS HOY (HECHOS)
-    const todayStart = startOfDay(now);
+    // ✅ IMPORTANTE: Usar el inicio del día en la timezone del usuario, no en UTC
+    const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+    const todayStartUTC = todayInfo.start; // Inicio del día en UTC que corresponde a medianoche local
+    
+    console.log(`📊 [DEBUG] todayStartUTC: ${todayStartUTC.toISOString()}`);
+    console.log(`📊 [DEBUG] todayEndUTC: ${todayInfo.end.toISOString()}`);
+    console.log(`📊 [DEBUG] now: ${now.toISOString()}`);
+    console.log(`📊 [DEBUG] userTimezone: ${userTimezone}`);
+    console.log(`📊 [DEBUG] Naps totales antes de filtrar por hoy: ${naps.length}`);
+    
     const napsToday = naps.filter(nap => {
       const napDate = parseISO(nap.startTime);
-      return napDate >= todayStart;
-    }).map((nap, index) => ({
-      id: nap.id,
-      time: nap.startTime,
-      startTime: nap.startTime,
-      endTime: nap.endTime,
-      duration: nap.duration,
-      actualDuration: nap.duration,
-      quality: nap.quality,
-      location: nap.location,
-      pauses: nap.pauses || [],
-      napNumber: index + 1,
-      type: 'completed',
-      status: 'completed',
-      isReal: true
-    }));
+      const isToday = napDate >= todayStartUTC && napDate <= todayInfo.end;
+      console.log(`📊 [DEBUG] Nap ${nap.id}: startTime=${nap.startTime}, napDate=${napDate.toISOString()}, isToday=${isToday}`);
+      return isToday;
+    }).map((nap, index) => {
+      // 🔄 Determinar si la siesta está completada o en progreso
+      const isCompleted = !!nap.endTime;
+      const status = isCompleted ? 'completed' : 'in_progress';
+      
+      // 🕐 Si está en progreso, calcular duración estimada basada en edad
+      let expectedDuration = nap.duration;
+      if (!isCompleted && !expectedDuration) {
+        // Duración típica por edad si no está definida
+        const ageInMonths = this.calculateAgeInMonths(new Date()); // Aproximado
+        expectedDuration = ageInMonths <= 6 ? 75 : 90; // 75 min o 90 min
+      }
+      
+      return {
+        id: nap.id,
+        time: nap.startTime,
+        startTime: nap.startTime,
+        endTime: nap.endTime,
+        duration: nap.duration,
+        actualDuration: nap.duration,
+        expectedDuration: expectedDuration, // ✅ Mantener duración estimada
+        quality: nap.quality,
+        location: nap.location,
+        pauses: nap.pauses || [],
+        napNumber: index + 1,
+        type: status, // ✅ 'completed' o 'in_progress'
+        status: status, // ✅ Estado correcto
+        isReal: true,
+        isInProgress: !isCompleted // ✅ Flag adicional
+      };
+    });
+
+    console.log(`📊 [DEBUG] napsToday después de map: ${napsToday.length} siestas`);
+    console.log(`📊 [DEBUG] napsToday detalle:`, napsToday.map(n => ({
+      id: n.id,
+      type: n.type,
+      status: n.status,
+      time: n.time,
+      duration: n.duration
+    })));
 
     // 8. OBTENER PREDICCIONES FUTURAS DEL DÍA ACTUAL (solo las que NO han pasado)
     const futurePredictions = dailyNapSchedule.naps
@@ -1013,7 +1767,10 @@ FORMATO DE RESPUESTA (JSON):
 
     console.log(`📊 [PREDICT] Total en allNapsOfDay: ${allNapsOfDay.length}`);
     console.log(`📊 [PREDICT] Breakdown:`);
-    console.log(`   - Registradas (completed): ${napsToday.length}`);
+    const completedNaps = napsToday.filter(n => n.status === 'completed').length;
+    const inProgressNaps = napsToday.filter(n => n.status === 'in_progress').length;
+    console.log(`   - Registradas completadas: ${completedNaps}`);
+    console.log(`   - Registradas en progreso: ${inProgressNaps}`);
     console.log(`   - Predichas futuras (upcoming): ${futurePredictions.length}`);
 
     // 10. CALCULAR PROGRESO DEL DÍA
@@ -1093,11 +1850,26 @@ FORMATO DE RESPUESTA (JSON):
       console.log(`[PREDICCIÓN] Poco historial (${naps.length} siestas). Usando máximo por edad: ${targetNapCount} siestas`);
     }
 
+    // Ajuste: para bebés <=6 meses con despertar temprano, preferir máximo de siestas
+    if (wakeTimeInfo && wakeTimeInfo.time && ageInMonths <= 6 && expectedNaps.max >= 4) {
+      const wakeLocal = TimezoneHelper.utcToUserTime(new Date(wakeTimeInfo.time), userTimezone);
+      const wakeHourLocal = wakeLocal.getHours() + wakeLocal.getMinutes() / 60;
+      if (wakeHourLocal <= 7.5 && targetNapCount < expectedNaps.max) {
+        console.log(`⚠️ [PREDICT DAILY] Wake temprano (${wakeHourLocal.toFixed(2)}h). Ajustando siestas a ${expectedNaps.max}`);
+        targetNapCount = expectedNaps.max;
+      }
+    }
+
     // Obtener siestas ya registradas del día de predicción
+    // ✅ USAR TIMEZONE DEL USUARIO para filtrar correctamente
+    const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
     const napsOfPredictionDay = naps.filter(nap => {
       const napDate = parseISO(nap.startTime);
-      return napDate >= todayStart && napDate < addDays(todayStart, 1);
+      return napDate >= todayInfo.start && napDate <= todayInfo.end;
     });
+    
+    console.log(`📊 [PREDICT DAILY] napsOfPredictionDay: ${napsOfPredictionDay.length} (filtradas correctamente con timezone)`);
+
 
     // ✅ NUEVA LÓGICA: Si hay hora de despertar, calcular basándose en wake windows
     if (wakeTimeInfo && wakeTimeInfo.source !== 'error-default') {
@@ -1127,6 +1899,65 @@ FORMATO DE RESPUESTA (JSON):
     console.log(`[WAKE TIME] Siestas ya registradas hoy: ${napsOfDay.length}`);
     console.log(`[WAKE TIME] Timezone: ${userTimezone}`);
     
+    // 🔄 Si hay una siesta EN PROGRESO, calcular siestas DESPUÉS de que termine
+    const napInProgress = napsOfDay.find(nap => !nap.endTime);
+    let remainingNaps = targetNapCount - napsOfDay.length;
+    
+    if (napInProgress && remainingNaps > 0) {
+      console.log(`⚠️ [WAKE TIME] Hay una siesta EN PROGRESO - calculando siestas DESPUÉS de que termine`);
+      console.log(`⚠️ [WAKE TIME] Siesta en progreso: ${napInProgress.startTime}`);
+      console.log(`⚠️ [WAKE TIME] Siestas RESTANTES a predecir: ${remainingNaps}`);
+      
+      // Calcular cuándo terminaría la siesta en progreso
+      const napStartTime = new Date(napInProgress.startTime);
+      const estimatedDuration = napInProgress.expectedDuration || 75; // minutos estimados
+      const estimatedEndTime = addMinutes(napStartTime, estimatedDuration);
+      
+      console.log(`🔄 [WAKE TIME] Siesta en progreso terminaría: ${estimatedEndTime.toISOString()}`);
+      console.log(`🔄 [WAKE TIME] Calculando ${remainingNaps} siesta(s) más desde ese punto...`);
+      
+      // Usar ChatGPT o cálculo estadístico para predecir las siestas restantes
+      // Pasando el estimatedEndTime como "última siesta terminada"
+    }
+    
+    // ✅ VALIDACIÓN: Si NO quedan siestas por predecir, solo calcular bedtime
+    if (remainingNaps <= 0) {
+      console.log(`✅ [WAKE TIME] Ya se completaron todas las ${targetNapCount} siestas del día`);
+      
+      // Calcular bedtime desde la última siesta (completada o en progreso)
+      const lastNap = napsOfDay[napsOfDay.length - 1];
+      let bedtimeBase;
+      
+      if (lastNap.endTime) {
+        // Siesta completada: usar endTime
+        bedtimeBase = new Date(lastNap.endTime);
+      } else {
+        // Siesta en progreso: usar tiempo estimado de fin
+        const napStartTime = new Date(lastNap.startTime);
+        const estimatedDuration = lastNap.expectedDuration || 75;
+        bedtimeBase = addMinutes(napStartTime, estimatedDuration);
+      }
+      
+      const wakeWindow = wakeWindows.optimal * 60; // Convertir a minutos
+      const bedtimeTime = addMinutes(bedtimeBase, wakeWindow);
+      
+      console.log(`🌙 [BEDTIME] Calculado desde última siesta: ${bedtimeTime.toISOString()}`);
+      
+      return {
+        naps: [],
+        totalNaps: 0,
+        basedOn: 'all-naps-completed',
+        wakeTime: wakeTime.toISOString(),
+        message: `Todas las ${targetNapCount} siestas del día ya están completadas`,
+        aiBedtime: {
+          time: bedtimeTime.toISOString(),
+          confidence: 85,
+          reason: `${wakeWindows.optimal}h después de última siesta`,
+          basedOn: 'optimal-wake-window'
+        }
+      };
+    }
+    
     // 🤖 PASO 1: INTENTAR CON CHATGPT PRIMERO
     console.log('🤖 [PREDICTION] Intentando obtener predicciones con ChatGPT...');
     const aiPrediction = await this.enhancePredictionsWithAI(
@@ -1139,16 +1970,28 @@ FORMATO DE RESPUESTA (JSON):
     console.log(`🤖 [PREDICTION] Resultado de IA: ${aiPrediction ? 'RECIBIDO ✅' : 'NULL ❌'}`);
     if (aiPrediction) {
       console.log(`🤖 [PREDICTION] IA devolvió ${aiPrediction.remainingNaps?.length || 0} siestas`);
+      console.log(`🤖 [PREDICTION] Respuesta completa de IA:`, JSON.stringify(aiPrediction, null, 2));
+    } else {
+      console.log(`⚠️ [PREDICTION] IA retornó NULL, usará fallback estadístico`);
     }
 
-    if (aiPrediction && aiPrediction.remainingNaps && aiPrediction.remainingNaps.length > 0) {
+    if (aiPrediction && (aiPrediction.remainingNaps?.length > 0 || aiPrediction.bedtime)) {
       console.log('🤖 [AI PREDICTION] ✅ Usando predicciones mejoradas con ChatGPT');
       
       // Convertir predicciones de ChatGPT al formato esperado
       const now = new Date();
       const localToday = TimezoneHelper.utcToUserTime(now, userTimezone);
       
-      predictedNaps = aiPrediction.remainingNaps.map(aiNap => {
+      // ✅ Calcular tiempo desde última siesta o wake time
+      let lastEventTime = wakeTime;
+      if (napsOfDay.length > 0) {
+        const lastNap = napsOfDay[napsOfDay.length - 1];
+        lastEventTime = new Date(lastNap.endTime || lastNap.startTime);
+      }
+      
+      // ✅ PROCESAR SIESTAS (si hay)
+      if (aiPrediction.remainingNaps && aiPrediction.remainingNaps.length > 0) {
+        predictedNaps = aiPrediction.remainingNaps.map((aiNap, index) => {
         // Parsear la hora de la respuesta de ChatGPT (formato "HH:MM")
         const [hours, minutes] = aiNap.time.split(':').map(Number);
         
@@ -1159,34 +2002,222 @@ FORMATO DE RESPUESTA (JSON):
         // Convertir a UTC para almacenar
         const napTimeUTC = TimezoneHelper.userTimeToUtc(napDate, userTimezone);
         
+        // ✅ CALCULAR TIEMPO EXACTO desde el evento anterior
+        let timeSinceLastEvent;
+        let timeInHours;
+        let timeInMinutes;
+        
+        // Limpiar el reason de ChatGPT: remover referencias a tiempo para evitar duplicación
+        let cleanReason = aiNap.reason
+          .replace(/\d+(\.\d+)?\s*h\s*(\d+\s*min)?\s*(después|after).*/gi, '')  // "2h después de..."
+          .replace(/\d+(\.\d+)?\s*horas?\s*(después|after).*/gi, '')             // "2 horas después de..."
+          .replace(/\d+\s*min(utos?)?\s*(después|after).*/gi, '')                // "30 min después de..."
+          .replace(/,\s*$/, '')  // Remover coma final si queda
+          .trim();
+        
+        let enhancedReason;
+        
+        if (index === 0) {
+          // Primera siesta: calcular desde última siesta o wake time
+          timeInMinutes = differenceInMinutes(napTimeUTC, lastEventTime);
+          timeInHours = Math.floor(timeInMinutes / 60);
+          const remainingMinutes = timeInMinutes % 60;
+          
+          if (timeInHours > 0 && remainingMinutes > 0) {
+            timeSinceLastEvent = `${timeInHours}h ${remainingMinutes}min`;
+          } else if (timeInHours > 0) {
+            timeSinceLastEvent = `${timeInHours}h`;
+          } else {
+            timeSinceLastEvent = `${remainingMinutes}min`;
+          }
+          
+          // Construir reason limpio
+          const eventType = napsOfDay.length > 0 ? 'última siesta' : 'despertar';
+          enhancedReason = cleanReason 
+            ? `${cleanReason} (${timeSinceLastEvent} después de ${eventType})`
+            : `Siesta recomendada (${timeSinceLastEvent} después de ${eventType})`;
+        } else {
+          // Siestas subsecuentes: calcular desde la siesta anterior predicha
+          const prevNapTime = new Date(aiPrediction.remainingNaps[index - 1].time.split(':').map(Number));
+          prevNapTime.setFullYear(localToday.getFullYear(), localToday.getMonth(), localToday.getDate());
+          const prevNapDuration = aiPrediction.remainingNaps[index - 1].duration || 60;
+          const prevNapEnd = addMinutes(TimezoneHelper.userTimeToUtc(prevNapTime, userTimezone), prevNapDuration);
+          
+          timeInMinutes = differenceInMinutes(napTimeUTC, prevNapEnd);
+          timeInHours = Math.floor(timeInMinutes / 60);
+          const remainingMinutes = timeInMinutes % 60;
+          
+          if (timeInHours > 0 && remainingMinutes > 0) {
+            timeSinceLastEvent = `${timeInHours}h ${remainingMinutes}min`;
+          } else if (timeInHours > 0) {
+            timeSinceLastEvent = `${timeInHours}h`;
+          } else {
+            timeSinceLastEvent = `${remainingMinutes}min`;
+          }
+          
+          // Construir reason limpio
+          enhancedReason = cleanReason 
+            ? `${cleanReason} (${timeSinceLastEvent} ventana de vigilia)`
+            : `Siesta recomendada (${timeSinceLastEvent} ventana de vigilia)`;
+        }
+        
+        console.log(`   Siesta ${aiNap.napNumber}: ${aiNap.time} - Ventana: ${timeSinceLastEvent}`);
+        
+        // 🚨 VALIDAR DURACIÓN MÁXIMA (no más de 2h para bebés de 0-6 meses, 2.5h para mayores)
+        let validatedDuration = aiNap.duration;
+        const maxDuration = ageInMonths <= 6 ? 120 : 150; // 2h o 2.5h
+        
+        if (validatedDuration > maxDuration) {
+          console.warn(`⚠️ [AI PREDICTION] Duración muy alta (${validatedDuration} min) - limitando a ${maxDuration} min`);
+          validatedDuration = maxDuration;
+        }
+        
         return {
           time: napTimeUTC.toISOString(),
           windowStart: addMinutes(napTimeUTC, -20).toISOString(),
           windowEnd: addMinutes(napTimeUTC, 20).toISOString(),
-          expectedDuration: aiNap.duration,
+          expectedDuration: validatedDuration, // ✅ Usar duración validada
           confidence: aiPrediction.confidence || 85,
           napNumber: aiNap.napNumber,
-          type: aiNap.reason || 'ai-predicted',
+          type: enhancedReason, // ✅ Usar reason mejorado con tiempo exacto
           status: 'upcoming',
           basedOn: 'chatgpt-enhanced',
-          aiReason: aiNap.reason
+          aiReason: enhancedReason, // ✅ CAMBIAR a enhancedReason con tiempo exacto
+          wakeWindow: timeSinceLastEvent // ✅ Agregar ventana de vigilia
         };
       });
 
       console.log(`✅ [AI PREDICTION] ${predictedNaps.length} siestas predichas con IA`);
+      } else {
+        console.log(`ℹ️ [AI PREDICTION] No hay siestas pendientes (ya completadas)`);
+        predictedNaps = [];
+      }
       
-      // 🌙 Procesar bedtime de ChatGPT
+      // 🌙 Procesar bedtime de ChatGPT (SIEMPRE, aunque no haya siestas)
       let aiBedtime = null;
       if (aiPrediction.bedtime && aiPrediction.bedtime.time) {
         const [bedHours, bedMinutes] = aiPrediction.bedtime.time.split(':').map(Number);
         const bedtimeDate = new Date(localToday);
         bedtimeDate.setHours(bedHours, bedMinutes, 0, 0);
-        const bedtimeUTC = TimezoneHelper.userTimeToUtc(bedtimeDate, userTimezone);
+        let bedtimeUTC = TimezoneHelper.userTimeToUtc(bedtimeDate, userTimezone);
+
+        // ✅ Ajustar bedtime a un rango razonable por edad (hora local)
+        const bedtimeClamp = this.adjustBedtimeToAgeRange(bedtimeUTC, ageInMonths, userTimezone);
+        if (bedtimeClamp.adjusted) {
+          console.log(`⚠️ [BEDTIME] Bedtime IA ajustado a rango por edad (${bedtimeClamp.minHourLocal}-${bedtimeClamp.maxHourLocal}h)`);
+          bedtimeUTC = bedtimeClamp.adjustedUTC;
+        }
+        
+        // ✅ CALCULAR TIEMPO desde la última siesta predicha
+        let cleanBedtimeReason = (aiPrediction.bedtime.reason || 'Sugerido por IA')
+          .replace(/\d+(\.\d+)?\s*h\s*(\d+\s*min)?\s*(después|after).*/gi, '')
+          .replace(/\d+(\.\d+)?\s*horas?\s*(después|after).*/gi, '')
+          .replace(/\d+\s*min(utos?)?\s*(después|after).*/gi, '')
+          .replace(/,\s*$/, '')
+          .trim();
+        
+        let enhancedBedtimeReason;
+        
+        // 🔄 Verificar si hay una siesta EN PROGRESO
+        const napInProgress = napsOfDay.find(nap => !nap.endTime);
+        
+        if (napInProgress) {
+          // Calcular desde cuándo TERMINARÍA la siesta en progreso
+          const napStartTime = new Date(napInProgress.startTime);
+          const estimatedDuration = napInProgress.expectedDuration || 75; // minutos
+          const estimatedEndTime = addMinutes(napStartTime, estimatedDuration);
+          
+          const timeUntilBedtime = differenceInMinutes(bedtimeUTC, estimatedEndTime);
+          const hours = Math.floor(timeUntilBedtime / 60);
+          const minutes = timeUntilBedtime % 60;
+          
+          let timeDisplay;
+          if (hours > 0 && minutes > 0) {
+            timeDisplay = `${hours}h ${minutes}min`;
+          } else if (hours > 0) {
+            timeDisplay = `${hours}h`;
+          } else {
+            timeDisplay = `${minutes}min`;
+          }
+          
+          enhancedBedtimeReason = `${cleanBedtimeReason} (${timeDisplay} después de que termine la siesta en progreso)`;
+          
+          console.log(`   Hora de dormir: ${aiPrediction.bedtime.time} - Ventana: ${timeDisplay} después de siesta en progreso`);
+        } else if (predictedNaps.length > 0) {
+          const lastPredictedNap = predictedNaps[predictedNaps.length - 1];
+          const lastNapTime = new Date(lastPredictedNap.time);
+          const lastNapEnd = addMinutes(lastNapTime, lastPredictedNap.expectedDuration || 60);
+          
+          const timeUntilBedtime = differenceInMinutes(bedtimeUTC, lastNapEnd);
+          const hours = Math.floor(timeUntilBedtime / 60);
+          const minutes = timeUntilBedtime % 60;
+          
+          let timeDisplay;
+          if (hours > 0 && minutes > 0) {
+            timeDisplay = `${hours}h ${minutes}min`;
+          } else if (hours > 0) {
+            timeDisplay = `${hours}h`;
+          } else {
+            timeDisplay = `${minutes}min`;
+          }
+          
+          enhancedBedtimeReason = cleanBedtimeReason 
+            ? `${cleanBedtimeReason} (${timeDisplay} después de última siesta)`
+            : `Hora de dormir recomendada (${timeDisplay} después de última siesta)`;
+          
+          console.log(`   Hora de dormir: ${aiPrediction.bedtime.time} - Ventana: ${timeDisplay} después de siesta ${lastPredictedNap.napNumber}`);
+        } else if (napsOfDay.length > 0) {
+          // Calcular desde la última siesta completada
+          const lastCompletedNap = napsOfDay[napsOfDay.length - 1];
+          const lastNapEnd = new Date(lastCompletedNap.endTime);
+          
+          const timeUntilBedtime = differenceInMinutes(bedtimeUTC, lastNapEnd);
+          const hours = Math.floor(timeUntilBedtime / 60);
+          const minutes = timeUntilBedtime % 60;
+          
+          let timeDisplay;
+          if (hours > 0 && minutes > 0) {
+            timeDisplay = `${hours}h ${minutes}min`;
+          } else if (hours > 0) {
+            timeDisplay = `${hours}h`;
+          } else {
+            timeDisplay = `${minutes}min`;
+          }
+          
+          enhancedBedtimeReason = cleanBedtimeReason 
+            ? `${cleanBedtimeReason} (${timeDisplay} después de última siesta)`
+            : `Hora de dormir recomendada (${timeDisplay} después de última siesta)`;
+        } else {
+          enhancedBedtimeReason = cleanBedtimeReason || 'Hora de dormir recomendada';
+        }
+
+        // ✅ Si el bedtime fue ajustado, aclarar en la razón
+        if (bedtimeClamp.adjusted) {
+          enhancedBedtimeReason = enhancedBedtimeReason
+            ? `${enhancedBedtimeReason} (ajustado a horario recomendado)`
+            : 'Hora de dormir ajustada a horario recomendado por edad';
+        }
+
+        // ✅ Quitar siestas que terminen muy cerca o después del bedtime
+        if (predictedNaps.length > 0) {
+          const minBufferMinutes = wakeWindows.min * 60;
+          const latestAllowedEnd = addMinutes(bedtimeUTC, -minBufferMinutes);
+          const beforeCount = predictedNaps.length;
+
+          predictedNaps = predictedNaps.filter((nap) => {
+            const napEnd = addMinutes(new Date(nap.time), nap.expectedDuration || 60);
+            return napEnd <= latestAllowedEnd;
+          });
+
+          if (predictedNaps.length !== beforeCount) {
+            console.warn(`⚠️ [BEDTIME] Se removieron ${beforeCount - predictedNaps.length} siesta(s) por terminar muy tarde`);
+          }
+        }
         
         aiBedtime = {
           time: bedtimeUTC.toISOString(),
           confidence: aiPrediction.confidence || 85,
-          reason: aiPrediction.bedtime.reason || 'Sugerido por IA',
+          reason: enhancedBedtimeReason, // ✅ Reason mejorado con tiempo exacto
           basedOn: 'chatgpt-ai'
         };
         
@@ -1202,6 +2233,12 @@ FORMATO DE RESPUESTA (JSON):
         aiBedtime: aiBedtime  // ✅ Incluir bedtime de IA
       };
     }
+    
+    // ⚠️ Si llegamos aquí, ChatGPT no proporcionó predicciones válidas
+    console.warn(`⚠️ [PREDICTION] ChatGPT no proporcionó predicciones válidas`);
+    console.warn(`⚠️ [PREDICTION] aiPrediction:`, aiPrediction);
+    console.warn(`⚠️ [PREDICTION] aiPrediction?.remainingNaps:`, aiPrediction?.remainingNaps);
+    console.warn(`⚠️ [PREDICTION] length:`, aiPrediction?.remainingNaps?.length);
 
     // 📊 PASO 2: SI NO HAY AI, USAR MÉTODO ESTADÍSTICO (FALLBACK)
     console.log('📊 [STATISTICAL] Usando método estadístico (ChatGPT no disponible)');
@@ -1232,12 +2269,24 @@ FORMATO DE RESPUESTA (JSON):
     }
     
     // ✅ AJUSTE: Determinar límite máximo de hora según edad
-    // - Bebés pequeños (0-6 meses): última siesta puede ser hasta las 8 PM
-    // - Bebés mayores (6+ meses): última siesta hasta 7 PM
-    const maxNapHourLocal = ageInMonths <= 6 ? 20 : 19;
+    // - Bebés pequeños (0-6 meses): última siesta puede ser hasta las 6 PM
+    // - Bebés mayores (6+ meses): última siesta hasta 6:30 PM
+    const maxNapHourLocal = ageInMonths <= 6 ? 18 : 18.5;
     
-    // ✅ Calcular cuántas siestas FALTAN por predecir
-    const remainingNaps = targetNapCount - napsOfDay.length;
+    // ✅ Calcular cuántas siestas FALTAN por predecir (ya declarado arriba, solo actualizar valor)
+    remainingNaps = targetNapCount - napsOfDay.length;
+    
+    // 🚨 VALIDACIÓN: Si ya hay suficientes siestas, no predecir más
+    if (remainingNaps <= 0) {
+      console.log(`⚠️ [WAKE TIME] Ya hay ${napsOfDay.length} siestas (target: ${targetNapCount}) - no se predecirán más`);
+      return {
+        naps: [],
+        totalNaps: 0,
+        basedOn: 'target-reached',
+        wakeTime: wakeTime.toISOString(),
+        message: `Ya se completaron las ${targetNapCount} siestas del día`
+      };
+    }
     
     console.log(`[WAKE TIME] Siestas a predecir: ${remainingNaps} (target: ${targetNapCount}, registradas: ${napsOfDay.length})`);
     
@@ -1721,6 +2770,32 @@ FORMATO DE RESPUESTA (JSON):
     } else {
       return { min: 4, optimal: 5, max: 6 }; // 4-6 horas
     }
+  }
+
+  getLatestNapEndForToday(naps, userTimezone = 'UTC') {
+    if (!naps || naps.length === 0) return null;
+    const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+    const napsToday = naps.filter(nap => {
+      const napDate = parseISO(nap.startTime);
+      return napDate >= todayInfo.start && napDate <= todayInfo.end;
+    });
+    if (napsToday.length === 0) return null;
+
+    let latestEnd = null;
+    napsToday.forEach((nap) => {
+      let napEnd = null;
+      if (nap.endTime) {
+        napEnd = parseISO(nap.endTime);
+      } else if (nap.startTime) {
+        const start = parseISO(nap.startTime);
+        const duration = nap.expectedDuration || nap.duration || 75;
+        napEnd = addMinutes(start, duration);
+      }
+      if (napEnd && (!latestEnd || napEnd > latestEnd)) {
+        latestEnd = napEnd;
+      }
+    });
+    return latestEnd;
   }
 
   /**
@@ -2275,6 +3350,51 @@ FORMATO DE RESPUESTA (JSON):
     }
     
     return bedtime.toISOString();
+  }
+
+  /**
+   * Ajustar bedtime a un rango razonable según la edad (hora local)
+   */
+  adjustBedtimeToAgeRange(bedtimeUTC, ageInMonths, userTimezone = 'UTC') {
+    const schedule = this.getDefaultScheduleByAge(ageInMonths);
+    const bedtimeStr = schedule.bedtime || '7:00 PM';
+    const [hourMin, period] = bedtimeStr.split(' ');
+    const [hour, min] = hourMin.split(':');
+    let maxHour24 = parseInt(hour, 10);
+    const minHour24 = 18; // 6:00 PM
+
+    if (period === 'PM' && maxHour24 !== 12) {
+      maxHour24 += 12;
+    } else if (period === 'AM' && maxHour24 === 12) {
+      maxHour24 = 0;
+    }
+
+    const maxMinutes = min ? parseInt(min, 10) : 0;
+    const maxHourFloat = maxHour24 + maxMinutes / 60;
+
+    const localBedtime = TimezoneHelper.utcToUserTime(bedtimeUTC, userTimezone);
+    const localHourFloat = localBedtime.getHours() + localBedtime.getMinutes() / 60;
+
+    let adjusted = false;
+    let adjustedLocal = new Date(localBedtime);
+
+    if (localHourFloat > maxHourFloat) {
+      adjustedLocal.setHours(maxHour24, maxMinutes, 0, 0);
+      adjusted = true;
+    } else if (localHourFloat < minHour24) {
+      adjustedLocal.setHours(minHour24, 0, 0, 0);
+      adjusted = true;
+    }
+
+    const adjustedUTC = adjusted ? TimezoneHelper.userTimeToUtc(adjustedLocal, userTimezone) : bedtimeUTC;
+
+    return {
+      adjustedUTC,
+      adjustedLocal,
+      adjusted,
+      maxHourLocal: maxHourFloat,
+      minHourLocal: minHour24
+    };
   }
 
   /**

@@ -11,12 +11,119 @@ const isValidUrl = (string) => {
   }
 };
 
+// Cache simple en memoria para respuestas pesadas (24h)
+const RESPONSE_CACHE = new Map();
+const CACHE_TTL_MS_24H = 24 * 60 * 60 * 1000;
+
+const buildCacheKey = (req) => {
+  const keys = Object.keys(req.query || {}).sort();
+  const queryString = keys.map(key => `${key}=${String(req.query[key])}`).join('&');
+  return `${req.path}?${queryString}`;
+};
+
+const getCachedResponse = (key) => {
+  const entry = RESPONSE_CACHE.get(key);
+  if (!entry) return null;
+  const ttlMs = entry.ttlMs || CACHE_TTL_MS_24H;
+  if (Date.now() - entry.timestamp > ttlMs) {
+    RESPONSE_CACHE.delete(key);
+    return null;
+  }
+  return entry.payload;
+};
+
+const setCachedResponse = (key, payload, ttlMs = null) => {
+  RESPONSE_CACHE.set(key, { timestamp: Date.now(), payload, ttlMs });
+};
+
+const parseDateSafe = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === 'object') {
+    if (typeof value.toDate === 'function') {
+      const converted = value.toDate();
+      return isNaN(converted.getTime()) ? null : converted;
+    }
+    if (typeof value._seconds === 'number') {
+      const converted = new Date(value._seconds * 1000);
+      return isNaN(converted.getTime()) ? null : converted;
+    }
+    if (typeof value.seconds === 'number') {
+      const converted = new Date(value.seconds * 1000);
+      return isNaN(converted.getTime()) ? null : converted;
+    }
+  }
+  const date = new Date(value);
+  return isNaN(date.getTime()) ? null : date;
+};
+
+const calculateWeeksFromBirthDate = (birthDate) => {
+  const start = parseDateSafe(birthDate);
+  if (!start) return null;
+  const now = new Date();
+  const diffMs = now.getTime() - start.getTime();
+  if (diffMs < 0) return null;
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  const weeks = Math.floor(diffDays / 7) + 1;
+  return Math.max(1, weeks);
+};
+
+const calculateMonthsFromBirthDate = (birthDate) => {
+  const start = parseDateSafe(birthDate);
+  if (!start) return null;
+  const now = new Date();
+  const diffMs = now.getTime() - start.getTime();
+  if (diffMs < 0) return null;
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  const months = Math.floor(diffDays / 30.44);
+  return Math.max(0, months);
+};
+
+const getWeeksFromChildData = (child) => {
+  if (!child) return null;
+  if (child.isUnborn) {
+    const info = getChildCurrentInfo(child);
+    return info.currentGestationWeeks || null;
+  }
+  if (child.birthDate) {
+    const birthDate = child.birthDate.toDate ? child.birthDate.toDate() : child.birthDate;
+    return calculateWeeksFromBirthDate(birthDate);
+  }
+  if (typeof child.ageInMonths === 'number') {
+    return Math.max(1, Math.round(child.ageInMonths * 4.3));
+  }
+  const info = getChildCurrentInfo(child);
+  if (info.currentAgeInMonths !== null && info.currentAgeInMonths !== undefined) {
+    return Math.max(1, Math.round(info.currentAgeInMonths * 4.3));
+  }
+  return null;
+};
+
+const getMonthsFromChildData = (child) => {
+  if (!child) return null;
+  if (child.isUnborn) return null;
+  if (child.birthDate) {
+    const birthDate = child.birthDate.toDate ? child.birthDate.toDate() : child.birthDate;
+    return calculateMonthsFromBirthDate(birthDate);
+  }
+  if (typeof child.ageInMonths === 'number') {
+    return Math.max(0, Math.floor(child.ageInMonths));
+  }
+  const info = getChildCurrentInfo(child);
+  if (info.currentAgeInMonths !== null && info.currentAgeInMonths !== undefined) {
+    return Math.max(0, Math.floor(info.currentAgeInMonths));
+  }
+  return null;
+};
+
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const multer = require('multer');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const OpenAI = require('openai');
+const { format } = require('date-fns');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -67,6 +174,9 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 
+// Compresión para respuestas más rápidas
+app.use(compression());
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -89,10 +199,19 @@ const upload = multer({
 // Middleware para manejar peticiones OPTIONS (preflight)
 app.options('*', cors());
 
-// Middleware de logging
+// Middleware de logging (ligero por defecto)
 app.use((req, res, next) => {
+  const start = Date.now();
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  console.log('📋 Headers recibidos:', req.headers);
+  if (process.env.LOG_HEADERS === 'true') {
+    console.log('📋 Headers recibidos:', req.headers);
+  }
+  res.on('finish', () => {
+    const ms = Date.now() - start;
+    if (ms >= 1000) {
+      console.log(`⏱️ [SLOW] ${req.method} ${req.path} - ${ms}ms`);
+    }
+  });
   next();
 });
 
@@ -1452,6 +1571,7 @@ app.post('/api/auth/signup', async (req, res) => {
 
     // Crear documento adicional en Firestore
     if (db) {
+      const defaultLocation = await getDefaultUserLocation();
       await db.collection('users').doc(userRecord.uid).set({
         email,
         displayName,
@@ -1459,6 +1579,7 @@ app.post('/api/auth/signup', async (req, res) => {
         childrenCount: childrenCount || 0, // Contador de hijos
         isPregnant: gender === 'F' ? (isPregnant || false) : false, // Solo mujeres pueden estar embarazadas
         gestationWeeks: gender === 'F' && isPregnant ? gestationWeeks : null, // Semanas de gestación
+        ...defaultLocation,
         createdAt: new Date(),
         updatedAt: new Date(),
         isActive: true
@@ -1468,8 +1589,8 @@ app.post('/api/auth/signup', async (req, res) => {
       displayName,
       gender,
       childrenCount,
-      isPregnant: gender === 'F' ? (isPregnant || false) : false,
-      gestationWeeks: gender === 'F' && isPregnant ? gestationWeeks : null
+        isPregnant: gender === 'F' ? (isPregnant || false) : false,
+        gestationWeeks: gender === 'F' && isPregnant ? gestationWeeks : null
     });
     }
 
@@ -1520,6 +1641,7 @@ app.post('/api/auth/login', async (req, res) => {
     console.log('✅ Usuario encontrado:', userRecord.uid);
     
     // Verificar que el usuario esté activo
+    let userProfile = null;
     if (db) {
       const userDoc = await db.collection('users').doc(userRecord.uid).get();
       
@@ -1529,6 +1651,7 @@ app.post('/api/auth/login', async (req, res) => {
           message: 'Usuario inactivo o no encontrado'
         });
       }
+      userProfile = userDoc.data();
       console.log('✅ Usuario verificado en Firestore');
     }
 
@@ -1536,14 +1659,29 @@ app.post('/api/auth/login', async (req, res) => {
     const customToken = await auth.createCustomToken(userRecord.uid);
     console.log('✅ Token personalizado generado para login');
 
+    const safeProfile = {
+      displayName: userProfile?.displayName || userRecord.displayName || userRecord.email?.split('@')[0],
+      name: userProfile?.name || userProfile?.displayName || userRecord.displayName || userRecord.email?.split('@')[0],
+      photoUrl: userProfile?.photoUrl || userRecord.photoURL || null,
+      gender: userProfile?.gender || null,
+      childrenCount: userProfile?.childrenCount || 0,
+      isPregnant: userProfile?.isPregnant || false,
+      gestationWeeks: userProfile?.gestationWeeks || null
+    };
+
     res.json({
       success: true,
       message: 'Login exitoso',
       data: {
         uid: userRecord.uid,
         email: userRecord.email,
-        displayName: userRecord.displayName,
-        customToken
+        displayName: safeProfile.displayName,
+        customToken,
+        isPregnant: safeProfile.isPregnant,
+        gestationWeeks: safeProfile.gestationWeeks,
+        childrenCount: safeProfile.childrenCount,
+        gender: safeProfile.gender,
+        profile: safeProfile
       }
     });
 
@@ -1870,6 +2008,7 @@ app.post('/api/auth/google-login', async (req, res) => {
       if (!userDoc.exists) {
         // Crear nuevo usuario en Firestore
         isNewUser = true;
+        const defaultLocation = await getDefaultUserLocation();
         const newUserData = {
           uid: uid,
           email: userRecord.email,
@@ -1881,6 +2020,7 @@ app.post('/api/auth/google-login', async (req, res) => {
           childrenCount: 0,
           isPregnant: false,
           gestationWeeks: null,
+          ...defaultLocation,
           isActive: true,
           createdAt: new Date(),
           updatedAt: new Date()
@@ -1922,6 +2062,17 @@ app.post('/api/auth/google-login', async (req, res) => {
     // Generar token personalizado para el cliente
     const customToken = await auth.createCustomToken(uid);
 
+    const userProfile = userDoc?.exists ? userDoc.data() : null;
+    const safeProfile = {
+      displayName: userProfile?.displayName || userRecord.displayName || userRecord.email?.split('@')[0],
+      name: userProfile?.name || userProfile?.displayName || userRecord.displayName || userRecord.email?.split('@')[0],
+      photoUrl: userProfile?.photoUrl || userRecord.photoURL || null,
+      gender: userProfile?.gender || null,
+      childrenCount: userProfile?.childrenCount || 0,
+      isPregnant: userProfile?.isPregnant || false,
+      gestationWeeks: userProfile?.gestationWeeks || null
+    };
+
     res.json({
       success: true,
       message: isNewUser ? 'Cuenta creada exitosamente' : 'Login exitoso',
@@ -1932,7 +2083,12 @@ app.post('/api/auth/google-login', async (req, res) => {
         displayName: userRecord.displayName,
         photoURL: userRecord.photoURL,
         emailVerified: userRecord.emailVerified,
-        customToken: customToken
+        customToken: customToken,
+        isPregnant: safeProfile.isPregnant,
+        gestationWeeks: safeProfile.gestationWeeks,
+        childrenCount: safeProfile.childrenCount,
+        gender: safeProfile.gender,
+        profile: safeProfile
       }
     });
 
@@ -2044,6 +2200,7 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
 
     if (!userDoc.exists) {
       // Crear en Firestore
+      const defaultLocation = await getDefaultUserLocation();
       const newUserData = {
         uid: uid,
         email: email,
@@ -2056,6 +2213,7 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
         childrenCount: 0,
         isPregnant: false,
         gestationWeeks: null,
+        ...defaultLocation,
         isActive: true,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -2099,6 +2257,17 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
     // Generar token personalizado
     const customToken = await auth.createCustomToken(uid);
 
+    const userProfile = userDoc.exists ? userDoc.data() : null;
+    const safeProfile = {
+      displayName: userProfile?.displayName || displayName || email?.split('@')[0],
+      name: userProfile?.name || userProfile?.displayName || displayName || email?.split('@')[0],
+      photoUrl: userProfile?.photoUrl || photoURL || null,
+      gender: userProfile?.gender || null,
+      childrenCount: userProfile?.childrenCount || 0,
+      isPregnant: userProfile?.isPregnant || false,
+      gestationWeeks: userProfile?.gestationWeeks || null
+    };
+
     res.json({
       success: true,
       message: isNewUser ? 'Cuenta creada exitosamente' : 'Login exitoso',
@@ -2109,7 +2278,12 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
         displayName: displayName || '',
         photoURL: photoURL || '',
         emailVerified: true,
-        customToken: customToken
+        customToken: customToken,
+        isPregnant: safeProfile.isPregnant,
+        gestationWeeks: safeProfile.gestationWeeks,
+        childrenCount: safeProfile.childrenCount,
+        gender: safeProfile.gender,
+        profile: safeProfile
       }
     });
 
@@ -2230,6 +2404,7 @@ app.post('/api/auth/apple-login', async (req, res) => {
           : fullName.givenName || fullName.familyName || '')
         : userRecord.displayName || '';
 
+      const defaultLocation = await getDefaultUserLocation();
       const newUserData = {
         uid: uid,
         email: email || userRecord.email,
@@ -2242,6 +2417,7 @@ app.post('/api/auth/apple-login', async (req, res) => {
         childrenCount: 0,
         isPregnant: false,
         gestationWeeks: null,
+        ...defaultLocation,
         isActive: true,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -2290,6 +2466,17 @@ app.post('/api/auth/apple-login', async (req, res) => {
     // Generar token personalizado
     const customToken = await auth.createCustomToken(uid);
 
+    const userProfile = userDoc.exists ? userDoc.data() : null;
+    const safeProfile = {
+      displayName: userProfile?.displayName || userRecord.displayName || (email || userRecord.email || '').split('@')[0],
+      name: userProfile?.name || userProfile?.displayName || userRecord.displayName || (email || userRecord.email || '').split('@')[0],
+      photoUrl: userProfile?.photoUrl || null,
+      gender: userProfile?.gender || null,
+      childrenCount: userProfile?.childrenCount || 0,
+      isPregnant: userProfile?.isPregnant || false,
+      gestationWeeks: userProfile?.gestationWeeks || null
+    };
+
     res.json({
       success: true,
       message: isNewUser ? 'Cuenta creada exitosamente' : 'Login exitoso',
@@ -2300,7 +2487,12 @@ app.post('/api/auth/apple-login', async (req, res) => {
         displayName: userRecord.displayName || '',
         photoURL: null,
         emailVerified: true,
-        customToken: customToken
+        customToken: customToken,
+        isPregnant: safeProfile.isPregnant,
+        gestationWeeks: safeProfile.gestationWeeks,
+        childrenCount: safeProfile.childrenCount,
+        gender: safeProfile.gender,
+        profile: safeProfile
       }
     });
 
@@ -2548,6 +2740,7 @@ app.post('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
     console.log('✅ [ADMIN] Usuario creado en Firebase Auth:', userRecord.uid);
 
     // Crear documento en Firestore
+    const defaultLocation = await getDefaultUserLocation();
     const userData = {
       email,
       displayName: displayName || email.split('@')[0],
@@ -2556,6 +2749,7 @@ app.post('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
       isActive: true,
       photoURL: null,
       childrenCount: 0,
+      ...defaultLocation,
       createdAt: new Date(),
       updatedAt: new Date(),
       lastLoginAt: null
@@ -4095,6 +4289,570 @@ app.delete('/api/admin/posts/:postId/comments/:commentId', authenticateToken, is
 
 // ========== GESTIÓN DE CATEGORÍAS ==========
 
+// ===== ENDPOINTS PARA LA APP =====
+
+// ============================================================================
+// 🌎 LOCATIONS (PAÍSES Y CIUDADES)
+// ============================================================================
+
+const resolveCountryCity = async (countryId, cityId) => {
+  const resolved = {
+    countryId: countryId ? String(countryId).trim() : null,
+    countryName: null,
+    cityId: cityId ? String(cityId).trim() : null,
+    cityName: null
+  };
+
+  let countryDoc = null;
+  if (resolved.countryId) {
+    countryDoc = await db.collection('countries').doc(resolved.countryId).get();
+    if (!countryDoc.exists || countryDoc.data().isActive === false) {
+      throw new Error('País no encontrado o inactivo');
+    }
+    resolved.countryName = countryDoc.data().name || null;
+  }
+
+  if (resolved.cityId) {
+    const cityDoc = await db.collection('cities').doc(resolved.cityId).get();
+    if (!cityDoc.exists || cityDoc.data().isActive === false) {
+      throw new Error('Ciudad no encontrada o inactiva');
+    }
+    const cityData = cityDoc.data();
+    resolved.cityName = cityData.name || null;
+    if (cityData.countryId) {
+      if (resolved.countryId && cityData.countryId !== resolved.countryId) {
+        throw new Error('La ciudad no pertenece al país seleccionado');
+      }
+      resolved.countryId = cityData.countryId;
+      if (!resolved.countryName) {
+        const derivedCountryDoc = await db.collection('countries').doc(cityData.countryId).get();
+        if (!derivedCountryDoc.exists || derivedCountryDoc.data().isActive === false) {
+          throw new Error('País no encontrado o inactivo');
+        }
+        resolved.countryName = derivedCountryDoc.data().name || null;
+      }
+    }
+  }
+
+  return resolved;
+};
+
+const buildLocationFields = (data) => ({
+  countryId: data.countryId || null,
+  countryName: data.countryName || null,
+  cityId: data.cityId || null,
+  cityName: data.cityName || null
+});
+
+const DEFAULT_COUNTRY_NAME = 'Ecuador';
+const DEFAULT_CITY_NAME = 'Quito';
+
+const getDefaultUserLocation = async () => {
+  if (!db) {
+    return {
+      countryId: null,
+      countryName: DEFAULT_COUNTRY_NAME,
+      cityId: null,
+      cityName: DEFAULT_CITY_NAME
+    };
+  }
+
+  let countryId = null;
+  let cityId = null;
+  let countryName = DEFAULT_COUNTRY_NAME;
+  let cityName = DEFAULT_CITY_NAME;
+
+  const countrySnapshot = await db.collection('countries')
+    .where('name', '==', DEFAULT_COUNTRY_NAME)
+    .limit(1)
+    .get();
+  if (!countrySnapshot.empty) {
+    countryId = countrySnapshot.docs[0].id;
+  } else {
+    const ref = await db.collection('countries').add({
+      name: DEFAULT_COUNTRY_NAME,
+      isActive: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    countryId = ref.id;
+  }
+
+  const citySnapshot = await db.collection('cities')
+    .where('name', '==', DEFAULT_CITY_NAME)
+    .where('countryId', '==', countryId)
+    .limit(1)
+    .get();
+  if (!citySnapshot.empty) {
+    cityId = citySnapshot.docs[0].id;
+  } else {
+    const ref = await db.collection('cities').add({
+      name: DEFAULT_CITY_NAME,
+      countryId,
+      isActive: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    cityId = ref.id;
+  }
+
+  return {
+    countryId,
+    countryName,
+    cityId,
+    cityName
+  };
+};
+
+const filterRecommendationsByLocation = ({
+  items,
+  userLat,
+  userLng,
+  cityId,
+  countryId,
+  maxDistanceKm = 100
+}) => {
+  const normalizedCityId = cityId ? String(cityId).trim() : null;
+  const normalizedCountryId = countryId ? String(countryId).trim() : null;
+  const cappedMax = Math.min(Math.max(Number(maxDistanceKm) || 100, 1), 100);
+  const hasCoords = Number.isFinite(userLat) && Number.isFinite(userLng);
+
+  const withDistance = hasCoords
+    ? items.map(item => {
+        if (item.latitude && item.longitude) {
+          const distance = calculateDistance(userLat, userLng, item.latitude, item.longitude);
+          return {
+            ...item,
+            distance: Math.round(distance * 10) / 10
+          };
+        }
+        return { ...item };
+      })
+    : items.map(item => ({ ...item }));
+
+  if (hasCoords) {
+    const nearby = withDistance.filter(item => typeof item.distance === 'number' && item.distance <= cappedMax);
+    if (nearby.length > 0) return nearby;
+  }
+
+  const baseList = items;
+  if (normalizedCityId) {
+    const cityMatches = baseList.filter(item => String(item.cityId || '') === normalizedCityId);
+    if (cityMatches.length > 0) return cityMatches;
+  }
+
+  if (normalizedCountryId) {
+    const countryMatches = baseList.filter(item => String(item.countryId || '') === normalizedCountryId);
+    if (countryMatches.length > 0) return countryMatches;
+  }
+
+  return [];
+};
+
+const reverseGeocode = async (latitude, longitude) => {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}&zoom=10&addressdetails=1`;
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'munpa-backend/1.0 (support@munpa.online)'
+    }
+  });
+  if (!response.ok) {
+    throw new Error('No se pudo resolver la ubicación');
+  }
+  const data = await response.json();
+  const address = data.address || {};
+  const city = address.city || address.town || address.village || address.municipality || address.state_district || null;
+  const country = address.country || null;
+  return { city, country, raw: address };
+};
+
+const getUserLocationFromProfile = async (userId) => {
+  if (!db) return {};
+  const userDoc = await db.collection('users').doc(userId).get();
+  if (!userDoc.exists) return {};
+  const data = userDoc.data();
+  return {
+    latitude: data.latitude ?? null,
+    longitude: data.longitude ?? null,
+    cityId: data.cityId || null,
+    countryId: data.countryId || null
+  };
+};
+
+const getUserCountryForMarketplace = async (userId) => {
+  const location = await getUserLocationFromProfile(userId);
+  if (!location.countryId) {
+    throw new Error('Ubicación no disponible. Actualiza tu perfil antes de buscar.');
+  }
+  return location;
+};
+
+const normalizeMarketplaceLocation = (data) => {
+  const location = data.location ? { ...data.location } : null;
+  if (location) {
+    if (data.cityName) location.city = data.cityName;
+    if (data.countryName) location.country = data.countryName;
+  }
+  return location;
+};
+
+const getCategoriesMap = async () => {
+  if (!db) return new Map();
+  const cacheKey = 'categories_map';
+  const cached = getCachedResponse(cacheKey);
+  if (cached) return cached;
+
+  const snapshot = await db.collection('categories').get();
+  const map = new Map();
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    map.set(doc.id, {
+      id: doc.id,
+      name: data.name,
+      icon: data.icon,
+      imageUrl: data.imageUrl
+    });
+  });
+
+  setCachedResponse(cacheKey, map, 10 * 60 * 1000);
+  return map;
+};
+
+// ===== ENDPOINTS APP (LECTURA) =====
+
+app.get('/api/locations/countries', authenticateToken, async (req, res) => {
+  try {
+    const snapshot = await db.collection('countries')
+      .where('isActive', '==', true)
+      .orderBy('name', 'asc')
+      .get();
+
+    const countries = snapshot.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name
+    }));
+
+    res.json({ success: true, data: countries });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error obteniendo países:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo países', error: error.message });
+  }
+});
+
+app.get('/api/locations/cities', authenticateToken, async (req, res) => {
+  try {
+    const { countryId } = req.query;
+    if (!countryId) {
+      return res.status(400).json({ success: false, message: 'countryId es requerido' });
+    }
+
+    const snapshot = await db.collection('cities')
+      .where('countryId', '==', String(countryId))
+      .where('isActive', '==', true)
+      .orderBy('name', 'asc')
+      .get();
+
+    const cities = snapshot.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name,
+      countryId: doc.data().countryId
+    }));
+
+    res.json({ success: true, data: cities });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error obteniendo ciudades:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo ciudades', error: error.message });
+  }
+});
+
+// Resolver ciudad y país desde lat/long (app)
+app.get('/api/locations/reverse', authenticateToken, async (req, res) => {
+  try {
+    const { latitude, longitude } = req.query;
+    if (!latitude || !longitude) {
+      return res.status(400).json({ success: false, message: 'latitude y longitude son requeridos' });
+    }
+
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      return res.status(400).json({ success: false, message: 'latitude y longitude deben ser números válidos' });
+    }
+
+    const result = await reverseGeocode(lat, lng);
+    res.json({
+      success: true,
+      data: {
+        latitude: lat,
+        longitude: lng,
+        city: result.city,
+        country: result.country
+      }
+    });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error reverse geocode:', error);
+    res.status(500).json({ success: false, message: 'Error resolviendo ubicación', error: error.message });
+  }
+});
+
+// ===== ENDPOINTS ADMIN (CRUD) =====
+
+app.post('/api/admin/locations/countries', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, isActive = true } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ success: false, message: 'name es requerido' });
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const payload = {
+      name: String(name).trim(),
+      isActive: isActive === true || isActive === 'true',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const ref = await db.collection('countries').add(payload);
+    res.json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error creando país:', error);
+    res.status(500).json({ success: false, message: 'Error creando país', error: error.message });
+  }
+});
+
+app.get('/api/admin/locations/countries', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.collection('countries').orderBy('name', 'asc').get();
+    const countries = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    res.json({ success: true, data: countries });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error obteniendo países (admin):', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo países', error: error.message });
+  }
+});
+
+app.put('/api/admin/locations/countries/:countryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { countryId } = req.params;
+    const { name, isActive } = req.body;
+
+    const ref = db.collection('countries').doc(countryId);
+    const doc = await ref.get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'País no encontrado' });
+    }
+
+    const update = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    if (name !== undefined) update.name = String(name).trim();
+    if (isActive !== undefined) update.isActive = isActive === true || isActive === 'true';
+
+    await ref.update(update);
+    res.json({ success: true, message: 'País actualizado' });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error actualizando país:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando país', error: error.message });
+  }
+});
+
+app.post('/api/admin/locations/cities', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, countryId, isActive = true } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ success: false, message: 'name es requerido' });
+    }
+    if (!countryId) {
+      return res.status(400).json({ success: false, message: 'countryId es requerido' });
+    }
+
+    const countryDoc = await db.collection('countries').doc(String(countryId)).get();
+    if (!countryDoc.exists || countryDoc.data().isActive === false) {
+      return res.status(400).json({ success: false, message: 'País no encontrado o inactivo' });
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const payload = {
+      name: String(name).trim(),
+      countryId: String(countryId),
+      isActive: isActive === true || isActive === 'true',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const ref = await db.collection('cities').add(payload);
+    res.json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error creando ciudad:', error);
+    res.status(500).json({ success: false, message: 'Error creando ciudad', error: error.message });
+  }
+});
+
+app.get('/api/admin/locations/cities', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { countryId } = req.query;
+    let query = db.collection('cities');
+    if (countryId) query = query.where('countryId', '==', String(countryId));
+    const snapshot = await query.orderBy('name', 'asc').get();
+    const cities = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    res.json({ success: true, data: cities });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error obteniendo ciudades (admin):', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo ciudades', error: error.message });
+  }
+});
+
+app.put('/api/admin/locations/cities/:cityId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { cityId } = req.params;
+    const { name, countryId, isActive } = req.body;
+
+    const ref = db.collection('cities').doc(cityId);
+    const doc = await ref.get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Ciudad no encontrada' });
+    }
+
+    const update = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    if (name !== undefined) update.name = String(name).trim();
+    if (countryId !== undefined) {
+      const countryDoc = await db.collection('countries').doc(String(countryId)).get();
+      if (!countryDoc.exists || countryDoc.data().isActive === false) {
+        return res.status(400).json({ success: false, message: 'País no encontrado o inactivo' });
+      }
+      update.countryId = String(countryId);
+    }
+    if (isActive !== undefined) update.isActive = isActive === true || isActive === 'true';
+
+    await ref.update(update);
+    res.json({ success: true, message: 'Ciudad actualizada' });
+  } catch (error) {
+    console.error('❌ [LOCATIONS] Error actualizando ciudad:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando ciudad', error: error.message });
+  }
+});
+
+// Crear recomendación (usuario app) - queda pendiente de aprobación
+app.post('/api/recommendations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const {
+      categoryId,
+      name,
+      description,
+      address,
+      latitude,
+      longitude,
+      phone,
+      email,
+      website,
+      facebook,
+      instagram,
+      twitter,
+      whatsapp,
+      imageUrl,
+      countryId,
+      cityId
+    } = req.body;
+
+    if (!categoryId || !name) {
+      return res.status(400).json({
+        success: false,
+        message: 'categoryId y name son requeridos'
+      });
+    }
+
+    // Verificar que la categoría existe y está activa
+    const categoryDoc = await db.collection('categories').doc(categoryId).get();
+    if (!categoryDoc.exists || !categoryDoc.data().isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría seleccionada no existe o está inactiva'
+      });
+    }
+
+    let locationData = { countryId: null, countryName: null, cityId: null, cityName: null };
+    try {
+      locationData = await resolveCountryCity(countryId, cityId);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message
+      });
+    }
+
+    const recommendationData = {
+      categoryId,
+      name: name.trim(),
+      description: description ? description.trim() : '',
+      address: address ? address.trim() : '',
+      latitude: latitude !== undefined && latitude !== null ? parseFloat(latitude) : null,
+      longitude: longitude !== undefined && longitude !== null ? parseFloat(longitude) : null,
+      phone: phone ? phone.trim() : '',
+      email: email ? email.trim() : '',
+      website: website ? website.trim() : '',
+      facebook: facebook ? facebook.trim() : '',
+      instagram: instagram ? instagram.trim() : '',
+      twitter: twitter ? twitter.trim() : '',
+      whatsapp: whatsapp ? whatsapp.trim() : '',
+      imageUrl: imageUrl || null,
+      countryId: locationData.countryId,
+      countryName: locationData.countryName,
+      cityId: locationData.cityId,
+      cityName: locationData.cityName,
+      // Campos de control/moderación
+      isActive: false, // pendiente de aprobación
+      verified: false,
+      status: 'pending',
+      submittedBy: userId,
+      submittedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // Stats iniciales
+      totalReviews: 0,
+      averageRating: 0,
+      // Badges y features por defecto
+      badges: [],
+      features: {
+        hasChangingTable: false,
+        hasNursingRoom: false,
+        hasParking: false,
+        isStrollerAccessible: false,
+        acceptsEmergencies: false,
+        is24Hours: false
+      },
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const recRef = await db.collection('recommendations').add(recommendationData);
+
+    console.log('✅ [APP] Recomendación creada (pending):', recRef.id);
+
+    res.status(201).json({
+      success: true,
+      message: 'Recomendación enviada para revisión',
+      data: {
+        id: recRef.id,
+        ...recommendationData
+      }
+    });
+  } catch (error) {
+    console.error('❌ [APP] Error creando recomendación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando recomendación',
+      error: error.message
+    });
+  }
+});
+
 // ===== ENDPOINTS PARA LA APP (SOLO LECTURA) =====
 
 // Obtener todas las categorías activas (para la app)
@@ -5503,90 +6261,186 @@ app.get('/api/recommendations/favorites/share', authenticateToken, async (req, r
 // Obtener todos los recomendados activos (para la app)
 app.get('/api/recommendations', authenticateToken, async (req, res) => {
   try {
-    const { categoryId, page = 1, limit = 20 } = req.query;
+    const { categoryId, page = 1, limit = 20, latitude, longitude, cityId, countryId, maxDistanceKm = 100 } = req.query;
     
     const pageNumber = parseInt(page);
     const limitNumber = parseInt(limit);
     
     console.log('⭐ [APP] Obteniendo recomendados', categoryId ? `para categoría: ${categoryId}` : '', `(página ${pageNumber}, límite ${limitNumber})`);
 
-    // Construir query para contar totales
-    let countQuery = db.collection('recommendations')
-      .where('isActive', '==', true);
+    const hasCoords = latitude !== undefined && longitude !== undefined;
+    const profileLocation = await getUserLocationFromProfile(req.user.uid);
+    const userLat = hasCoords ? parseFloat(latitude) : parseFloat(profileLocation.latitude);
+    const userLng = hasCoords ? parseFloat(longitude) : parseFloat(profileLocation.longitude);
+    const effectiveCityId = cityId || profileLocation.cityId || null;
+    const effectiveCountryId = countryId || profileLocation.countryId || null;
 
-    if (categoryId) {
-      countQuery = countQuery.where('categoryId', '==', categoryId);
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) {
+      if (!effectiveCityId && !effectiveCountryId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ubicación no disponible. Envía latitude/longitude o actualiza tu perfil.'
+        });
+      }
     }
 
-    // Obtener total de documentos
-    const countSnapshot = await countQuery.get();
-    const total = countSnapshot.size;
+      const cacheKey = `${req.path}?uid=${req.user.uid}&categoryId=${categoryId || ''}&page=${pageNumber}&limit=${limitNumber}&lat=${Number.isFinite(userLat) ? userLat : ''}&lng=${Number.isFinite(userLng) ? userLng : ''}&cityId=${effectiveCityId || ''}&countryId=${effectiveCountryId || ''}&maxDistanceKm=${maxDistanceKm}`;
+      const cached = getCachedResponse(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
 
-    console.log(`📊 [APP] Total de recomendaciones: ${total}`);
+      let query = db.collection('recommendations')
+        .where('isActive', '==', true);
+      if (effectiveCountryId) {
+        query = query.where('countryId', '==', effectiveCountryId);
+      }
+      if (categoryId) {
+        query = query.where('categoryId', '==', categoryId);
+      }
 
-    // Construir query paginada
+      const snapshot = await query.get();
+      const categoriesMap = await getCategoriesMap();
+      const baseList = await Promise.all(snapshot.docs.map(async (doc) => {
+        const data = doc.data();
+        const categoryInfo = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+
+        return {
+          id: doc.id,
+          name: data.name,
+          description: data.description,
+          address: data.address,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          phone: data.phone,
+          email: data.email,
+          website: data.website,
+          facebook: data.facebook,
+          instagram: data.instagram,
+          twitter: data.twitter,
+          whatsapp: data.whatsapp,
+          imageUrl: data.imageUrl,
+          totalReviews: data.totalReviews || 0,
+          averageRating: data.averageRating || 0,
+          category: categoryInfo,
+          ...buildLocationFields(data),
+          // Badges y features
+          verified: data.verified || false,
+          badges: data.badges || [],
+          features: data.features || {
+            hasChangingTable: false,
+            hasNursingRoom: false,
+            hasParking: false,
+            isStrollerAccessible: false,
+            acceptsEmergencies: false,
+            is24Hours: false
+          }
+        };
+      }));
+
+      const filtered = filterRecommendationsByLocation({
+        items: baseList,
+        userLat: Number.isFinite(userLat) ? userLat : null,
+        userLng: Number.isFinite(userLng) ? userLng : null,
+        cityId: effectiveCityId,
+        countryId: effectiveCountryId,
+        maxDistanceKm
+      }).sort((a, b) => {
+        const aDist = typeof a.distance === 'number' ? a.distance : Number.POSITIVE_INFINITY;
+        const bDist = typeof b.distance === 'number' ? b.distance : Number.POSITIVE_INFINITY;
+        return aDist - bDist;
+      });
+
+      const total = filtered.length;
+      const startIndex = (pageNumber - 1) * limitNumber;
+      const endIndex = startIndex + limitNumber;
+      const paginated = filtered.slice(startIndex, endIndex);
+
+      const responsePayload = {
+        success: true,
+        data: paginated,
+        pagination: {
+          total,
+          page: pageNumber,
+          limit: limitNumber,
+          totalPages: Math.ceil(total / limitNumber),
+          hasNextPage: pageNumber * limitNumber < total,
+          hasPreviousPage: pageNumber > 1
+        },
+        meta: {
+          latitude: Number.isFinite(userLat) ? userLat : null,
+          longitude: Number.isFinite(userLng) ? userLng : null,
+          cityId: effectiveCityId,
+          countryId: effectiveCountryId,
+          maxDistanceKm: Math.min(Math.max(Number(maxDistanceKm) || 100, 1), 100)
+        }
+      };
+
+      setCachedResponse(cacheKey, responsePayload, 10 * 60 * 1000);
+      return res.json(responsePayload);
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo recomendados:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendados',
+      error: error.message
+    });
+  }
+});
+
+// Buscar recomendados por texto (APP)
+app.get('/api/recommendations/search', authenticateToken, async (req, res) => {
+  try {
+    const { q, categoryId, page = 1, limit = 20 } = req.query;
+
+    if (!q || !String(q).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'q es requerido'
+      });
+    }
+
+    const pageNumber = parseInt(page);
+    const limitNumber = parseInt(limit);
+
+    const profileLocation = await getUserLocationFromProfile(req.user.uid);
+    const userLat = Number.isFinite(parseFloat(profileLocation.latitude)) ? parseFloat(profileLocation.latitude) : null;
+    const userLng = Number.isFinite(parseFloat(profileLocation.longitude)) ? parseFloat(profileLocation.longitude) : null;
+    const effectiveCityId = profileLocation.cityId || null;
+    const effectiveCountryId = profileLocation.countryId || null;
+
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) {
+      if (!effectiveCityId && !effectiveCountryId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ubicación no disponible. Actualiza tu perfil antes de buscar.'
+        });
+      }
+    }
+
+    const cacheKey = `${req.path}?uid=${req.user.uid}&q=${String(q).trim().toLowerCase()}&categoryId=${categoryId || ''}&page=${pageNumber}&limit=${limitNumber}&cityId=${effectiveCityId || ''}&countryId=${effectiveCountryId || ''}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     let query = db.collection('recommendations')
       .where('isActive', '==', true);
-
-    // Si hay filtro de categoría, agregarlo
+    if (effectiveCountryId) {
+      query = query.where('countryId', '==', effectiveCountryId);
+    }
     if (categoryId) {
       query = query.where('categoryId', '==', categoryId);
     }
 
-    // Agregar ordenamiento y paginación
-    let snapshot;
-    try {
-      query = query
-        .orderBy('createdAt', 'desc')
-        .limit(limitNumber)
-        .offset((pageNumber - 1) * limitNumber);
-      
-      snapshot = await query.get();
-    } catch (indexError) {
-      // Si falla por falta de índice, usar paginación en memoria
-      console.warn('⚠️ [APP] Índice compuesto no disponible, usando paginación en memoria');
-      
-      let simpleQuery = db.collection('recommendations')
-        .where('isActive', '==', true);
-      
-      if (categoryId) {
-        simpleQuery = simpleQuery.where('categoryId', '==', categoryId);
-      }
-      
-      const allDocs = await simpleQuery.get();
-      
-      // Ordenar en memoria
-      const sortedDocs = allDocs.docs.sort((a, b) => {
-        const aTime = a.data().createdAt?.toDate() || new Date(0);
-        const bTime = b.data().createdAt?.toDate() || new Date(0);
-        return bTime - aTime;
-      });
-      
-      // Paginar en memoria
-      const startIndex = (pageNumber - 1) * limitNumber;
-      const endIndex = startIndex + limitNumber;
-      const paginatedDocs = sortedDocs.slice(startIndex, endIndex);
-      
-      // Crear objeto compatible con snapshot
-      snapshot = { docs: paginatedDocs };
-    }
+    const snapshot = await query.get();
+    const categoriesMap = await getCategoriesMap();
+    const searchText = String(q).trim().toLowerCase();
 
-    const recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
+    const baseList = await Promise.all(snapshot.docs.map(async (doc) => {
       const data = doc.data();
-      
-      // Obtener información de la categoría
-      let categoryInfo = null;
-      if (data.categoryId) {
-        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
-        if (categoryDoc.exists) {
-          const catData = categoryDoc.data();
-          categoryInfo = {
-            id: categoryDoc.id,
-            name: catData.name,
-            icon: catData.icon
-          };
-        }
-      }
+      const categoryInfo = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
 
       return {
         id: doc.id,
@@ -5606,6 +6460,7 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
         totalReviews: data.totalReviews || 0,
         averageRating: data.averageRating || 0,
         category: categoryInfo,
+        ...buildLocationFields(data),
         // Badges y features
         verified: data.verified || false,
         badges: data.badges || [],
@@ -5620,11 +6475,39 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
       };
     }));
 
-    console.log(`✅ [APP] Devolviendo ${recommendations.length} recomendaciones de ${total} totales`);
+    const textMatches = baseList.filter(item => {
+      const haystack = [
+        item.name,
+        item.description,
+        item.address
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(searchText);
+    });
 
-    res.json({
+    const filtered = filterRecommendationsByLocation({
+      items: textMatches,
+      userLat: Number.isFinite(userLat) ? userLat : null,
+      userLng: Number.isFinite(userLng) ? userLng : null,
+      cityId: effectiveCityId,
+      countryId: effectiveCountryId,
+      maxDistanceKm: 100
+    }).sort((a, b) => {
+      const aDist = Number.isFinite(a.distance) ? a.distance : Number.POSITIVE_INFINITY;
+      const bDist = Number.isFinite(b.distance) ? b.distance : Number.POSITIVE_INFINITY;
+      return aDist - bDist;
+    });
+
+    const total = filtered.length;
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const endIndex = startIndex + limitNumber;
+    const paginated = filtered.slice(startIndex, endIndex);
+
+    const responsePayload = {
       success: true,
-      data: recommendations,
+      data: paginated,
       pagination: {
         total,
         page: pageNumber,
@@ -5632,14 +6515,24 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
         totalPages: Math.ceil(total / limitNumber),
         hasNextPage: pageNumber * limitNumber < total,
         hasPreviousPage: pageNumber > 1
+      },
+      meta: {
+        query: searchText,
+        latitude: Number.isFinite(userLat) ? userLat : null,
+        longitude: Number.isFinite(userLng) ? userLng : null,
+        cityId: effectiveCityId,
+        countryId: effectiveCountryId,
+        maxDistanceKm: 100
       }
-    });
+    };
 
+    setCachedResponse(cacheKey, responsePayload, 10 * 60 * 1000);
+    res.json(responsePayload);
   } catch (error) {
-    console.error('❌ [APP] Error obteniendo recomendados:', error);
+    console.error('❌ [APP] Error buscando recomendados:', error);
     res.status(500).json({
       success: false,
-      message: 'Error obteniendo recomendados',
+      message: 'Error buscando recomendados',
       error: error.message
     });
   }
@@ -5650,117 +6543,106 @@ app.get('/api/recommendations', authenticateToken, async (req, res) => {
 // Obtener recomendaciones cercanas ordenadas por distancia (APP)
 app.get('/api/recommendations/nearby', authenticateToken, async (req, res) => {
   try {
-    const { latitude, longitude, radius = 10, categoryId, limit = 20 } = req.query;
+    const { latitude, longitude, radius = 10, categoryId, limit = 20, cityId, countryId } = req.query;
     
     console.log('📍 [APP] Obteniendo recomendaciones cercanas:', { latitude, longitude, radius });
 
-    // Validar parámetros requeridos
-    if (!latitude || !longitude) {
+    const hasCoords = latitude !== undefined && longitude !== undefined;
+    const profileLocation = await getUserLocationFromProfile(req.user.uid);
+    const userLat = hasCoords ? parseFloat(latitude) : parseFloat(profileLocation.latitude);
+    const userLng = hasCoords ? parseFloat(longitude) : parseFloat(profileLocation.longitude);
+    const effectiveCityId = cityId || profileLocation.cityId || null;
+    const effectiveCountryId = countryId || profileLocation.countryId || null;
+
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) {
       return res.status(400).json({
         success: false,
-        message: 'Se requieren latitude y longitude'
+        message: 'Ubicación no disponible. Actualiza tu perfil antes de buscar.'
       });
     }
 
-    const userLat = parseFloat(latitude);
-    const userLng = parseFloat(longitude);
-    const maxRadius = parseFloat(radius);
-
-    if (isNaN(userLat) || isNaN(userLng)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Latitude y longitude deben ser números válidos'
-      });
-    }
+    const maxRadius = Math.min(parseFloat(radius), 100);
 
     // Obtener recomendaciones activas (filtrar por categoría si se proporciona)
     let query = db.collection('recommendations')
       .where('isActive', '==', true);
+    if (effectiveCountryId) {
+      query = query.where('countryId', '==', effectiveCountryId);
+    }
 
     if (categoryId) {
       query = query.where('categoryId', '==', categoryId);
     }
 
     const snapshot = await query.get();
+    const categoriesMap = await getCategoriesMap();
 
     // Calcular distancia para cada recomendación y filtrar por radio
     const recommendationsWithDistance = await Promise.all(
-      snapshot.docs
-        .filter(doc => {
-          const data = doc.data();
-          // Solo incluir recomendaciones con coordenadas válidas
-          return data.latitude && data.longitude;
-        })
-        .map(async (doc) => {
-          const data = doc.data();
-          
-          // Calcular distancia usando fórmula de Haversine
-          const distance = calculateDistance(
+      snapshot.docs.map(async (doc) => {
+        const data = doc.data();
+        let distance = null;
+        let estimatedTime = null;
+        if (data.latitude && data.longitude) {
+          distance = calculateDistance(
             userLat,
             userLng,
             data.latitude,
             data.longitude
           );
-
-          // Filtrar por radio máximo
-          if (distance > maxRadius) {
-            return null;
-          }
-
-          // Calcular tiempo estimado (asumiendo 40 km/h promedio en ciudad)
-          const estimatedTime = calculateEstimatedTime(distance);
+          estimatedTime = calculateEstimatedTime(distance);
+        }
 
           // Obtener información de la categoría
-          let categoryInfo = null;
-          if (data.categoryId) {
-            const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
-            if (categoryDoc.exists) {
-              const catData = categoryDoc.data();
-              categoryInfo = {
-                id: categoryDoc.id,
-                name: catData.name,
-                icon: catData.icon,
-                imageUrl: catData.imageUrl
-              };
-            }
-          }
+          const categoryInfo = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
 
-          return {
-            id: doc.id,
-            name: data.name,
-            description: data.description,
-            address: data.address,
-            latitude: data.latitude,
-            longitude: data.longitude,
-            phone: data.phone,
-            email: data.email,
-            website: data.website,
-            imageUrl: data.imageUrl,
-            totalReviews: data.totalReviews || 0,
-            averageRating: data.averageRating || 0,
-            distance: Math.round(distance * 10) / 10, // Redondear a 1 decimal
-            estimatedTime: estimatedTime,
-            category: categoryInfo,
-            // Badges y features
-            verified: data.verified || false,
-            badges: data.badges || [],
-            features: data.features || {
-              hasChangingTable: false,
-              hasNursingRoom: false,
-              hasParking: false,
-              isStrollerAccessible: false,
-              acceptsEmergencies: false,
-              is24Hours: false
-            }
-          };
-        })
+        return {
+          id: doc.id,
+          name: data.name,
+          description: data.description,
+          address: data.address,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          phone: data.phone,
+          email: data.email,
+          website: data.website,
+          imageUrl: data.imageUrl,
+          totalReviews: data.totalReviews || 0,
+          averageRating: data.averageRating || 0,
+          distance: typeof distance === 'number' ? Math.round(distance * 10) / 10 : null,
+          estimatedTime,
+          category: categoryInfo,
+          ...buildLocationFields(data),
+          // Badges y features
+          verified: data.verified || false,
+          badges: data.badges || [],
+          features: data.features || {
+            hasChangingTable: false,
+            hasNursingRoom: false,
+            hasParking: false,
+            isStrollerAccessible: false,
+            acceptsEmergencies: false,
+            is24Hours: false
+          }
+        };
+      })
     );
 
-    // Filtrar nulls (fuera de radio) y ordenar por distancia
-    const validRecommendations = recommendationsWithDistance
-      .filter(rec => rec !== null)
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, parseInt(limit));
+    const baseList = recommendationsWithDistance.filter(rec => rec !== null);
+    const filtered = filterRecommendationsByLocation({
+      items: baseList,
+      userLat,
+      userLng,
+      cityId: effectiveCityId,
+      countryId: effectiveCountryId,
+      maxDistanceKm: maxRadius
+    }).sort((a, b) => {
+      const aDist = typeof a.distance === 'number' ? a.distance : Number.POSITIVE_INFINITY;
+      const bDist = typeof b.distance === 'number' ? b.distance : Number.POSITIVE_INFINITY;
+      return aDist - bDist;
+    });
+
+    const validRecommendations = filtered.slice(0, parseInt(limit));
 
     res.json({
       success: true,
@@ -5771,12 +6653,172 @@ app.get('/api/recommendations/nearby', authenticateToken, async (req, res) => {
           longitude: userLng
         },
         radius: maxRadius,
+        cityId: effectiveCityId,
+        countryId: effectiveCountryId,
         found: validRecommendations.length
       }
     });
 
   } catch (error) {
     console.error('❌ [APP] Error obteniendo recomendaciones cercanas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo recomendaciones cercanas',
+      error: error.message
+    });
+  }
+});
+
+// Obtener top 3 recomendaciones mejor calificadas y cercanas (APP)
+app.get('/api/recommendations/nearby/top', authenticateToken, async (req, res) => {
+  try {
+    const { latitude, longitude, radius = 10, categoryId, limit = 3, minReviews = 0, minRating = 0, cityId, countryId } = req.query;
+    
+    console.log('⭐📍 [APP] Top recomendaciones cercanas:', { latitude, longitude, radius });
+
+    const hasCoords = latitude !== undefined && longitude !== undefined;
+    const profileLocation = await getUserLocationFromProfile(req.user.uid);
+    const userLat = hasCoords ? parseFloat(latitude) : parseFloat(profileLocation.latitude);
+    const userLng = hasCoords ? parseFloat(longitude) : parseFloat(profileLocation.longitude);
+    const effectiveCityId = cityId || profileLocation.cityId || null;
+    const effectiveCountryId = countryId || profileLocation.countryId || null;
+
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ubicación no disponible. Actualiza tu perfil antes de buscar.'
+      });
+    }
+
+    const cacheKey = `${req.path}?uid=${req.user.uid}&lat=${userLat}&lng=${userLng}&cityId=${effectiveCityId || ''}&countryId=${effectiveCountryId || ''}&radius=${radius}&categoryId=${categoryId || ''}&limit=${limit}&minReviews=${minReviews}&minRating=${minRating}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+    const maxRadius = Math.min(parseFloat(radius), 100);
+    const limitNumber = Math.min(parseInt(limit), 10);
+    const minReviewsNumber = Math.max(parseInt(minReviews), 0);
+    const minRatingNumber = Math.max(parseFloat(minRating), 0);
+
+    if (isNaN(userLat) || isNaN(userLng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude y longitude deben ser números válidos'
+      });
+    }
+
+    let query = db.collection('recommendations')
+      .where('isActive', '==', true);
+
+    if (categoryId) {
+      query = query.where('categoryId', '==', categoryId);
+    }
+
+    const snapshot = await query.get();
+
+    const recommendationsWithDistance = await Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const data = doc.data();
+        let distance = null;
+        if (data.latitude && data.longitude) {
+          distance = calculateDistance(
+            userLat,
+            userLng,
+            data.latitude,
+            data.longitude
+          );
+        }
+
+        const categoryInfo = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+
+        const totalReviews = data.totalReviews || 0;
+        const averageRating = data.averageRating || 0;
+
+        return {
+          id: doc.id,
+          name: data.name,
+          description: data.description,
+          address: data.address,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          phone: data.phone,
+          email: data.email,
+          website: data.website,
+          imageUrl: data.imageUrl,
+          totalReviews: totalReviews,
+          averageRating: averageRating,
+          rating: averageRating,
+          reviews: totalReviews,
+          distance: typeof distance === 'number' ? Math.round(distance * 10) / 10 : null,
+          category: categoryInfo,
+          ...buildLocationFields(data),
+          verified: data.verified || false,
+          badges: data.badges || []
+        };
+      })
+    );
+
+    const baseList = recommendationsWithDistance.filter(rec => rec !== null);
+    const locationFiltered = filterRecommendationsByLocation({
+      items: baseList,
+      userLat,
+      userLng,
+      cityId: effectiveCityId,
+      countryId: effectiveCountryId,
+      maxDistanceKm: maxRadius
+    });
+
+    const preferDistance = minReviewsNumber === 0 && minRatingNumber === 0;
+    const allSorted = locationFiltered
+      .sort((a, b) => {
+        if (preferDistance) {
+          if (a.distance !== b.distance) return a.distance - b.distance;
+          if (b.averageRating !== a.averageRating) return b.averageRating - a.averageRating;
+          return b.totalReviews - a.totalReviews;
+        }
+        if (b.averageRating !== a.averageRating) return b.averageRating - a.averageRating;
+        if (a.distance !== b.distance) return a.distance - b.distance;
+        return b.totalReviews - a.totalReviews;
+      });
+
+    const radiusSteps = [maxRadius];
+    let usedFallback = false;
+    let validRecommendations = [];
+
+    const ratedOnly = allSorted
+      .filter(rec => rec.totalReviews >= minReviewsNumber && rec.averageRating >= minRatingNumber);
+
+    for (const stepRadius of radiusSteps) {
+      const baseList = preferDistance ? allSorted : ratedOnly;
+      const withinRadius = baseList.filter(rec => rec.distance <= stepRadius);
+      validRecommendations = withinRadius.slice(0, limitNumber);
+      if (validRecommendations.length >= limitNumber) break;
+    }
+
+    if (validRecommendations.length < limitNumber) {
+      usedFallback = true;
+    }
+
+    const responsePayload = {
+      success: true,
+      data: validRecommendations,
+      meta: {
+        latitude: userLat,
+        longitude: userLng,
+        radius: maxRadius,
+        limit: limitNumber,
+        minReviews: minReviewsNumber,
+        minRating: minRatingNumber,
+        cityId: effectiveCityId,
+        countryId: effectiveCountryId,
+        filledWithFallback: usedFallback
+      }
+    };
+
+    setCachedResponse(cacheKey, responsePayload);
+    res.json(responsePayload);
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo top recomendaciones cercanas:', error);
     res.status(500).json({
       success: false,
       message: 'Error obteniendo recomendaciones cercanas',
@@ -5834,30 +6876,48 @@ app.get('/api/recommendations/recent', authenticateToken, async (req, res) => {
     
     console.log('🆕 [APP] Obteniendo recomendaciones recientes');
 
+    const profileLocation = await getUserLocationFromProfile(req.user.uid);
+    const userLat = Number.isFinite(parseFloat(profileLocation.latitude)) ? parseFloat(profileLocation.latitude) : null;
+    const userLng = Number.isFinite(parseFloat(profileLocation.longitude)) ? parseFloat(profileLocation.longitude) : null;
+    const effectiveCityId = profileLocation.cityId || null;
+    const effectiveCountryId = profileLocation.countryId || null;
+
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) {
+      if (!effectiveCityId && !effectiveCountryId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ubicación no disponible. Actualiza tu perfil antes de buscar.'
+        });
+      }
+    }
+
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const fetchLimit = Math.min(Math.max(limitNumber * 5, limitNumber), 100);
+
+    const cacheKey = `${req.path}?uid=${req.user.uid}&limit=${limitNumber}&lat=${Number.isFinite(userLat) ? userLat : ''}&lng=${Number.isFinite(userLng) ? userLng : ''}&cityId=${effectiveCityId || ''}&countryId=${effectiveCountryId || ''}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    let query = db.collection('recommendations')
+      .where('isActive', '==', true);
+    if (effectiveCountryId) {
+      query = query.where('countryId', '==', effectiveCountryId);
+    }
+
     // Obtener las recomendaciones más recientes ordenadas por createdAt
-    const snapshot = await db.collection('recommendations')
-      .where('isActive', '==', true)
+    const snapshot = await query
       .orderBy('createdAt', 'desc')
-      .limit(parseInt(limit))
+      .limit(fetchLimit)
       .get();
 
-    const recommendations = await Promise.all(snapshot.docs.map(async (doc) => {
+    const categoriesMap = await getCategoriesMap();
+    const baseList = await Promise.all(snapshot.docs.map(async (doc) => {
       const data = doc.data();
       
       // Obtener información de la categoría
-      let categoryInfo = null;
-      if (data.categoryId) {
-        const categoryDoc = await db.collection('categories').doc(data.categoryId).get();
-        if (categoryDoc.exists) {
-          const catData = categoryDoc.data();
-          categoryInfo = {
-            id: categoryDoc.id,
-            name: catData.name,
-            icon: catData.icon,
-            imageUrl: catData.imageUrl
-          };
-        }
-      }
+      const categoryInfo = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
 
       // Contar comentarios de reviews
       const reviewsSnapshot = await db.collection('recommendationReviews')
@@ -5874,11 +6934,14 @@ app.get('/api/recommendations/recent', authenticateToken, async (req, res) => {
         name: data.name,
         description: data.description,
         address: data.address,
+        latitude: data.latitude,
+        longitude: data.longitude,
         imageUrl: data.imageUrl,
         totalReviews: data.totalReviews || 0,
         averageRating: data.averageRating || 0,
         commentsCount: commentsCount,
         category: categoryInfo,
+        ...buildLocationFields(data),
         createdAt: data.createdAt?.toDate(),
         // Badges y features
         verified: data.verified || false,
@@ -5894,10 +6957,31 @@ app.get('/api/recommendations/recent', authenticateToken, async (req, res) => {
       };
     }));
 
-    res.json({
-      success: true,
-      data: recommendations
+    const filtered = filterRecommendationsByLocation({
+      items: baseList,
+      userLat: Number.isFinite(userLat) ? userLat : null,
+      userLng: Number.isFinite(userLng) ? userLng : null,
+      cityId: effectiveCityId,
+      countryId: effectiveCountryId,
+      maxDistanceKm: 100
     });
+
+    const recommendations = filtered.slice(0, limitNumber);
+
+    const responsePayload = {
+      success: true,
+      data: recommendations,
+      meta: {
+        latitude: Number.isFinite(userLat) ? userLat : null,
+        longitude: Number.isFinite(userLng) ? userLng : null,
+        cityId: effectiveCityId,
+        countryId: effectiveCountryId,
+        maxDistanceKm: 100
+      }
+    };
+
+    setCachedResponse(cacheKey, responsePayload, 10 * 60 * 1000);
+    res.json(responsePayload);
 
   } catch (error) {
     console.error('❌ [APP] Error obteniendo recomendaciones recientes:', error);
@@ -5967,6 +7051,7 @@ app.get('/api/recommendations/favorites', authenticateToken, async (req, res) =>
         averageRating: data.averageRating || 0,
         isFavorite: true,
         category: categoryInfo,
+        ...buildLocationFields(data),
         // Badges y features
         verified: data.verified || false,
         badges: data.badges || [],
@@ -6246,6 +7331,7 @@ app.get('/api/recommendations/wishlist', authenticateToken, async (req, res) => 
         totalReviews: recData.totalReviews || 0,
         averageRating: recData.averageRating || 0,
         category: categoryInfo,
+        ...buildLocationFields(recData),
         verified: recData.verified || false,
         badges: recData.badges || [],
         features: recData.features || {
@@ -6520,6 +7606,7 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
         totalReviews: data.totalReviews || 0,
         averageRating: data.averageRating || 0,
         category: categoryInfo,
+        ...buildLocationFields(data),
         // Badges y features
         verified: data.verified || false,
         badges: data.badges || [],
@@ -6694,6 +7781,8 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
       whatsapp,
       imageUrl,
       isActive = true,
+      countryId,
+      cityId,
       // Badges y features
       verified = false,
       badges = [],
@@ -6756,6 +7845,16 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
     const allBadges = Array.isArray(badges) ? badges : [];
     const finalBadges = [...new Set([...allBadges, ...autoBadges])];
 
+    let locationData = { countryId: null, countryName: null, cityId: null, cityName: null };
+    try {
+      locationData = await resolveCountryCity(countryId, cityId);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message
+      });
+    }
+
     const recommendationData = {
       categoryId,
       name: name.trim(),
@@ -6771,6 +7870,10 @@ app.post('/api/admin/recommendations', authenticateToken, isAdmin, async (req, r
       twitter: twitter ? twitter.trim() : '',
       whatsapp: whatsapp ? whatsapp.trim() : '',
       imageUrl: imageUrl || null,
+      countryId: locationData.countryId,
+      countryName: locationData.countryName,
+      cityId: locationData.cityId,
+      cityName: locationData.cityName,
       isActive: isActive === true || isActive === 'true',
       // Badges y features
       verified: verified === true || verified === 'true' || verified === '1' || verified === 1,
@@ -6825,6 +7928,8 @@ app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdm
       whatsapp,
       imageUrl,
       isActive,
+      countryId,
+      cityId,
       // Badges y features
       verified,
       badges,
@@ -6873,6 +7978,25 @@ app.put('/api/admin/recommendations/:recommendationId', authenticateToken, isAdm
     if (whatsapp !== undefined) updateData.whatsapp = whatsapp.trim();
     if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
     if (isActive !== undefined) updateData.isActive = isActive === true || isActive === 'true';
+
+    const hasLocationUpdate = Object.prototype.hasOwnProperty.call(req.body, 'countryId')
+      || Object.prototype.hasOwnProperty.call(req.body, 'cityId');
+    if (hasLocationUpdate) {
+      const normalizedCountryId = countryId ? String(countryId).trim() : null;
+      const normalizedCityId = cityId ? String(cityId).trim() : null;
+      try {
+        const locationData = await resolveCountryCity(normalizedCountryId, normalizedCityId);
+        updateData.countryId = locationData.countryId;
+        updateData.countryName = locationData.countryName;
+        updateData.cityId = locationData.cityId;
+        updateData.cityName = locationData.cityName;
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message
+        });
+      }
+    }
 
     // Actualizar badges y features
     if (verified !== undefined) {
@@ -9351,7 +10475,13 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           currentGestationWeeks: currentGestationWeeks, // Semanas calculadas automáticamente
           daysSinceRegistration: daysSinceRegistration, // Días desde el registro
           isActive: firestoreData.isActive || true,
-          updatedAt: firestoreData.updatedAt
+          updatedAt: firestoreData.updatedAt,
+          latitude: firestoreData.latitude ?? null,
+          longitude: firestoreData.longitude ?? null,
+          countryId: firestoreData.countryId || null,
+          countryName: firestoreData.countryName || null,
+          cityId: firestoreData.cityId || null,
+          cityName: firestoreData.cityName || null
         };
       }
     }
@@ -9435,6 +10565,74 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al actualizar perfil',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar ubicación del usuario (app)
+app.put('/api/auth/location', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { latitude, longitude, countryId, cityId } = req.body || {};
+
+    if (latitude === undefined && longitude === undefined && countryId === undefined && cityId === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debes enviar latitude/longitude o countryId/cityId'
+      });
+    }
+
+    const updateData = {};
+    if (latitude !== undefined) {
+      const parsedLat = parseFloat(latitude);
+      if (Number.isNaN(parsedLat)) {
+        return res.status(400).json({ success: false, message: 'latitude inválida' });
+      }
+      updateData.latitude = parsedLat;
+    }
+    if (longitude !== undefined) {
+      const parsedLng = parseFloat(longitude);
+      if (Number.isNaN(parsedLng)) {
+        return res.status(400).json({ success: false, message: 'longitude inválida' });
+      }
+      updateData.longitude = parsedLng;
+    }
+
+    const hasLocationIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'countryId')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'cityId');
+    if (hasLocationIds) {
+      try {
+        const locationData = await resolveCountryCity(countryId, cityId);
+        updateData.countryId = locationData.countryId;
+        updateData.countryName = locationData.countryName;
+        updateData.cityId = locationData.cityId;
+        updateData.cityName = locationData.cityName;
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message
+        });
+      }
+    }
+
+    if (db) {
+      await db.collection('users').doc(uid).set({
+        ...updateData,
+        updatedAt: new Date()
+      }, { merge: true });
+    }
+
+    res.json({
+      success: true,
+      message: 'Ubicación actualizada',
+      data: { uid, ...updateData }
+    });
+  } catch (error) {
+    console.error('❌ [PROFILE] Error actualizando ubicación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando ubicación',
       error: error.message
     });
   }
@@ -10020,6 +11218,12 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
       if (dueDate) {
         // Validar fecha de parto
         const due = new Date(dueDate);
+        if (isNaN(due.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha esperada de parto es inválida'
+          });
+        }
         const now = new Date();
         const twoWeeksAgo = new Date(now.getTime() - (14 * 24 * 60 * 60 * 1000));
         
@@ -10036,13 +11240,14 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
       updateData.ageInMonths = null;
       } else if (gestationWeeks !== undefined) {
         // Legacy: usar semanas de gestación
-        if (gestationWeeks < 1 || gestationWeeks > 42) {
+        const parsedGestationWeeks = parseInt(gestationWeeks);
+        if (Number.isNaN(parsedGestationWeeks) || parsedGestationWeeks < 1 || parsedGestationWeeks > 42) {
           return res.status(400).json({
             success: false,
             message: 'Las semanas de gestación deben estar entre 1 y 42'
           });
         }
-        updateData.gestationWeeks = parseInt(gestationWeeks);
+        updateData.gestationWeeks = parsedGestationWeeks;
         updateData.dueDate = null;
         updateData.birthDate = null;
         updateData.ageInMonths = null;
@@ -10053,6 +11258,12 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
       if (birthDate) {
         // Validar fecha de nacimiento
         const birth = new Date(birthDate);
+        if (isNaN(birth.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha de nacimiento es inválida'
+          });
+        }
         const now = new Date();
         const maxYearsBack = 18;
         const minDate = new Date(now.getFullYear() - maxYearsBack, now.getMonth(), now.getDate());
@@ -10077,13 +11288,14 @@ app.put('/api/auth/children/:childId', authenticateToken, async (req, res) => {
       updateData.gestationWeeks = null;
       } else if (ageInMonths !== undefined) {
         // Legacy: usar edad en meses
-        if (ageInMonths < 0) {
+        const parsedAgeInMonths = parseInt(ageInMonths);
+        if (Number.isNaN(parsedAgeInMonths) || parsedAgeInMonths < 0) {
           return res.status(400).json({
             success: false,
             message: 'La edad en meses debe ser mayor o igual a 0'
           });
         }
-        updateData.ageInMonths = parseInt(ageInMonths);
+        updateData.ageInMonths = parsedAgeInMonths;
         updateData.birthDate = null;
         updateData.dueDate = null;
         updateData.gestationWeeks = null;
@@ -11606,6 +12818,231 @@ app.post('/api/children/development-info', authenticateToken, async (req, res) =
   }
 });
 
+// Guía diaria para bebé o embarazo (con OpenAI)
+app.post('/api/guide/today', authenticateToken, async (req, res) => {
+  try {
+    const { birthDate, gestationWeeks, ageWeeks, name, isPregnant = false, childId } = req.body;
+
+    const cacheKey = `/api/guide/today?childId=${childId || 'none'}&birthDate=${birthDate || 'none'}&ageWeeks=${ageWeeks || 'none'}&gestationWeeks=${gestationWeeks || 'none'}&pregnant=${Boolean(isPregnant)}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    let weeks = null;
+    let months = null;
+    let pregnant = Boolean(isPregnant);
+
+    if (childId) {
+      const childDoc = await db.collection('children').doc(childId).get();
+      if (!childDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Hijo no encontrado'
+        });
+      }
+      const childData = childDoc.data();
+      if (childData.parentId !== req.user.uid) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes permisos para acceder a este hijo'
+        });
+      }
+      pregnant = Boolean(childData.isUnborn);
+      weeks = getWeeksFromChildData(childData);
+      months = getMonthsFromChildData(childData);
+    } else if (gestationWeeks || isPregnant) {
+      weeks = parseInt(gestationWeeks, 10);
+      pregnant = true;
+    } else if (ageWeeks || ageWeeks === 0) {
+      weeks = parseInt(ageWeeks, 10);
+    } else if (birthDate) {
+      weeks = calculateWeeksFromBirthDate(birthDate);
+      months = calculateMonthsFromBirthDate(birthDate);
+    }
+
+    if (pregnant) {
+      if (!weeks || weeks < 1 || weeks > 45) {
+        return res.status(400).json({
+          success: false,
+          message: 'Para embarazo debes enviar gestationWeeks (1-45) o childId'
+        });
+      }
+    } else {
+      if ((!weeks || weeks < 1 || weeks > 60) && (months === null || months < 0)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debes enviar birthDate o ageWeeks (1-60) o childId'
+        });
+      }
+    }
+
+    let unit = 'week';
+    let value = weeks;
+    if (!pregnant) {
+      const isUnderOneMonth = weeks !== null && weeks < 4;
+      if (!isUnderOneMonth) {
+        unit = 'month';
+        if (months !== null) {
+          value = Math.max(1, months);
+        } else if (weeks !== null) {
+          value = Math.max(1, Math.floor(weeks / 4.3));
+        }
+      }
+    }
+
+    const guide = await getDailyGuideFromAI({
+      unit,
+      value,
+      name: name && String(name).trim() ? String(name).trim() : null,
+      isPregnant: pregnant
+    });
+
+    const responsePayload = {
+      success: true,
+      data: {
+        title: guide.title,
+        subtitle: guide.subtitle,
+        description: guide.description,
+        tip: guide.tip,
+        unit,
+        value,
+        isPregnant: pregnant,
+        source: guide.source
+      }
+    };
+
+    setCachedResponse(cacheKey, responsePayload, 2 * 60 * 60 * 1000);
+    res.json(responsePayload);
+  } catch (error) {
+    console.error('❌ Error obteniendo guía diaria:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo guía diaria',
+      error: error.message
+    });
+  }
+});
+
+// Preguntas frecuentes para mamas (FAQ) con cache 24h
+app.post('/api/faq/moms', authenticateToken, async (req, res) => {
+  try {
+    const { childId, isPregnant = false } = req.body;
+    const userId = req.user.uid;
+
+    let childName = null;
+    let pregnant = Boolean(isPregnant);
+    let ageLabel = null;
+
+    if (childId) {
+      const childDoc = await db.collection('children').doc(childId).get();
+      if (!childDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Hijo no encontrado'
+        });
+      }
+      const childData = childDoc.data();
+      if (childData.parentId !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes permisos para acceder a este hijo'
+        });
+      }
+      childName = childData.name || null;
+      pregnant = Boolean(childData.isUnborn);
+      if (!pregnant) {
+        const weeks = getWeeksFromChildData(childData);
+        const months = getMonthsFromChildData(childData);
+        const isUnderOneMonth = weeks !== null && weeks < 4;
+        if (isUnderOneMonth) {
+          ageLabel = `Semana ${weeks}`;
+        } else if (months !== null) {
+          ageLabel = `Mes ${Math.max(1, months)}`;
+        }
+      } else {
+        const weeks = getWeeksFromChildData(childData);
+        if (weeks) ageLabel = `Semana ${weeks}`;
+      }
+    }
+
+    const cacheKey = `/api/faq/moms?childId=${childId || 'none'}&pregnant=${pregnant}&age=${ageLabel || 'na'}&user=${userId}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const result = await getMomsFaqFromAI({ childName, isPregnant: pregnant, ageLabel });
+    const responsePayload = {
+      success: true,
+      data: {
+        questions: result.items,
+        source: result.source
+      }
+    };
+
+    setCachedResponse(cacheKey, responsePayload);
+    res.json(responsePayload);
+  } catch (error) {
+    console.error('❌ Error obteniendo FAQ mamás:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo FAQ',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener información del embarazo por semanas con imagen
+app.post('/api/pregnancy/week-info', authenticateToken, async (req, res) => {
+  try {
+    const { gestationWeeks, name, includeImage = true } = req.body;
+
+    const parsedWeeks = parseInt(gestationWeeks, 10);
+    if (!parsedWeeks || parsedWeeks < 1 || parsedWeeks > 45) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las semanas de gestación deben estar entre 1 y 45'
+      });
+    }
+
+    const babyName = name && name.trim() ? name.trim() : 'tu bebé';
+
+    const infoResult = await getPregnancyWeekInfoFromAI(parsedWeeks, babyName);
+
+    let imageUrl = null;
+    let imageWarning = null;
+    if (includeImage) {
+      const imageResult = await generatePregnancyImageUrlFromAI(parsedWeeks);
+      imageUrl = imageResult?.url || null;
+      imageWarning = imageResult?.warning || null;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        gestationWeeks: parsedWeeks,
+        babyName: babyName,
+        importantInfo: infoResult.items,
+        infoSource: infoResult.source,
+        image: imageUrl ? {
+          url: imageUrl
+        } : null,
+        imageSource: imageUrl ? 'openai' : 'none',
+        imageWarning: imageWarning,
+        timestamp: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo info de embarazo por semana:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo información del embarazo',
+      error: error.message
+    });
+  }
+});
+
 // Función para calcular edad en meses desde fecha de nacimiento
 const calculateAgeFromBirthDate = (birthDate) => {
   const now = new Date();
@@ -11878,6 +13315,284 @@ const validateResponseUniqueness = (newBullets, previousResponses, maxAttempts =
   }
 
   return { isValid: !hasRepetition, bullets: newBullets };
+};
+
+// Función para obtener información del embarazo por semanas desde OpenAI
+const getPregnancyWeekInfoFromAI = async (gestationWeeks, babyName) => {
+  if (!openai) {
+    return {
+      items: getPregnancyWeekInfoFallback(gestationWeeks, babyName),
+      source: 'fallback'
+    };
+  }
+
+  try {
+    const systemPrompt = `Eres una doula experta especializada en desarrollo fetal. Debes entregar información clara y útil para madres sobre el embarazo por semanas.
+
+IMPORTANTE:
+- Proporciona EXACTAMENTE 4 bullets
+- Cada bullet debe ser concreto y práctico
+- Usa emojis al inicio de cada bullet
+- Mantén un tono cálido y profesional
+- No incluyas diagnóstico ni consejo médico personalizado
+
+FORMATO REQUERIDO:
+1. 👶 **Título**: Texto...
+2. 🧠 **Título**: Texto...
+3. 🫶 **Título**: Texto...
+4. ⚠️ **Título**: Texto...`;
+
+    const userPrompt = `Dame 4 bullets de información importante sobre el embarazo en la semana ${gestationWeeks} para ${babyName}.`;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: 500,
+      temperature: 0.7
+    });
+
+    const content = response.choices[0].message.content || '';
+    const items = content
+      .split('\n')
+      .filter(line => line.trim().match(/^\d+\.\s*/))
+      .map(line => line.replace(/^\d+\.\s*/, '').trim())
+      .filter(Boolean)
+      .slice(0, 4);
+
+    if (items.length < 3) {
+      return {
+        items: getPregnancyWeekInfoFallback(gestationWeeks, babyName),
+        source: 'fallback'
+      };
+    }
+
+    return { items, source: 'openai' };
+  } catch (error) {
+    console.error('❌ Error OpenAI embarazo por semanas:', error.message);
+    return {
+      items: getPregnancyWeekInfoFallback(gestationWeeks, babyName),
+      source: 'fallback'
+    };
+  }
+};
+
+const getDailyGuideFallback = ({ unit, value, name, isPregnant }) => {
+  const safeName = name || (isPregnant ? 'tu bebé' : 'tu bebé');
+  const label = unit === 'month' ? `Mes ${value}` : `Semana ${value}`;
+  const title = `${label}: El descubrimiento`;
+  const subtitle = isPregnant
+    ? `En la ${label.toLowerCase()}, el desarrollo continúa a buen ritmo.`
+    : `En la ${label.toLowerCase()}, ${safeName} sigue descubriendo el mundo.`;
+  const description = isPregnant
+    ? `Tu cuerpo y tu bebé atraviesan cambios importantes. Mantén una rutina suave y escucha tu energía.`
+    : `Texturas, sonidos y movimientos nuevos estimulan el desarrollo. El juego guiado corto marca la diferencia.`;
+  const tip = isPregnant
+    ? 'Dedica unos minutos a descansar y respirar profundo.'
+    : 'Crea un ambiente calmado antes de dormir y evita estímulos fuertes.';
+  return { title, subtitle, description, tip, source: 'fallback' };
+};
+
+const extractJsonFromText = (text) => {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]);
+  } catch (_) {
+    return null;
+  }
+};
+
+const getDailyGuideFromAI = async ({ unit, value, name, isPregnant }) => {
+  if (!openai) {
+    return getDailyGuideFallback({ unit, value, name, isPregnant });
+  }
+
+  try {
+    const systemPrompt = `Eres una doula experta. Genera una guía breve y cálida en español.
+Responde SOLO con JSON válido con estas claves: title, subtitle, description, tip.
+Requisitos:
+- title debe empezar con "Semana X:" o "Mes X:" según corresponda
+- subtitle: 1 oración
+- description: 1-2 oraciones
+- tip: máximo 20 palabras
+- Sin emojis ni markdown`;
+
+    const label = unit === 'month' ? `Mes ${value}` : `Semana ${value}`;
+    const context = isPregnant
+      ? `Embarazo en ${label.toLowerCase()}.`
+      : `Bebé nacido con ${label.toLowerCase()} de vida.`;
+    const displayName = name ? `Nombre: ${name}.` : '';
+
+    const userPrompt = `Crea la guía de hoy. ${context} ${displayName}`;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: 250,
+      temperature: 0.7
+    });
+
+    const content = response.choices?.[0]?.message?.content || '';
+    const parsed = extractJsonFromText(content);
+    if (!parsed || !parsed.title || !parsed.subtitle || !parsed.description || !parsed.tip) {
+      return getDailyGuideFallback({ unit, value, name, isPregnant });
+    }
+    return { ...parsed, source: 'openai' };
+  } catch (error) {
+    console.error('❌ Error OpenAI guía diaria:', error.message);
+    return getDailyGuideFallback({ unit, value, name, isPregnant });
+  }
+};
+
+const getMomsFaqFallback = (childName) => {
+  const name = childName || 'mi bebé';
+  return [
+    `¿Es normal que ${name} cambie sus horarios de sueño semana a semana?`,
+    `¿Cuántas siestas debería hacer ${name} según su edad?`,
+    `¿Qué señales indican que ${name} ya tiene sueño?`,
+    `¿Cómo puedo crear una rutina tranquila antes de dormir?`
+  ];
+};
+
+const getMomsFaqFromAI = async ({ childName, isPregnant, ageLabel }) => {
+  if (!openai) {
+    return { items: getMomsFaqFallback(childName), source: 'fallback' };
+  }
+
+  try {
+    const systemPrompt = `Eres una doula experta. Genera EXACTAMENTE 4 preguntas frecuentes en español para madres.
+Requisitos:
+- Deben ser preguntas cortas y claras
+- Sin emojis ni markdown
+- En una sola línea cada pregunta`;
+
+    const context = isPregnant
+      ? `Contexto: embarazo. ${ageLabel ? `Edad: ${ageLabel}.` : ''}`
+      : `Contexto: bebé nacido. Nombre: ${childName || 'mi bebé'}. ${ageLabel ? `Edad: ${ageLabel}.` : ''}`;
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Crea 4 preguntas frecuentes. ${context}` }
+      ],
+      max_tokens: 200,
+      temperature: 0.7
+    });
+
+    const content = response.choices?.[0]?.message?.content || '';
+    const items = content
+      .split('\n')
+      .map(line => line.replace(/^\d+\.\s*/, '').trim())
+      .filter(Boolean)
+      .slice(0, 4);
+
+    if (items.length < 4) {
+      return { items: getMomsFaqFallback(childName), source: 'fallback' };
+    }
+
+    return { items, source: 'openai' };
+  } catch (error) {
+    console.error('❌ Error OpenAI FAQ mamás:', error.message);
+    return { items: getMomsFaqFallback(childName), source: 'fallback' };
+  }
+};
+
+// Subir imagen base64 a Firebase Storage y devolver URL pública
+const uploadPregnancyImageBase64 = async (base64Data, filePath) => {
+  const bucket = admin.storage().bucket();
+  const buffer = Buffer.from(base64Data, 'base64');
+  const file = bucket.file(filePath);
+
+  await file.save(buffer, {
+    metadata: {
+      contentType: 'image/png'
+    }
+  });
+  await file.makePublic();
+
+  return `https://storage.googleapis.com/${bucket.name}/${file.name}`;
+};
+
+// Función para generar imagen del embarazo por semanas con OpenAI (URL pública)
+const generatePregnancyImageUrlFromAI = async (gestationWeeks) => {
+  if (!openai) {
+    return { url: null, warning: 'openai_not_configured' };
+  }
+
+  try {
+    const prompt = `Ilustración médica educativa, estilo suave y minimalista, de un feto en el útero a las ${gestationWeeks} semanas de gestación. 
+No realista, sin sangre, sin desnudez explícita, fondo claro, colores suaves, enfoque en el desarrollo general.`;
+
+    const response = await openai.images.generate({
+      model: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1',
+      prompt: prompt,
+      size: '1024x1024'
+    });
+
+    const base64Image = response.data?.[0]?.b64_json || null;
+    if (base64Image) {
+      const filePath = `pregnancy/weeks/${gestationWeeks}/week-${gestationWeeks}-${Date.now()}.png`;
+      const url = await uploadPregnancyImageBase64(base64Image, filePath);
+      return { url, warning: null };
+    }
+
+    const imageUrl = response.data?.[0]?.url || null;
+    return { url: imageUrl, warning: imageUrl ? null : 'openai_image_empty' };
+  } catch (error) {
+    const message = error?.message || '';
+    if (message.includes('organization must be verified')) {
+      console.warn('⚠️ OpenAI requiere verificación de organización para imágenes.');
+      return { url: null, warning: 'openai_org_verification_required' };
+    }
+    if (message.includes('does not have access to model')) {
+      console.warn('⚠️ OpenAI: el proyecto no tiene acceso al modelo de imágenes.');
+      return { url: null, warning: 'openai_model_not_allowed' };
+    }
+    console.error('❌ Error generando imagen de embarazo:', message);
+    return { url: null, warning: 'openai_image_error' };
+  }
+};
+
+// Fallback para información del embarazo por semanas
+const getPregnancyWeekInfoFallback = (gestationWeeks, babyName) => {
+  if (gestationWeeks <= 12) {
+    return [
+      `👶 **Formación temprana**: ${babyName} está formando órganos principales y estructuras básicas.`,
+      "🧬 **Desarrollo clave**: Se fortalecen el cerebro y el sistema nervioso central.",
+      "🍎 **Nutrición**: Prioriza ácido fólico, hierro y una hidratación constante.",
+      "⚠️ **Cuidados**: Evita alcohol, tabaco y medicamentos sin indicación médica."
+    ];
+  }
+  if (gestationWeeks <= 24) {
+    return [
+      `👶 **Movimientos**: ${babyName} ya realiza movimientos más perceptibles.`,
+      "👂 **Sentidos**: Responde a sonidos y a la voz de la madre.",
+      "📏 **Crecimiento**: Aumenta peso y tamaño rápidamente.",
+      "🫶 **Vínculo**: Hablarle y tocar el abdomen ayuda a conectar."
+    ];
+  }
+  if (gestationWeeks <= 36) {
+    return [
+      "🫁 **Pulmones**: Se preparan para respirar fuera del útero.",
+      "🧠 **Maduración**: El cerebro continúa desarrollándose aceleradamente.",
+      "💤 **Sueño**: Presenta ciclos de sueño más definidos.",
+      "🏥 **Preparación**: Considera plan de parto y controles prenatales."
+    ];
+  }
+
+  return [
+    "👶 **Posición**: El bebé suele colocarse cabeza abajo.",
+    "🧠 **Últimos ajustes**: Maduración final de órganos y reflejos.",
+    "🧳 **Preparación**: Ten lista tu bolsa para el parto.",
+    "⚠️ **Señales**: Consulta ante contracciones regulares o pérdida de líquido."
+  ];
 };
 
 // Función para obtener información de desarrollo de bebés por nacer desde OpenAI
@@ -12398,6 +14113,9 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
 
     // Verificar si ya se dio un tip recientemente para evitar repetición
     let recentTips = [];
+    let latestTipData = null;
+    const forceRefresh = req.query?.force === 'true' || req.headers['x-force-refresh'] === 'true';
+    const cacheTtlMinutes = 60;
     try {
       const recentTipsSnapshot = await db.collection('userTips')
         .where('userId', '==', uid)
@@ -12409,6 +14127,9 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
       recentTipsSnapshot.forEach(doc => {
         recentTips.push(doc.data().tip);
       });
+      if (!recentTipsSnapshot.empty) {
+        latestTipData = recentTipsSnapshot.docs[0].data();
+      }
     } catch (indexError) {
       console.log('⚠️ Índice no disponible aún, continuando sin verificación de duplicados:', indexError.message);
       // Continuar sin verificación de duplicados hasta que se cree el índice
@@ -12510,6 +14231,31 @@ app.post('/api/children/tips', authenticateToken, async (req, res) => {
     } catch (profileError) {
       console.log('⚠️ [PROFILE] Error obteniendo perfil del usuario:', profileError.message);
       // Continuar con valores por defecto
+    }
+
+    // ⚡ Devolver tip cacheado si es reciente (evita OpenAI)
+    if (!forceRefresh && latestTipData?.createdAt) {
+      const createdAt = latestTipData.createdAt.toDate ? latestTipData.createdAt.toDate() : new Date(latestTipData.createdAt);
+      const ageMinutes = Math.floor((Date.now() - createdAt.getTime()) / 60000);
+      const childMatch = !childId || !latestTipData.childIds || latestTipData.childIds.includes(childId);
+      if (ageMinutes <= cacheTtlMinutes && childMatch) {
+        console.log(`⚡ [TIPS] Usando cache (${ageMinutes} min)`);
+        return res.json({
+          success: true,
+          data: {
+            tips: [latestTipData.tip],
+            children: children.map(child => ({
+              id: child.id,
+              name: child.name,
+              currentAge: child.isUnborn ? `${child.currentGestationWeeks} semanas` : `${child.currentAgeInMonths} meses`,
+              isUnborn: child.isUnborn
+            })),
+            tipType: tipType,
+            timestamp: createdAt,
+            cached: true
+          }
+        });
+      }
     }
 
     // Crear contexto para OpenAI
@@ -12644,6 +14390,7 @@ Genera el tip ahora:`;
           tipType: tipType,
           tip: tips[0],
           childrenContext: childrenContext,
+          childIds: children.map(child => child.id),
           isPregnant: isPregnant,
           currentGestationWeeks: currentGestationWeeks,
           createdAt: new Date(),
@@ -12711,11 +14458,19 @@ app.post('/api/communities/upload-photo', authenticateToken, upload.single('imag
     }
 
     // Validar tipo de archivo
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    const allowedTypes = [
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'image/heic',
+      'image/heif'
+    ];
     if (!allowedTypes.includes(req.file.mimetype)) {
       return res.status(400).json({
         success: false,
-        message: 'Tipo de archivo no permitido. Solo se permiten: JPEG, JPG, PNG, GIF, WEBP'
+        message: 'Tipo de archivo no permitido. Solo se permiten: JPEG, JPG, PNG, GIF, WEBP, HEIC, HEIF'
       });
     }
 
@@ -12923,6 +14678,8 @@ app.get('/api/communities/search', authenticateToken, async (req, res) => {
       if (nameMatch || keywordsMatch || descriptionMatch) {
         const isCreator = data.creatorId === uid;
         const isMember = data.members && data.members.includes(uid);
+        const isPublicResolved = data.isPublic !== undefined ? data.isPublic : (data.isPrivate ? false : true);
+        const isPrivateResolved = data.isPrivate !== undefined ? data.isPrivate : !isPublicResolved;
         
         communities.push({
           id: doc.id,
@@ -12930,12 +14687,13 @@ app.get('/api/communities/search', authenticateToken, async (req, res) => {
           keywords: data.keywords,
           description: data.description,
           imageUrl: data.imageUrl,
-          isPublic: data.isPublic,
+          isPublic: isPublicResolved,
+          isPrivate: isPrivateResolved,
           memberCount: data.memberCount || 0,
           isCreator: isCreator,
           isMember: isMember,
-          canJoin: !isMember && data.isPublic, // Solo si no es miembro y es pública
-          joinType: !isMember ? (data.isPublic ? 'direct' : 'request') : null, // Tipo de unión si no es miembro
+          canJoin: !isMember && isPublicResolved, // Solo si no es miembro y es pública
+          joinType: !isMember ? (isPublicResolved ? 'direct' : 'request') : null, // Tipo de unión si no es miembro
           createdAt: data.createdAt,
           updatedAt: data.updatedAt,
           // Campos de relevancia para el ranking
@@ -12977,7 +14735,7 @@ app.get('/api/communities/search', authenticateToken, async (req, res) => {
   }
 });
 
-// Endpoint para obtener todas las comunidades (públicas y privadas) excepto las del usuario
+// Endpoint para obtener todas las comunidades (públicas y privadas)
 app.get('/api/communities', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -12993,8 +14751,6 @@ app.get('/api/communities', authenticateToken, async (req, res) => {
     try {
       // Intentar con ordenamiento - obtener TODAS las comunidades excepto las del usuario
       communitiesSnapshot = await db.collection('communities')
-        .where('creatorId', '!=', uid) // Excluir comunidades del usuario actual
-        .orderBy('creatorId') // Necesario para la consulta !=
         .orderBy('createdAt', 'desc')
         .get();
     } catch (indexError) {
@@ -13006,11 +14762,11 @@ app.get('/api/communities', authenticateToken, async (req, res) => {
     const communities = [];
     communitiesSnapshot.forEach(doc => {
       const data = doc.data();
+      const isPublicResolved = data.isPublic !== undefined ? data.isPublic : (data.isPrivate ? false : true);
+      const isPrivateResolved = data.isPrivate !== undefined ? data.isPrivate : !isPublicResolved;
       
-      // Filtrar en memoria si no se pudo usar el índice
-      if (data.creatorId === uid) {
-        return; // Saltar comunidades del usuario actual
-      }
+      const creatorId = data.creatorId || data.createdBy || null;
+      const isMember = data.members && data.members.includes(uid);
       
       communities.push({
         id: doc.id,
@@ -13018,10 +14774,13 @@ app.get('/api/communities', authenticateToken, async (req, res) => {
         keywords: data.keywords,
         description: data.description,
         imageUrl: data.imageUrl,
-        isPublic: data.isPublic,
+        isPublic: isPublicResolved,
+        isPrivate: isPrivateResolved,
         memberCount: data.memberCount || 0,
-        canJoin: data.isPublic, // Solo las públicas permiten unirse directamente
-        joinType: data.isPublic ? 'direct' : 'request', // Tipo de unión permitida
+        isMember: isMember,
+        isCreator: creatorId === uid,
+        canJoin: isPublicResolved && !isMember, // Solo si no es miembro y es pública
+        joinType: isPublicResolved ? 'direct' : 'request', // Tipo de unión permitida
         createdAt: data.createdAt,
         updatedAt: data.updatedAt
       });
@@ -15159,6 +16918,83 @@ app.get('/api/communities/:communityId/posts', authenticateToken, async (req, re
     res.status(500).json({
       success: false,
       message: 'Error obteniendo publicaciones',
+      error: error.message
+    });
+  }
+});
+
+// Obtener top 3 posts con más likes (APP)
+app.get('/api/communities/posts/top', authenticateToken, async (req, res) => {
+  try {
+    const cacheKey = buildCacheKey(req);
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const { limit = 3 } = req.query;
+    const limitNumber = Math.min(parseInt(limit), 10);
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener posts recientes (para evitar escanear todo)
+    const snapshot = await db.collection('posts')
+      .orderBy('createdAt', 'desc')
+      .limit(200)
+      .get();
+
+    const posts = [];
+    for (const doc of snapshot.docs) {
+      const postData = doc.data();
+
+      // Obtener nombre de autor
+      let authorName = 'Usuario';
+      try {
+        const authorDoc = await db.collection('users').doc(postData.authorId).get();
+        if (authorDoc.exists) {
+          authorName = authorDoc.data().displayName || 'Usuario';
+        }
+      } catch (_) {}
+
+      posts.push({
+        id: doc.id,
+        content: postData.content,
+        imageUrl: postData.imageUrl,
+        authorId: postData.authorId,
+        authorName: authorName,
+        communityId: postData.communityId,
+        likeCount: postData.likeCount || 0,
+        commentCount: postData.commentCount || 0,
+        createdAt: postData.createdAt
+      });
+    }
+
+    const topPosts = posts
+      .sort((a, b) => {
+        if (b.likeCount !== a.likeCount) return b.likeCount - a.likeCount;
+        const dateA = a.createdAt?.toDate?.() || a.createdAt;
+        const dateB = b.createdAt?.toDate?.() || b.createdAt;
+        return dateB - dateA;
+      })
+      .slice(0, limitNumber);
+
+    const responsePayload = {
+      success: true,
+      data: topPosts
+    };
+
+    setCachedResponse(cacheKey, responsePayload);
+    res.json(responsePayload);
+  } catch (error) {
+    console.error('❌ [POSTS] Error obteniendo top posts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo top posts',
       error: error.message
     });
   }
@@ -18328,7 +20164,7 @@ app.get('/api/marketplace/products/debug', async (req, res) => {
 });
 
 // Obtener lista de productos con filtros
-app.get('/api/marketplace/products', async (req, res) => {
+app.get('/api/marketplace/products', authenticateToken, async (req, res) => {
   try {
     const { 
       type,           // venta, donacion, trueque
@@ -18340,7 +20176,9 @@ app.get('/api/marketplace/products', async (req, res) => {
       orderBy,        // reciente, precio_asc, precio_desc
       page = 1,
       limit = 20,
-      userId          // Filtrar por usuario específico
+      userId,         // Filtrar por usuario específico
+      latitude,
+      longitude
     } = req.query;
 
     if (!db) {
@@ -18350,7 +20188,12 @@ app.get('/api/marketplace/products', async (req, res) => {
       });
     }
 
+    const userLocation = await getUserCountryForMarketplace(req.user.uid);
+
     let query = db.collection('marketplace_products');
+    if (userLocation.countryId) {
+      query = query.where('countryId', '==', userLocation.countryId);
+    }
 
     // Aplicar filtros
     if (type && TRANSACTION_TYPES.includes(type)) {
@@ -18421,10 +20264,21 @@ app.get('/api/marketplace/products', async (req, res) => {
 
     // Ejecutar query
     const snapshot = await query.get();
-    let products = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    const userLat = latitude ? parseFloat(latitude) : null;
+    const userLng = longitude ? parseFloat(longitude) : null;
+    const hasUserLocation = !isNaN(userLat) && !isNaN(userLng);
+
+    let products = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const location = normalizeMarketplaceLocation(data);
+      return {
+        id: doc.id,
+        ...data,
+        location
+      };
+    });
+
+    products = products.filter(p => p.countryId && p.countryId === userLocation.countryId);
 
     // Filtro de precio (Firestore no permite where con != null)
     if (minPrice !== undefined) {
@@ -18444,6 +20298,22 @@ app.get('/api/marketplace/products', async (req, res) => {
         p.title.toLowerCase().includes(searchLower) ||
         p.description.toLowerCase().includes(searchLower)
       );
+    }
+
+    // Ordenar por distancia si hay ubicación del usuario
+    if (hasUserLocation && (!orderBy || orderBy === 'distancia')) {
+      products = products
+        .filter(p => p.location && p.location.latitude && p.location.longitude)
+        .map(p => ({
+          ...p,
+          distance: calculateDistance(
+            userLat,
+            userLng,
+            p.location.latitude,
+            p.location.longitude
+          )
+        }))
+        .sort((a, b) => a.distance - b.distance);
     }
 
     // Logging de productos encontrados
@@ -18485,9 +20355,15 @@ app.get('/api/marketplace/products', async (req, res) => {
   }
 });
 // Buscar productos cercanos (por proximidad geográfica)
-app.get('/api/marketplace/products/nearby', async (req, res) => {
+app.get('/api/marketplace/products/nearby', authenticateToken, async (req, res) => {
   try {
-    const { 
+    const cacheKey = `${buildCacheKey(req)}&uid=${req.user.uid}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const {
       latitude,
       longitude,
       radius = 50,    // Radio en kilómetros (por defecto 50 km)
@@ -18502,31 +20378,6 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
       limit = 20
     } = req.query;
 
-    if (!latitude || !longitude) {
-      return res.status(400).json({
-        success: false,
-        message: 'Se requieren coordenadas (latitude, longitude) para la búsqueda por proximidad'
-      });
-    }
-
-    const userLat = parseFloat(latitude);
-    const userLng = parseFloat(longitude);
-    const searchRadius = parseFloat(radius);
-
-    if (isNaN(userLat) || userLat < -90 || userLat > 90) {
-      return res.status(400).json({
-        success: false,
-        message: 'Latitud inválida'
-      });
-    }
-
-    if (isNaN(userLng) || userLng < -180 || userLng > 180) {
-      return res.status(400).json({
-        success: false,
-        message: 'Longitud inválida'
-      });
-    }
-
     if (!db) {
       return res.status(500).json({
         success: false,
@@ -18534,6 +20385,18 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
       });
     }
 
+    const userLocation = await getUserCountryForMarketplace(req.user.uid);
+    const userLat = latitude ? parseFloat(latitude) : null;
+    const userLng = longitude ? parseFloat(longitude) : null;
+    const searchRadius = parseFloat(radius);
+    const hasUserLocation = !isNaN(userLat) && !isNaN(userLng);
+
+    if ((latitude || longitude) && !hasUserLocation) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude y longitude deben ser números válidos'
+      });
+    }
     // Función para calcular distancia entre dos puntos (fórmula de Haversine)
     const calculateDistance = (lat1, lon1, lat2, lon2) => {
       const R = 6371; // Radio de la Tierra en km
@@ -18594,10 +20457,32 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
 
     // Obtener todos los productos
     const snapshot = await query.get();
-    let products = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    let products = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const location = normalizeMarketplaceLocation(data);
+      return {
+        id: doc.id,
+        ...data,
+        location
+      };
+    });
+
+    products = products.filter(p => p.countryId && p.countryId === userLocation.countryId);
+
+    if (hasUserLocation && (!orderBy || orderBy === 'distancia')) {
+      products = products
+        .filter(p => p.location && p.location.latitude && p.location.longitude)
+        .map(p => ({
+          ...p,
+          distance: calculateDistance(
+            userLat,
+            userLng,
+            p.location.latitude,
+            p.location.longitude
+          )
+        }))
+        .filter(p => p.distance <= parseFloat(radius));
+    }
 
     // Filtrar por distancia y calcular distancia para cada producto
     products = products
@@ -18634,7 +20519,8 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
     }
 
     // Ordenamiento
-    switch (orderBy) {
+    const orderByNormalized = orderBy || 'distancia';
+    switch (orderByNormalized) {
       case 'distancia':
         products.sort((a, b) => a.distance - b.distance);
         break;
@@ -18656,7 +20542,7 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
     const endIndex = startIndex + parseInt(limit);
     const paginatedProducts = products.slice(startIndex, endIndex);
 
-    res.json({
+    const responsePayload = {
       success: true,
       data: paginatedProducts,
       searchParams: {
@@ -18670,13 +20556,168 @@ app.get('/api/marketplace/products/nearby', async (req, res) => {
         limit: parseInt(limit),
         totalPages: Math.ceil(total / limit)
       }
-    });
+    };
+
+    setCachedResponse(cacheKey, responsePayload);
+    res.json(responsePayload);
 
   } catch (error) {
     console.error('❌ [MARKETPLACE] Error buscando productos cercanos:', error);
     res.status(500).json({
       success: false,
       message: 'Error buscando productos cercanos',
+      error: error.message
+    });
+  }
+});
+
+// Top productos cercanos por vistas (APP)
+app.get('/api/marketplace/products/nearby/top', authenticateToken, async (req, res) => {
+  try {
+    const cacheKey = `${buildCacheKey(req)}&uid=${req.user.uid}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const {
+      latitude,
+      longitude,
+      radius = 50,
+      type,
+      category,
+      status,
+      limit = 3
+    } = req.query;
+
+    const userLat = latitude ? parseFloat(latitude) : null;
+    const userLng = longitude ? parseFloat(longitude) : null;
+    const searchRadius = parseFloat(radius);
+    const limitNumber = Math.min(parseInt(limit), 10);
+
+    if ((latitude || longitude) && (isNaN(userLat) || userLat < -90 || userLat > 90)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitud inválida'
+      });
+    }
+
+    if ((latitude || longitude) && (isNaN(userLng) || userLng < -180 || userLng > 180)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Longitud inválida'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = 
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    };
+
+    let query = db.collection('marketplace_products');
+
+    if (type && TRANSACTION_TYPES.includes(type)) {
+      query = query.where('type', '==', type);
+    }
+
+    let categoryIdToFilter = null;
+    if (category) {
+      categoryIdToFilter = category;
+      if (typeof category === 'string' && category.includes('-')) {
+        try {
+          const categoryQuery = await db.collection('marketplace_categories')
+            .where('slug', '==', category)
+            .limit(1)
+            .get();
+          if (!categoryQuery.empty) {
+            categoryIdToFilter = categoryQuery.docs[0].id;
+          }
+        } catch (error) {
+          console.warn('⚠️ Error buscando categoría por slug:', error);
+        }
+      }
+      if (categoryIdToFilter) {
+        query = query.where('category', '==', categoryIdToFilter);
+      }
+    }
+
+    if (status && PRODUCT_STATUS.includes(status)) {
+      query = query.where('status', '==', status);
+    } else {
+      query = query.where('status', '==', 'disponible');
+    }
+
+    const userLocation = await getUserCountryForMarketplace(req.user.uid);
+    const snapshot = await query.get();
+    let products = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const location = normalizeMarketplaceLocation(data);
+      return {
+        id: doc.id,
+        ...data,
+        location
+      };
+    });
+
+    products = products.filter(p => p.countryId && p.countryId === userLocation.countryId);
+
+    if (!isNaN(userLat) && !isNaN(userLng)) {
+      products = products
+        .filter(p => p.location && p.location.latitude && p.location.longitude)
+        .map(p => {
+          const distance = calculateDistance(
+            userLat,
+            userLng,
+            p.location.latitude,
+            p.location.longitude
+          );
+          return { ...p, distance };
+        })
+        .filter(p => p.distance <= searchRadius);
+    }
+
+    products.sort((a, b) => {
+      const aViews = a.views || 0;
+      const bViews = b.views || 0;
+      if (bViews !== aViews) return bViews - aViews;
+      if (a.distance !== b.distance) return a.distance - b.distance;
+      return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+    });
+
+    const topProducts = products.slice(0, limitNumber);
+
+    const responsePayload = {
+      success: true,
+      data: topProducts,
+      meta: {
+        latitude: !isNaN(userLat) ? userLat : null,
+        longitude: !isNaN(userLng) ? userLng : null,
+        radius: searchRadius,
+        limit: limitNumber
+      }
+    };
+
+    setCachedResponse(cacheKey, responsePayload);
+    res.json(responsePayload);
+  } catch (error) {
+    console.error('❌ [MARKETPLACE] Error obteniendo top productos cercanos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo top productos cercanos',
       error: error.message
     });
   }
@@ -18709,7 +20750,8 @@ app.get('/api/marketplace/products/:id', async (req, res) => {
     const sellerDoc = await db.collection('users').doc(productData.userId).get();
     let enrichedProduct = {
       id: productDoc.id,
-      ...productData
+      ...productData,
+      location: normalizeMarketplaceLocation(productData)
     };
     
     if (sellerDoc.exists) {
@@ -18754,7 +20796,9 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       type,
       price,
       tradeFor,
-      location
+      location,
+      cityId,
+      countryId
     } = req.body;
 
     // Validaciones
@@ -18861,49 +20905,42 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       }
     }
 
-    // Validar ubicación con coordenadas
-    if (!location) {
-      return res.status(400).json({
-        success: false,
-        message: 'La ubicación es requerida'
-      });
+    let locationData = { countryId: null, countryName: null, cityId: null, cityName: null };
+    if (!cityId && !countryId) {
+      locationData = await getDefaultUserLocation();
+    } else {
+      try {
+        locationData = await resolveCountryCity(countryId, cityId);
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message
+        });
+      }
     }
 
-    // Validar coordenadas
-    if (!location.latitude || !location.longitude) {
-      return res.status(400).json({
-        success: false,
-        message: 'Las coordenadas (latitude, longitude) son requeridas'
-      });
-    }
-
-    // Validar que las coordenadas sean válidas
-    const lat = parseFloat(location.latitude);
-    const lng = parseFloat(location.longitude);
-    
-    if (isNaN(lat) || lat < -90 || lat > 90) {
-      return res.status(400).json({
-        success: false,
-        message: 'Latitud inválida (debe estar entre -90 y 90)'
-      });
-    }
-
-    if (isNaN(lng) || lng < -180 || lng > 180) {
-      return res.status(400).json({
-        success: false,
-        message: 'Longitud inválida (debe estar entre -180 y 180)'
-      });
-    }
-
-    // Normalizar la ubicación
-    const normalizedLocation = {
-      latitude: lat,
-      longitude: lng,
-      address: location.address || '',
-      city: location.city || '',
-      state: location.state || '',
-      country: location.country || 'México'
+    let normalizedLocation = {
+      address: '',
+      city: locationData.cityName || '',
+      state: '',
+      country: locationData.countryName || null
     };
+    if (location && typeof location === 'object') {
+      const hasLat = location.latitude !== undefined && location.latitude !== null;
+      const hasLng = location.longitude !== undefined && location.longitude !== null;
+      normalizedLocation.address = location.address || '';
+      normalizedLocation.city = location.city || locationData.cityName || '';
+      normalizedLocation.state = location.state || '';
+      normalizedLocation.country = location.country || locationData.countryName || null;
+      if (hasLat || hasLng) {
+        const lat = parseFloat(location.latitude);
+        const lng = parseFloat(location.longitude);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          normalizedLocation.latitude = lat;
+          normalizedLocation.longitude = lng;
+        }
+      }
+    }
 
     if (!db) {
       return res.status(500).json({
@@ -18936,6 +20973,10 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
       tradeFor: type === 'trueque' ? tradeFor.trim() : null,
       
       location: normalizedLocation,
+      countryId: locationData.countryId,
+      countryName: locationData.countryName,
+      cityId: locationData.cityId,
+      cityName: locationData.cityName,
       
       status: 'disponible',
       
@@ -18989,7 +21030,9 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
       photos,
       price,
       tradeFor,
-      location
+      location,
+      cityId,
+      countryId
     } = req.body;
 
     if (!db) {
@@ -19116,6 +21159,23 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
       updateData.tradeFor = tradeFor.trim();
     }
 
+    const hasLocationUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, 'cityId')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'countryId');
+    if (hasLocationUpdate) {
+      try {
+        const locationData = await resolveCountryCity(countryId, cityId);
+        updateData.countryId = locationData.countryId;
+        updateData.countryName = locationData.countryName;
+        updateData.cityId = locationData.cityId;
+        updateData.cityName = locationData.cityName;
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message
+        });
+      }
+    }
+
     if (location) {
       // Validar coordenadas si se proporciona ubicación
       if (location.latitude && location.longitude) {
@@ -19142,7 +21202,7 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
           address: location.address || '',
           city: location.city || '',
           state: location.state || '',
-          country: location.country || 'México'
+          country: location.country || updateData.countryName || 'México'
         };
       } else {
         return res.status(400).json({
@@ -22805,6 +24865,527 @@ async function sendPushNotification(tokens, notification, data = {}) {
   }
 }
 
+// ============================================================================
+// 📊 ANALYTICS - UI (Pantallas y Botones)
+// ============================================================================
+const UI_ANALYTICS_EVENT_TYPES = ['view', 'click'];
+const DEEPLINK_EVENT_TYPES = ['click', 'open', 'view'];
+
+const buildDeeplinkUrl = (path, params = {}) => {
+  const cleanPath = String(path || '').trim().replace(/^\/+/, '');
+  if (!cleanPath) return null;
+  const entries = Object.entries(params || {}).filter(
+    ([key, value]) => key && value !== undefined && value !== null && value !== ''
+  );
+  let url = `munpa://${cleanPath}`;
+  if (entries.length > 0) {
+    const query = entries
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+      .join('&');
+    url += `?${query}`;
+  }
+  return url;
+};
+
+const generateShortCode = (length = 7) => {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < length; i += 1) {
+    result += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  }
+  return result;
+};
+
+// Registrar evento de UI (requiere auth)
+app.post('/api/analytics/ui/events', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { page, button = null, eventType, metadata = {} } = req.body;
+
+    if (!page || !eventType || !UI_ANALYTICS_EVENT_TYPES.includes(eventType)) {
+      return res.status(400).json({
+        success: false,
+        message: `page y eventType son requeridos. eventType debe ser: ${UI_ANALYTICS_EVENT_TYPES.join(', ')}`
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const now = new Date();
+    const cleanPage = String(page).trim();
+    const cleanButton = button ? String(button).trim() : null;
+
+    const eventData = {
+      page: cleanPage,
+      button: cleanButton,
+      eventType,
+      userId,
+      metadata,
+      timestamp: admin.firestore.Timestamp.fromDate(now),
+      createdAt: admin.firestore.Timestamp.fromDate(now)
+    };
+
+    await db.collection('ui_analytics_events').add(eventData);
+
+    const aggregateId = `${cleanPage}::${cleanButton || 'page'}`;
+    const aggregateRef = db.collection('ui_analytics').doc(aggregateId);
+    const updateData = {
+      page: cleanPage,
+      button: cleanButton,
+      updatedAt: admin.firestore.Timestamp.fromDate(now)
+    };
+
+    if (eventType === 'view') {
+      updateData.views = admin.firestore.FieldValue.increment(1);
+    } else if (eventType === 'click') {
+      updateData.clicks = admin.firestore.FieldValue.increment(1);
+    }
+
+    await aggregateRef.set(updateData, { merge: true });
+
+    res.json({
+      success: true,
+      message: 'Evento registrado',
+      data: {
+        page: cleanPage,
+        button: cleanButton,
+        eventType,
+        timestamp: now
+      }
+    });
+  } catch (error) {
+    console.error('❌ [UI ANALYTICS] Error registrando evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando evento',
+      error: error.message
+    });
+  }
+});
+
+// Consultar estadísticas UI (admin)
+app.get('/api/admin/analytics/ui', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page, button } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('ui_analytics');
+    if (page) query = query.where('page', '==', String(page));
+    if (button) query = query.where('button', '==', String(button));
+
+    const snapshot = await query.orderBy('updatedAt', 'desc').limit(200).get();
+    const results = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('❌ [UI ANALYTICS] Error consultando stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error consultando estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// 🔗 DEEPLINKS - Admin + Analytics
+// ============================================================================
+
+// Crear o actualizar deeplink (admin)
+app.post('/api/admin/deeplinks', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { key, name, path, params = {}, category = null, description = null, enabled = true } = req.body;
+
+    if (!key || !name || !path) {
+      return res.status(400).json({
+        success: false,
+        message: 'key, name y path son requeridos'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const cleanKey = String(key).trim();
+    const cleanName = String(name).trim();
+    const cleanPath = String(path).trim().replace(/^\/+/, '');
+    const deeplinkUrl = buildDeeplinkUrl(cleanPath, params);
+
+    if (!deeplinkUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'path invalido'
+      });
+    }
+
+    const now = new Date();
+    const deeplinkRef = db.collection('deeplinks').doc(cleanKey);
+    const existing = await deeplinkRef.get();
+
+    const payload = {
+      key: cleanKey,
+      name: cleanName,
+      path: cleanPath,
+      params,
+      category,
+      description,
+      enabled: Boolean(enabled),
+      deeplinkUrl,
+      updatedAt: admin.firestore.Timestamp.fromDate(now),
+      updatedBy: req.user.uid
+    };
+
+    if (!existing.exists) {
+      payload.createdAt = admin.firestore.Timestamp.fromDate(now);
+      payload.createdBy = req.user.uid;
+    }
+
+    await deeplinkRef.set(payload, { merge: true });
+
+    res.json({
+      success: true,
+      message: 'Deeplink guardado',
+      data: payload
+    });
+  } catch (error) {
+    console.error('❌ [DEEPLINKS] Error guardando deeplink:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error guardando deeplink',
+      error: error.message
+    });
+  }
+});
+
+const createDeeplinkShort = async (req, res) => {
+  try {
+    const { path, params = {}, key = null, webFallback = 'https://munpa.online', enabled = true } = req.body;
+
+    if (!path) {
+      return res.status(400).json({
+        success: false,
+        message: 'path es requerido'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const cleanPath = String(path).trim().replace(/^\/+/, '');
+    const deeplinkUrl = buildDeeplinkUrl(cleanPath, params);
+    if (!deeplinkUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'path invalido'
+      });
+    }
+
+    let code = null;
+    let attempts = 0;
+    while (!code && attempts < 5) {
+      const candidate = generateShortCode(7);
+      const existing = await db.collection('deeplink_short_urls').doc(candidate).get();
+      if (!existing.exists) code = candidate;
+      attempts += 1;
+    }
+
+    if (!code) {
+      return res.status(500).json({
+        success: false,
+        message: 'No se pudo generar short link'
+      });
+    }
+
+    const now = new Date();
+    const payload = {
+      code,
+      key: key ? String(key).trim() : null,
+      path: cleanPath,
+      params,
+      deeplinkUrl,
+      webFallback: String(webFallback || 'https://munpa.online'),
+      enabled: Boolean(enabled),
+      createdAt: admin.firestore.Timestamp.fromDate(now),
+      createdBy: req.user?.uid || null,
+      updatedAt: admin.firestore.Timestamp.fromDate(now)
+    };
+
+    await db.collection('deeplink_short_urls').doc(code).set(payload);
+
+    res.json({
+      success: true,
+      data: {
+        ...payload,
+        shortUrl: `https://api.munpa.online/dl/${code}`
+      }
+    });
+  } catch (error) {
+    console.error('❌ [DEEPLINKS] Error creando short link:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando short link',
+      error: error.message
+    });
+  }
+};
+
+// Crear short link para deeplink (admin)
+app.post('/api/admin/deeplinks/short', authenticateToken, isAdmin, createDeeplinkShort);
+
+// Crear short link publico (sin token)
+app.post('/api/deeplinks/short', createDeeplinkShort);
+
+// Resolver short link a deeplink
+app.get('/dl/:code', async (req, res) => {
+  try {
+    const { code } = req.params;
+
+    if (!db) {
+      return res.status(500).send('DB no disponible');
+    }
+
+    const doc = await db.collection('deeplink_short_urls').doc(code).get();
+    if (!doc.exists) {
+      return res.status(404).send('Link no encontrado');
+    }
+
+    const data = doc.data();
+    if (data.enabled === false) {
+      return res.status(404).send('Link deshabilitado');
+    }
+
+    const deeplinkUrl = data.deeplinkUrl;
+    const webFallback = data.webFallback || 'https://munpa.online';
+    const analyticsKey = data.key || `short:${code}`;
+    const now = admin.firestore.Timestamp.fromDate(new Date());
+
+    await db.collection('deeplink_analytics').doc(analyticsKey).set({
+      key: analyticsKey,
+      path: data.path || null,
+      updatedAt: now,
+      lastEventAt: now,
+      lastEventType: 'click',
+      totalEvents: admin.firestore.FieldValue.increment(1),
+      totalClicks: admin.firestore.FieldValue.increment(1)
+    }, { merge: true });
+
+    const html = `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>Munpa</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 32px;">
+          <h2>Abriendo Munpa...</h2>
+          <p>Si no se abre automáticamente, toca el botón.</p>
+          <a href="${deeplinkUrl}" style="display:inline-block;padding:12px 20px;background:#2C7EF7;color:#fff;text-decoration:none;border-radius:6px;">Abrir app</a>
+          <script>
+            window.location.href = "${deeplinkUrl}";
+            setTimeout(function() {
+              window.location.href = "${webFallback}";
+            }, 1600);
+          </script>
+        </body>
+      </html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html');
+    return res.send(html);
+  } catch (error) {
+    console.error('❌ [DEEPLINKS] Error resolviendo short link:', error);
+    res.status(500).send('Error');
+  }
+});
+
+// Listar deeplinks con stats (admin)
+app.get('/api/admin/deeplinks', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { category, enabled } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('deeplinks');
+    if (category) query = query.where('category', '==', String(category));
+    if (enabled !== undefined) query = query.where('enabled', '==', String(enabled) === 'true');
+
+    const snapshot = await query.orderBy('updatedAt', 'desc').limit(200).get();
+    const deeplinks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    const analyticsRefs = deeplinks.map(item => db.collection('deeplink_analytics').doc(item.key));
+    const analyticsSnaps = analyticsRefs.length ? await db.getAll(...analyticsRefs) : [];
+    const analyticsMap = new Map(
+      analyticsSnaps.map(doc => [doc.id, doc.exists ? doc.data() : null])
+    );
+
+    const results = deeplinks.map(item => ({
+      ...item,
+      analytics: analyticsMap.get(item.key) || {
+        totalClicks: 0,
+        totalOpens: 0,
+        totalViews: 0,
+        totalEvents: 0,
+        lastEventAt: null
+      }
+    }));
+
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('❌ [DEEPLINKS] Error consultando deeplinks:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error consultando deeplinks',
+      error: error.message
+    });
+  }
+});
+
+// Registrar evento de deeplink (requiere auth)
+app.post('/api/analytics/deeplinks/events', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { key, eventType = 'click', path = null, params = {}, source = null, metadata = {} } = req.body;
+
+    if (!key || !DEEPLINK_EVENT_TYPES.includes(eventType)) {
+      return res.status(400).json({
+        success: false,
+        message: `key y eventType son requeridos. eventType debe ser: ${DEEPLINK_EVENT_TYPES.join(', ')}`
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const now = new Date();
+    const cleanKey = String(key).trim();
+    const cleanPath = path ? String(path).trim().replace(/^\/+/, '') : null;
+
+    const eventData = {
+      key: cleanKey,
+      path: cleanPath,
+      params,
+      eventType,
+      source,
+      userId,
+      metadata,
+      timestamp: admin.firestore.Timestamp.fromDate(now),
+      createdAt: admin.firestore.Timestamp.fromDate(now)
+    };
+
+    await db.collection('deeplink_events').add(eventData);
+
+    const aggregateRef = db.collection('deeplink_analytics').doc(cleanKey);
+    const updateData = {
+      key: cleanKey,
+      path: cleanPath,
+      updatedAt: admin.firestore.Timestamp.fromDate(now),
+      lastEventAt: admin.firestore.Timestamp.fromDate(now),
+      lastEventType: eventType,
+      lastUserId: userId,
+      totalEvents: admin.firestore.FieldValue.increment(1)
+    };
+
+    if (eventType === 'click') {
+      updateData.totalClicks = admin.firestore.FieldValue.increment(1);
+    } else if (eventType === 'open') {
+      updateData.totalOpens = admin.firestore.FieldValue.increment(1);
+    } else if (eventType === 'view') {
+      updateData.totalViews = admin.firestore.FieldValue.increment(1);
+    }
+
+    await aggregateRef.set(updateData, { merge: true });
+
+    res.json({
+      success: true,
+      message: 'Evento deeplink registrado',
+      data: {
+        key: cleanKey,
+        eventType,
+        timestamp: now
+      }
+    });
+  } catch (error) {
+    console.error('❌ [DEEPLINKS] Error registrando evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando evento deeplink',
+      error: error.message
+    });
+  }
+});
+
+// Consultar stats de deeplinks (admin)
+app.get('/api/admin/analytics/deeplinks', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { key } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('deeplink_analytics');
+    if (key) query = query.where('key', '==', String(key));
+
+    const snapshot = await query.orderBy('updatedAt', 'desc').limit(200).get();
+    const results = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('❌ [DEEPLINKS] Error consultando stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error consultando stats deeplinks',
+      error: error.message
+    });
+  }
+});
+
 // Enviar notificaciones a través de Expo Push Notification Service
 async function sendExpoNotifications(tokens, notification, data) {
   try {
@@ -22887,7 +25468,7 @@ async function sendFCMNotifications(tokens, notification, data) {
       notification: {
         title: notification.title || 'Munpa',
         body: notification.body || '',
-        imageUrl: notification.imageUrl || null
+        ...(notification.imageUrl && isValidUrl(notification.imageUrl) ? { imageUrl: notification.imageUrl } : {})
       },
       data: {
         ...data,
@@ -22917,11 +25498,20 @@ async function sendFCMNotifications(tokens, notification, data) {
     console.log(`✅ [FCM] Notificaciones FCM enviadas: ${response.successCount}/${tokens.length}`);
     
     const failedTokens = [];
+    const invalidTokenCodes = new Set([
+      'messaging/registration-token-not-registered',
+      'messaging/invalid-registration-token'
+    ]);
     if (response.failureCount > 0) {
       response.responses.forEach((resp, idx) => {
         if (!resp.success) {
-          failedTokens.push(tokens[idx]);
-          console.log(`❌ [FCM] Token inválido: ${resp.error?.code}`);
+          const errorCode = resp.error?.code;
+          if (invalidTokenCodes.has(errorCode)) {
+            failedTokens.push(tokens[idx]);
+            console.log(`❌ [FCM] Token inválido: ${errorCode}`);
+          } else {
+            console.log(`⚠️ [FCM] Error enviando token (${errorCode || 'unknown'})`);
+          }
         }
       });
     }
@@ -22934,7 +25524,7 @@ async function sendFCMNotifications(tokens, notification, data) {
 
   } catch (error) {
     console.error('❌ [FCM] Error enviando notificaciones FCM:', error);
-    return { successCount: 0, failureCount: tokens.length, failedTokens: tokens };
+    return { successCount: 0, failureCount: tokens.length, failedTokens: [] };
   }
 }
 
@@ -22968,6 +25558,15 @@ app.post('/api/notifications/register-token', authenticateToken, async (req, res
       return res.status(400).json({
         success: false,
         message: 'Token FCM requerido'
+      });
+    }
+
+    // Evitar guardar tokens APNS (64 hex) en lugar de FCM
+    const looksLikeApnsToken = /^[a-f0-9]{64}$/i.test(token);
+    if (looksLikeApnsToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token inválido. Se requiere token FCM, no APNS.'
       });
     }
 
@@ -23066,10 +25665,9 @@ app.get('/api/notifications/check-tokens', authenticateToken, async (req, res) =
   }
 });
 
-// Eliminar token FCM (logout o desinstalación)
-app.post('/api/notifications/remove-token', authenticateToken, async (req, res) => {
+const removeNotificationToken = async (req, res) => {
   try {
-    const { token } = req.body;
+    const token = req.body?.token || req.query?.token;
     const userId = req.user.uid;
 
     if (!token) {
@@ -23105,7 +25703,11 @@ app.post('/api/notifications/remove-token', authenticateToken, async (req, res) 
       error: error.message
     });
   }
-});
+};
+
+// Eliminar token FCM (logout o desinstalación)
+app.post('/api/notifications/remove-token', authenticateToken, removeNotificationToken);
+app.delete('/api/notifications/remove-token', authenticateToken, removeNotificationToken);
 
 // Obtener notificaciones del usuario
 app.get('/api/notifications', authenticateToken, async (req, res) => {
@@ -25697,6 +28299,79 @@ app.get('/api/sleep/history/:childId', authenticateToken, (req, res) => {
   sleepController.getSleepHistoryEndpoint(req, res);
 });
 
+// ============================================================================
+// 🔔 SISTEMA DE NOTIFICACIONES DE SUEÑO
+// ============================================================================
+const sleepNotificationsController = require('./controllers/sleepNotificationsController');
+const medicationsController = require('./controllers/medicationsController');
+
+// Programar notificaciones 30min antes de cada siesta
+app.post('/api/sleep/notifications/pre-nap/:childId', authenticateToken, (req, res) => {
+  sleepNotificationsController.schedulePreNapNotifications(req, res);
+});
+
+// Programar notificaciones a la hora exacta de cada siesta/bedtime
+app.post('/api/sleep/notifications/nap-time/:childId', authenticateToken, (req, res) => {
+  sleepNotificationsController.scheduleNapTimeNotifications(req, res);
+});
+
+// Verificar y notificar si hay registro tarde (30+ min después)
+app.post('/api/sleep/notifications/check-late/:childId', authenticateToken, (req, res) => {
+  sleepNotificationsController.checkLateNapRegistration(req, res);
+});
+
+// Verificar y notificar siestas largas (4+ horas)
+app.post('/api/sleep/notifications/check-long/:childId', authenticateToken, (req, res) => {
+  sleepNotificationsController.checkLongNaps(req, res);
+});
+
+// Enviar notificación inmediata personalizada
+app.post('/api/sleep/notifications/send', authenticateToken, (req, res) => {
+  sleepNotificationsController.sendSleepNotification(req, res);
+});
+
+// Procesar notificaciones programadas (para cron job)
+app.post('/api/sleep/notifications/process-scheduled', (req, res) => {
+  sleepNotificationsController.processScheduledNotifications(req, res);
+});
+// Vercel cron usa GET por defecto; soportar ambos métodos
+app.get('/api/sleep/notifications/process-scheduled', (req, res) => {
+  sleepNotificationsController.processScheduledNotifications(req, res);
+});
+
+// ============================================================================
+// 💊 SISTEMA DE MEDICAMENTOS Y RECORDATORIOS
+// ============================================================================
+app.post('/api/medications', authenticateToken, (req, res) => {
+  medicationsController.createMedication(req, res);
+});
+
+app.get('/api/medications/:childId', authenticateToken, (req, res) => {
+  medicationsController.listMedications(req, res);
+});
+
+app.put('/api/medications/:medicationId', authenticateToken, (req, res) => {
+  medicationsController.updateMedication(req, res);
+});
+
+app.delete('/api/medications/:medicationId', authenticateToken, (req, res) => {
+  medicationsController.deleteMedication(req, res);
+});
+
+app.post('/api/medications/reminders/:reminderId/taken', authenticateToken, (req, res) => {
+  medicationsController.markMedicationTaken(req, res);
+});
+
+// ============================================================================
+// 🎨 SISTEMA DE ACTIVIDADES PARA BEBÉS
+// ============================================================================
+const activitiesController = require('./controllers/activitiesController');
+
+// Obtener sugerencias de actividades basadas en edad y ventanas de vigilia
+app.get('/api/activities/suggestions/:childId', authenticateToken, (req, res) => {
+  activitiesController.getActivitySuggestions(req, res);
+});
+
 // Actualizar evento de sueño
 app.put('/api/sleep/:eventId', authenticateToken, (req, res) => {
   sleepController.updateSleepEvent(req, res);
@@ -26064,7 +28739,6 @@ app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => 
     const childData = childDoc.data();
     const birthDate = childData.birthDate.toDate();
     const ageInMonths = sleepController.calculateAgeInMonths(birthDate);
-    const sleepHistory = await sleepController.getSleepHistory(userId, childId, 7);
 
     // ✅ Construir childInfo correctamente (con id y userId)
     const childInfo = {
@@ -26081,6 +28755,72 @@ app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => 
     const TimezoneHelper = require('./utils/timezoneHelper');
     const userTimezone = TimezoneHelper.getUserTimezone(req);
 
+    // ⚡ Intentar usar cache de predicciones recientes (evitar recomputo)
+    const todayInfo = TimezoneHelper.getTodayInUserTimezone(userTimezone);
+    const todayStr = format(todayInfo.userLocalTime, 'yyyy-MM-dd');
+    const predictionDoc = await db.collection('sleepPredictions').doc(`${childId}_${todayStr}`).get();
+    const forceRefresh = req.query?.force === 'true' || req.headers['x-force-refresh'] === 'true';
+    const cacheTtlMinutes = 5;
+
+    if (!forceRefresh && predictionDoc.exists) {
+      const cached = predictionDoc.data();
+      const lastUpdated = cached.lastUpdated?.toDate ? cached.lastUpdated.toDate() : null;
+      const cacheAgeMinutes = lastUpdated ? Math.floor((Date.now() - lastUpdated.getTime()) / 60000) : null;
+      const hasPredictions = (cached.predictedNaps && cached.predictedNaps.length > 0) || cached.predictedBedtime;
+
+      if (hasPredictions && cacheAgeMinutes !== null && cacheAgeMinutes <= cacheTtlMinutes) {
+        const reminders = [];
+        const now = new Date();
+
+        const nextNap = cached.predictedNaps && cached.predictedNaps.length > 0
+          ? cached.predictedNaps[0]
+          : null;
+
+        if (nextNap?.time) {
+          const napTime = new Date(nextNap.time);
+          const minutesUntilNap = Math.floor((napTime - now) / 60000);
+          if (minutesUntilNap > 0 && minutesUntilNap <= 30) {
+            reminders.push({
+              type: 'nap',
+              title: '🛌 Hora de siesta pronto',
+              message: `La próxima siesta de ${childData.name} es en ${minutesUntilNap} minutos`,
+              time: nextNap.time,
+              minutesUntil: minutesUntilNap,
+              priority: minutesUntilNap <= 15 ? 'high' : 'medium'
+            });
+          }
+        }
+
+        if (cached.predictedBedtime?.time) {
+          const bedtime = new Date(cached.predictedBedtime.time);
+          const minutesUntilBedtime = Math.floor((bedtime - now) / 60000);
+          if (minutesUntilBedtime > 0 && minutesUntilBedtime <= 60) {
+            reminders.push({
+              type: 'bedtime',
+              title: '🌙 Hora de dormir se acerca',
+              message: `Es hora de empezar la rutina de ${childData.name}`,
+              time: cached.predictedBedtime.time,
+              minutesUntil: minutesUntilBedtime,
+              priority: minutesUntilBedtime <= 30 ? 'high' : 'medium'
+            });
+          }
+        }
+
+        return res.json({
+          success: true,
+          reminders,
+          sleepPressure: cached.sleepPressure || null,
+          nextPrediction: {
+            nap: nextNap,
+            bedtime: cached.predictedBedtime || null
+          },
+          timezone: userTimezone,
+          cached: true
+        });
+      }
+    }
+
+    const sleepHistory = await sleepController.getSleepHistory(userId, childId, 7);
     const prediction = await sleepController.generateSleepPrediction(
       sleepHistory,
       ageInMonths,

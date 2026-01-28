@@ -16,6 +16,10 @@
     {
       "path": "/api/notifications/weekly-reminders",
       "schedule": "0 15-23,0,1 * * *"
+    },
+    {
+      "path": "/api/sleep/notifications/process-scheduled",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
