@@ -4471,18 +4471,30 @@ const getUserLocationFromProfile = async (userId) => {
   const userDoc = await db.collection('users').doc(userId).get();
   if (!userDoc.exists) return {};
   const data = userDoc.data();
-  return {
+  const baseLocation = {
     latitude: data.latitude ?? null,
     longitude: data.longitude ?? null,
     cityId: data.cityId || null,
     countryId: data.countryId || null
   };
+  if (!baseLocation.countryId || !baseLocation.cityId) {
+    const defaultLocation = await getDefaultUserLocation();
+    return {
+      ...baseLocation,
+      countryId: baseLocation.countryId || defaultLocation.countryId,
+      cityId: baseLocation.cityId || defaultLocation.cityId,
+      countryName: data.countryName || defaultLocation.countryName,
+      cityName: data.cityName || defaultLocation.cityName
+    };
+  }
+  return baseLocation;
 };
 
 const getUserCountryForMarketplace = async (userId) => {
   const location = await getUserLocationFromProfile(userId);
   if (!location.countryId) {
-    throw new Error('Ubicación no disponible. Actualiza tu perfil antes de buscar.');
+    const defaultLocation = await getDefaultUserLocation();
+    return defaultLocation;
   }
   return location;
 };
@@ -5885,6 +5897,75 @@ app.get('/marketplace/product/:productId', async (req, res) => {
 
 // ===== ENDPOINTS PARA GENERAR LINKS =====
 
+// Compartir artículo (landing con deeplink)
+app.get('/article/:articleId', async (req, res) => {
+  try {
+    const { articleId } = req.params;
+
+    if (!db) {
+      return res.status(500).send('<html><body style="padding:20px;text-align:center;"><h2>Base de datos no disponible</h2></body></html>');
+    }
+
+    const articleDoc = await db.collection('articles').doc(articleId).get();
+    if (!articleDoc.exists) {
+      return res.status(404).send('<html><body style="padding:20px;text-align:center;"><h2>Artículo no encontrado</h2></body></html>');
+    }
+
+    const articleData = articleDoc.data();
+    const title = articleData.title || 'Artículo en Munpa';
+    const description = articleData.summary || stripHtml(articleData.htmlContent || '').substring(0, 200) || '';
+    const imageUrl = articleData.coverImageUrl || '';
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <meta property="og:title" content="${title}">
+  <meta property="og:description" content="${description}">
+  ${imageUrl ? `<meta property="og:image" content="${imageUrl}">` : ''}
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+    .container { max-width: 640px; margin: 0 auto; background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .title { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+    .description { font-size: 15px; line-height: 1.6; color: #555; margin-bottom: 16px; }
+    .button { display: inline-block; background: #6366f1; color: white; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; }
+  </style>
+  <script>
+    function openInApp() {
+      const isAndroid = /Android/i.test(navigator.userAgent);
+      const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isAndroid) {
+        window.location.href = 'intent://article/${articleId}#Intent;scheme=munpa;package=com.munpa.app;end';
+      } else if (isIOS) {
+        window.location.href = 'munpa://article/${articleId}';
+        setTimeout(() => {}, 2000);
+      } else {
+        window.location.href = 'munpa://article/${articleId}';
+      }
+    }
+    window.onload = function() { setTimeout(openInApp, 100); };
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="title">${title}</div>
+    <div class="description">${description}</div>
+    <a class="button" href="munpa://article/${articleId}">Abrir en Munpa</a>
+  </div>
+</body>
+</html>
+    `;
+
+    res.send(html);
+  } catch (error) {
+    console.error('❌ [SHARE] Error mostrando artículo:', error);
+    res.status(500).send('<html><body style="padding:20px;text-align:center;"><h2>Error al cargar</h2></body></html>');
+  }
+});
+
 // Compartir post de comunidad
 app.get('/api/posts/:postId/share', authenticateToken, async (req, res) => {
   try {
@@ -6715,6 +6796,7 @@ app.get('/api/recommendations/nearby/top', authenticateToken, async (req, res) =
     }
 
     const snapshot = await query.get();
+    const categoriesMap = await getCategoriesMap();
 
     const recommendationsWithDistance = await Promise.all(
       snapshot.docs.map(async (doc) => {
@@ -10602,6 +10684,15 @@ app.put('/api/auth/location', authenticateToken, async (req, res) => {
     const hasLocationIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'countryId')
       || Object.prototype.hasOwnProperty.call(req.body || {}, 'cityId');
     if (hasLocationIds) {
+      const isBlankLocation = (value) => value === null || value === undefined || String(value).trim() === '';
+      const hasNoLocationValues = isBlankLocation(countryId) && isBlankLocation(cityId);
+      if (hasNoLocationValues) {
+        const defaultLocation = await getDefaultUserLocation();
+        updateData.countryId = defaultLocation.countryId;
+        updateData.countryName = defaultLocation.countryName;
+        updateData.cityId = defaultLocation.cityId;
+        updateData.cityName = defaultLocation.cityName;
+      } else {
       try {
         const locationData = await resolveCountryCity(countryId, cityId);
         updateData.countryId = locationData.countryId;
@@ -10613,6 +10704,7 @@ app.put('/api/auth/location', authenticateToken, async (req, res) => {
           success: false,
           message: err.message
         });
+      }
       }
     }
 
@@ -12823,18 +12915,24 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
   try {
     const { birthDate, gestationWeeks, ageWeeks, name, isPregnant = false, childId } = req.body;
 
-    const cacheKey = `/api/guide/today?childId=${childId || 'none'}&birthDate=${birthDate || 'none'}&ageWeeks=${ageWeeks || 'none'}&gestationWeeks=${gestationWeeks || 'none'}&pregnant=${Boolean(isPregnant)}`;
-    const cached = getCachedResponse(cacheKey);
-    if (cached) {
-      return res.json(cached);
-    }
-
     let weeks = null;
     let months = null;
     let pregnant = Boolean(isPregnant);
+    let resolvedChildId = childId || null;
 
-    if (childId) {
-      const childDoc = await db.collection('children').doc(childId).get();
+    if (!resolvedChildId && name && db) {
+      const childSnapshot = await db.collection('children')
+        .where('parentId', '==', req.user.uid)
+        .where('name', '==', String(name).trim())
+        .limit(1)
+        .get();
+      if (!childSnapshot.empty) {
+        resolvedChildId = childSnapshot.docs[0].id;
+      }
+    }
+
+    if (resolvedChildId) {
+      const childDoc = await db.collection('children').doc(resolvedChildId).get();
       if (!childDoc.exists) {
         return res.status(404).json({
           success: false,
@@ -12889,6 +12987,12 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
           value = Math.max(1, Math.floor(weeks / 4.3));
         }
       }
+    }
+
+    const cacheKey = `/api/guide/today?childId=${resolvedChildId || 'none'}&unit=${unit}&value=${value}&pregnant=${Boolean(pregnant)}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      return res.json(cached);
     }
 
     const guide = await getDailyGuideFromAI({
@@ -16948,9 +17052,13 @@ app.get('/api/communities/posts/top', authenticateToken, async (req, res) => {
       .limit(200)
       .get();
 
+    const communityIds = new Set();
     const posts = [];
     for (const doc of snapshot.docs) {
       const postData = doc.data();
+      if (postData.communityId) {
+        communityIds.add(postData.communityId);
+      }
 
       // Obtener nombre de autor
       let authorName = 'Usuario';
@@ -16974,6 +17082,20 @@ app.get('/api/communities/posts/top', authenticateToken, async (req, res) => {
       });
     }
 
+    const communityMap = new Map();
+    if (communityIds.size > 0) {
+      const communitySnapshot = await db.collection('communities')
+        .where(admin.firestore.FieldPath.documentId(), 'in', Array.from(communityIds).slice(0, 10))
+        .get();
+      communitySnapshot.forEach(doc => {
+        const data = doc.data();
+        communityMap.set(doc.id, {
+          id: doc.id,
+          name: data.name || null
+        });
+      });
+    }
+
     const topPosts = posts
       .sort((a, b) => {
         if (b.likeCount !== a.likeCount) return b.likeCount - a.likeCount;
@@ -16981,7 +17103,11 @@ app.get('/api/communities/posts/top', authenticateToken, async (req, res) => {
         const dateB = b.createdAt?.toDate?.() || b.createdAt;
         return dateB - dateA;
       })
-      .slice(0, limitNumber);
+      .slice(0, limitNumber)
+      .map(post => ({
+        ...post,
+        communityName: post.communityId ? communityMap.get(post.communityId)?.name || null : null
+      }));
 
     const responsePayload = {
       success: true,
@@ -19604,6 +19730,1103 @@ app.delete('/api/children/:childId/measurements/:measurementId', authenticateTok
     res.status(500).json({
       success: false,
       message: 'Error eliminando medición',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// 6.1 MEDICIONES - PESO (ENDPOINTS DEDICADOS)
+// ==========================================
+
+const mapWeightMeasurement = (doc) => {
+  const data = doc.data();
+  const measuredAt = parseDateSafe(data.measuredAt || data.date);
+  return {
+    id: doc.id,
+    valueKg: data.valueKg ?? data.weight ?? null,
+    measuredAt: measuredAt ? measuredAt.toISOString() : null,
+    source: data.source || null,
+    notes: data.notes || null,
+    createdBy: data.createdBy || null
+  };
+};
+
+const mapHeightMeasurement = (doc) => {
+  const data = doc.data();
+  const measuredAt = parseDateSafe(data.measuredAt || data.date);
+  return {
+    id: doc.id,
+    valueCm: data.valueCm ?? data.height ?? null,
+    measuredAt: measuredAt ? measuredAt.toISOString() : null,
+    source: data.source || null,
+    notes: data.notes || null,
+    createdBy: data.createdBy || null
+  };
+};
+
+const mapHeadMeasurement = (doc) => {
+  const data = doc.data();
+  const measuredAt = parseDateSafe(data.measuredAt || data.date);
+  return {
+    id: doc.id,
+    valueCm: data.valueCm ?? data.headCircumference ?? null,
+    measuredAt: measuredAt ? measuredAt.toISOString() : null,
+    source: data.source || null,
+    notes: data.notes || null,
+    createdBy: data.createdBy || null
+  };
+};
+
+// Obtener historial de peso
+app.get('/api/children/:childId/measurements/weight', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const childData = childDoc.data();
+    const childSex = normalizeChildSex(childData);
+    const birthDate = childData?.birthDate || null;
+    const percentilePoints = childSex ? await getGrowthPercentilePoints(childSex, 'weight') : [];
+
+    let snapshot = await db.collection('children').doc(childId)
+      .collection('measurements_weight')
+      .orderBy('measuredAt', 'desc')
+      .get();
+
+    let measurements = snapshot.docs.map((doc) => {
+      const mapped = mapWeightMeasurement(doc);
+      if (birthDate && mapped.measuredAt && mapped.valueKg !== null && percentilePoints.length > 0) {
+        const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+        const curvePoint = interpolatePercentile(percentilePoints, ageWeeks);
+        mapped.ageWeeks = ageWeeks;
+        mapped.percentile = estimatePercentileFromPoint(mapped.valueKg, curvePoint);
+      }
+      return mapped;
+    });
+
+    if (measurements.length === 0) {
+      const fallbackSnapshot = await db.collection('children').doc(childId)
+        .collection('measurements')
+        .orderBy('date', 'desc')
+        .get();
+      measurements = fallbackSnapshot.docs
+        .filter(doc => doc.data().weight !== undefined && doc.data().weight !== null)
+        .map((doc) => {
+          const mapped = mapWeightMeasurement(doc);
+          if (birthDate && mapped.measuredAt && mapped.valueKg !== null && percentilePoints.length > 0) {
+            const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+            const curvePoint = interpolatePercentile(percentilePoints, ageWeeks);
+            mapped.ageWeeks = ageWeeks;
+            mapped.percentile = estimatePercentileFromPoint(mapped.valueKg, curvePoint);
+          }
+          return mapped;
+        });
+    }
+
+    res.json({
+      success: true,
+      data: measurements
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo peso:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo peso',
+      error: error.message
+    });
+  }
+});
+
+// Crear registro de peso
+app.post('/api/children/:childId/measurements/weight', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { valueKg, measuredAt, notes, source } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (valueKg === undefined || valueKg === null || measuredAt === undefined || measuredAt === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'valueKg y measuredAt son requeridos'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const userDoc = await db.collection('users').doc(uid).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const createdBy = {
+      uid,
+      name: userData.displayName || userData.name || userData.email || 'Usuario'
+    };
+
+    const measurementData = {
+      valueKg: Number(valueKg),
+      measuredAt: new Date(measuredAt),
+      notes: notes || '',
+      source: source || null,
+      createdBy,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const measurementRef = await db.collection('children').doc(childId)
+      .collection('measurements_weight')
+      .add(measurementData);
+
+    res.json({
+      success: true,
+      message: 'Peso registrado exitosamente',
+      data: {
+        id: measurementRef.id,
+        ...mapWeightMeasurement({ id: measurementRef.id, data: () => measurementData })
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error registrando peso:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando peso',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar registro de peso
+app.put('/api/children/:childId/measurements/weight/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, id } = req.params;
+    const { valueKg, measuredAt, notes, source } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const updateData = { updatedAt: new Date() };
+    if (valueKg !== undefined) updateData.valueKg = Number(valueKg);
+    if (measuredAt !== undefined) updateData.measuredAt = new Date(measuredAt);
+    if (notes !== undefined) updateData.notes = notes;
+    if (source !== undefined) updateData.source = source;
+
+    await db.collection('children').doc(childId)
+      .collection('measurements_weight').doc(id)
+      .update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Peso actualizado exitosamente',
+      data: { id, ...updateData }
+    });
+  } catch (error) {
+    console.error('❌ Error actualizando peso:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando peso',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar registro de peso
+app.delete('/api/children/:childId/measurements/weight/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    await db.collection('children').doc(childId)
+      .collection('measurements_weight').doc(id)
+      .delete();
+
+    res.json({
+      success: true,
+      message: 'Peso eliminado exitosamente'
+    });
+  } catch (error) {
+    console.error('❌ Error eliminando peso:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando peso',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// 6.1.1 MEDICIONES - ALTURA (ENDPOINTS DEDICADOS)
+// ==========================================
+
+// Obtener historial de altura
+app.get('/api/children/:childId/measurements/height', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const childData = childDoc.data();
+    const childSex = normalizeChildSex(childData);
+    const birthDate = childData?.birthDate || null;
+    const percentilePoints = childSex ? await getGrowthPercentilePoints(childSex, 'height') : [];
+
+    let snapshot = await db.collection('children').doc(childId)
+      .collection('measurements_height')
+      .orderBy('measuredAt', 'desc')
+      .get();
+
+    let measurements = snapshot.docs.map((doc) => {
+      const mapped = mapHeightMeasurement(doc);
+      if (birthDate && mapped.measuredAt && mapped.valueCm !== null && percentilePoints.length > 0) {
+        const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+        const curvePoint = interpolatePercentile(percentilePoints, ageWeeks);
+        mapped.ageWeeks = ageWeeks;
+        mapped.percentile = estimatePercentileFromPoint(mapped.valueCm, curvePoint);
+      }
+      return mapped;
+    });
+
+    if (measurements.length === 0) {
+      const fallbackSnapshot = await db.collection('children').doc(childId)
+        .collection('measurements')
+        .orderBy('date', 'desc')
+        .get();
+      measurements = fallbackSnapshot.docs
+        .filter(doc => doc.data().height !== undefined && doc.data().height !== null)
+        .map((doc) => {
+          const mapped = mapHeightMeasurement(doc);
+          if (birthDate && mapped.measuredAt && mapped.valueCm !== null && percentilePoints.length > 0) {
+            const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+            const curvePoint = interpolatePercentile(percentilePoints, ageWeeks);
+            mapped.ageWeeks = ageWeeks;
+            mapped.percentile = estimatePercentileFromPoint(mapped.valueCm, curvePoint);
+          }
+          return mapped;
+        });
+    }
+
+    res.json({
+      success: true,
+      data: measurements
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo altura:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo altura',
+      error: error.message
+    });
+  }
+});
+
+// Crear registro de altura
+app.post('/api/children/:childId/measurements/height', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { valueCm, measuredAt, notes, source } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (valueCm === undefined || valueCm === null || measuredAt === undefined || measuredAt === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'valueCm y measuredAt son requeridos'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const userDoc = await db.collection('users').doc(uid).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const createdBy = {
+      uid,
+      name: userData.displayName || userData.name || userData.email || 'Usuario'
+    };
+
+    const measurementData = {
+      valueCm: Number(valueCm),
+      measuredAt: new Date(measuredAt),
+      notes: notes || '',
+      source: source || null,
+      createdBy,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const measurementRef = await db.collection('children').doc(childId)
+      .collection('measurements_height')
+      .add(measurementData);
+
+    res.json({
+      success: true,
+      message: 'Altura registrada exitosamente',
+      data: {
+        id: measurementRef.id,
+        ...mapHeightMeasurement({ id: measurementRef.id, data: () => measurementData })
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error registrando altura:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando altura',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar registro de altura
+app.put('/api/children/:childId/measurements/height/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, id } = req.params;
+    const { valueCm, measuredAt, notes, source } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const updateData = { updatedAt: new Date() };
+    if (valueCm !== undefined) updateData.valueCm = Number(valueCm);
+    if (measuredAt !== undefined) updateData.measuredAt = new Date(measuredAt);
+    if (notes !== undefined) updateData.notes = notes;
+    if (source !== undefined) updateData.source = source;
+
+    await db.collection('children').doc(childId)
+      .collection('measurements_height').doc(id)
+      .update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Altura actualizada exitosamente',
+      data: { id, ...updateData }
+    });
+  } catch (error) {
+    console.error('❌ Error actualizando altura:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando altura',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar registro de altura
+app.delete('/api/children/:childId/measurements/height/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    await db.collection('children').doc(childId)
+      .collection('measurements_height').doc(id)
+      .delete();
+
+    res.json({
+      success: true,
+      message: 'Altura eliminada exitosamente'
+    });
+  } catch (error) {
+    console.error('❌ Error eliminando altura:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando altura',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// 6.1.2 MEDICIONES - PERIMETRO CEFALICO (ENDPOINTS DEDICADOS)
+// ==========================================
+
+// Obtener historial de perimetro cefalico
+app.get('/api/children/:childId/measurements/head', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const childData = childDoc.data();
+    const childSex = normalizeChildSex(childData);
+    const birthDate = childData?.birthDate || null;
+    const percentilePoints = childSex ? await getGrowthPercentilePoints(childSex, 'head') : [];
+
+    let snapshot = await db.collection('children').doc(childId)
+      .collection('measurements_head')
+      .orderBy('measuredAt', 'desc')
+      .get();
+
+    let measurements = snapshot.docs.map((doc) => {
+      const mapped = mapHeadMeasurement(doc);
+      if (birthDate && mapped.measuredAt && mapped.valueCm !== null && percentilePoints.length > 0) {
+        const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+        const curvePoint = interpolatePercentile(percentilePoints, ageWeeks);
+        mapped.ageWeeks = ageWeeks;
+        mapped.percentile = estimatePercentileFromPoint(mapped.valueCm, curvePoint);
+      }
+      return mapped;
+    });
+
+    if (measurements.length === 0) {
+      const fallbackSnapshot = await db.collection('children').doc(childId)
+        .collection('measurements')
+        .orderBy('date', 'desc')
+        .get();
+      measurements = fallbackSnapshot.docs
+        .filter(doc => doc.data().headCircumference !== undefined && doc.data().headCircumference !== null)
+        .map((doc) => {
+          const mapped = mapHeadMeasurement(doc);
+          if (birthDate && mapped.measuredAt && mapped.valueCm !== null && percentilePoints.length > 0) {
+            const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+            const curvePoint = interpolatePercentile(percentilePoints, ageWeeks);
+            mapped.ageWeeks = ageWeeks;
+            mapped.percentile = estimatePercentileFromPoint(mapped.valueCm, curvePoint);
+          }
+          return mapped;
+        });
+    }
+
+    res.json({
+      success: true,
+      data: measurements
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo perimetro cefalico:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo perimetro cefalico',
+      error: error.message
+    });
+  }
+});
+
+// Crear registro de perimetro cefalico
+app.post('/api/children/:childId/measurements/head', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { valueCm, measuredAt, notes, source } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (valueCm === undefined || valueCm === null || measuredAt === undefined || measuredAt === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'valueCm y measuredAt son requeridos'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const userDoc = await db.collection('users').doc(uid).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const createdBy = {
+      uid,
+      name: userData.displayName || userData.name || userData.email || 'Usuario'
+    };
+
+    const measurementData = {
+      valueCm: Number(valueCm),
+      measuredAt: new Date(measuredAt),
+      notes: notes || '',
+      source: source || null,
+      createdBy,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const measurementRef = await db.collection('children').doc(childId)
+      .collection('measurements_head')
+      .add(measurementData);
+
+    res.json({
+      success: true,
+      message: 'Perimetro cefalico registrado exitosamente',
+      data: {
+        id: measurementRef.id,
+        ...mapHeadMeasurement({ id: measurementRef.id, data: () => measurementData })
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error registrando perimetro cefalico:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error registrando perimetro cefalico',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar registro de perimetro cefalico
+app.put('/api/children/:childId/measurements/head/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, id } = req.params;
+    const { valueCm, measuredAt, notes, source } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const updateData = { updatedAt: new Date() };
+    if (valueCm !== undefined) updateData.valueCm = Number(valueCm);
+    if (measuredAt !== undefined) updateData.measuredAt = new Date(measuredAt);
+    if (notes !== undefined) updateData.notes = notes;
+    if (source !== undefined) updateData.source = source;
+
+    await db.collection('children').doc(childId)
+      .collection('measurements_head').doc(id)
+      .update(updateData);
+
+    res.json({
+      success: true,
+      message: 'Perimetro cefalico actualizado exitosamente',
+      data: { id, ...updateData }
+    });
+  } catch (error) {
+    console.error('❌ Error actualizando perimetro cefalico:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando perimetro cefalico',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar registro de perimetro cefalico
+app.delete('/api/children/:childId/measurements/head/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    await db.collection('children').doc(childId)
+      .collection('measurements_head').doc(id)
+      .delete();
+
+    res.json({
+      success: true,
+      message: 'Perimetro cefalico eliminado exitosamente'
+    });
+  } catch (error) {
+    console.error('❌ Error eliminando perimetro cefalico:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando perimetro cefalico',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// 6.1.3 MEDICIONES - RESUMEN (PANTALLA SUMMARY)
+// ==========================================
+
+app.get('/api/children/:childId/measurements/summary', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const childData = childDoc.data();
+    const childSex = normalizeChildSex(childData);
+    const birthDate = childData?.birthDate || null;
+    const [weightPoints, heightPoints, headPoints] = childSex
+      ? await Promise.all([
+          getGrowthPercentilePoints(childSex, 'weight'),
+          getGrowthPercentilePoints(childSex, 'height'),
+          getGrowthPercentilePoints(childSex, 'head')
+        ])
+      : [[], [], []];
+
+    const snapshot = await db.collection('children').doc(childId)
+      .collection('measurements')
+      .orderBy('date', 'desc')
+      .get();
+
+    const normalizeMeasuredAt = (value) => {
+      const measuredAt = parseDateSafe(value);
+      return measuredAt ? measuredAt.toISOString() : null;
+    };
+
+    const historyMap = new Map();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      const measuredAt = normalizeMeasuredAt(data.date);
+      if (!measuredAt) return;
+      const entry = {
+        id: doc.id,
+        measuredAt,
+        weightKg: data.weight ?? null,
+        heightCm: data.height ?? null,
+        headCm: data.headCircumference ?? null,
+        notes: data.notes || null,
+        createdBy: data.createdBy || null
+      };
+
+      if (birthDate && measuredAt) {
+        const ageWeeks = calculateWeeksBetweenDates(birthDate, measuredAt);
+        if (entry.weightKg !== null && weightPoints.length > 0) {
+          entry.weightPercentile = estimatePercentileFromPoint(entry.weightKg, interpolatePercentile(weightPoints, ageWeeks));
+        }
+        if (entry.heightCm !== null && heightPoints.length > 0) {
+          entry.heightPercentile = estimatePercentileFromPoint(entry.heightCm, interpolatePercentile(heightPoints, ageWeeks));
+        }
+        if (entry.headCm !== null && headPoints.length > 0) {
+          entry.headPercentile = estimatePercentileFromPoint(entry.headCm, interpolatePercentile(headPoints, ageWeeks));
+        }
+        entry.ageWeeks = ageWeeks;
+      }
+
+      historyMap.set(measuredAt, entry);
+    });
+
+    const mergeDedicated = (docs, field, mapFn, points) => {
+      docs.forEach(doc => {
+        const mapped = mapFn(doc);
+        if (!mapped.measuredAt) return;
+        const existing = historyMap.get(mapped.measuredAt);
+        if (existing) {
+          existing[field] = mapped.valueCm ?? mapped.valueKg ?? existing[field];
+          if (!existing.createdBy && mapped.createdBy) existing.createdBy = mapped.createdBy;
+          if (!existing.notes && mapped.notes) existing.notes = mapped.notes;
+          if (birthDate && existing[field] !== null && points.length > 0) {
+            const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+            existing.ageWeeks = existing.ageWeeks ?? ageWeeks;
+            const percentile = estimatePercentileFromPoint(existing[field], interpolatePercentile(points, ageWeeks));
+            if (field === 'weightKg') existing.weightPercentile = percentile;
+            if (field === 'heightCm') existing.heightPercentile = percentile;
+            if (field === 'headCm') existing.headPercentile = percentile;
+          }
+        } else {
+          const entry = {
+            id: mapped.id,
+            measuredAt: mapped.measuredAt,
+            weightKg: null,
+            heightCm: null,
+            headCm: null,
+            notes: mapped.notes || null,
+            createdBy: mapped.createdBy || null,
+            [field]: mapped.valueCm ?? mapped.valueKg ?? null
+          };
+          if (birthDate && entry[field] !== null && points.length > 0) {
+            const ageWeeks = calculateWeeksBetweenDates(birthDate, mapped.measuredAt);
+            entry.ageWeeks = ageWeeks;
+            const percentile = estimatePercentileFromPoint(entry[field], interpolatePercentile(points, ageWeeks));
+            if (field === 'weightKg') entry.weightPercentile = percentile;
+            if (field === 'heightCm') entry.heightPercentile = percentile;
+            if (field === 'headCm') entry.headPercentile = percentile;
+          }
+          historyMap.set(mapped.measuredAt, entry);
+        }
+      });
+    };
+
+    const [weightSnapshot, heightSnapshot, headSnapshot] = await Promise.all([
+      db.collection('children').doc(childId).collection('measurements_weight').orderBy('measuredAt', 'desc').get(),
+      db.collection('children').doc(childId).collection('measurements_height').orderBy('measuredAt', 'desc').get(),
+      db.collection('children').doc(childId).collection('measurements_head').orderBy('measuredAt', 'desc').get()
+    ]);
+
+    mergeDedicated(weightSnapshot.docs, 'weightKg', mapWeightMeasurement, weightPoints);
+    mergeDedicated(heightSnapshot.docs, 'heightCm', mapHeightMeasurement, heightPoints);
+    mergeDedicated(headSnapshot.docs, 'headCm', mapHeadMeasurement, headPoints);
+
+    const history = Array.from(historyMap.values()).sort((a, b) => {
+      const dateA = parseDateSafe(a.measuredAt) || new Date(0);
+      const dateB = parseDateSafe(b.measuredAt) || new Date(0);
+      return dateB - dateA;
+    });
+
+    const latest = history[0] || null;
+
+    res.json({
+      success: true,
+      data: {
+        latest,
+        history
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo resumen de mediciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo resumen de mediciones',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// 6.2 CURVAS DE CRECIMIENTO (PERCENTILES)
+// ==========================================
+
+const interpolatePercentile = (points, ageWeeks) => {
+  if (!points || points.length === 0) return null;
+  const sorted = [...points].sort((a, b) => a.ageWeeks - b.ageWeeks);
+  const exact = sorted.find(point => point.ageWeeks === ageWeeks);
+  if (exact) return exact;
+  let lower = null;
+  let upper = null;
+  for (const point of sorted) {
+    if (point.ageWeeks < ageWeeks) lower = point;
+    if (point.ageWeeks > ageWeeks) {
+      upper = point;
+      break;
+    }
+  }
+  if (!lower) return sorted[0];
+  if (!upper) return sorted[sorted.length - 1];
+  const range = upper.ageWeeks - lower.ageWeeks;
+  const ratio = range === 0 ? 0 : (ageWeeks - lower.ageWeeks) / range;
+  const lerp = (a, b) => a + (b - a) * ratio;
+  return {
+    ageWeeks,
+    p3: lerp(lower.p3, upper.p3),
+    p10: lower.p10 !== undefined && upper.p10 !== undefined ? lerp(lower.p10, upper.p10) : undefined,
+    p25: lower.p25 !== undefined && upper.p25 !== undefined ? lerp(lower.p25, upper.p25) : undefined,
+    p50: lerp(lower.p50, upper.p50),
+    p75: lower.p75 !== undefined && upper.p75 !== undefined ? lerp(lower.p75, upper.p75) : undefined,
+    p90: lower.p90 !== undefined && upper.p90 !== undefined ? lerp(lower.p90, upper.p90) : undefined,
+    p97: lerp(lower.p97, upper.p97)
+  };
+};
+
+const buildDefaultPercentiles = (sex, type) => {
+  const presets = {
+    weight: {
+      F: { start: { p3: 2.4, p50: 3.2, p97: 4.0 }, end: { p3: 5.8, p50: 7.2, p97: 8.6 } },
+      M: { start: { p3: 2.5, p50: 3.3, p97: 4.1 }, end: { p3: 6.0, p50: 7.5, p97: 9.0 } }
+    },
+    height: {
+      F: { start: { p3: 46.5, p50: 49.1, p97: 52.0 }, end: { p3: 60.5, p50: 65.0, p97: 69.5 } },
+      M: { start: { p3: 47.0, p50: 49.9, p97: 53.0 }, end: { p3: 61.5, p50: 66.5, p97: 71.0 } }
+    },
+    head: {
+      F: { start: { p3: 32.0, p50: 34.0, p97: 36.0 }, end: { p3: 40.0, p50: 42.0, p97: 44.0 } },
+      M: { start: { p3: 32.5, p50: 34.5, p97: 36.5 }, end: { p3: 40.5, p50: 42.5, p97: 44.5 } }
+    }
+  };
+
+  const preset = presets[type]?.[sex];
+  if (!preset) return [];
+
+  const points = [];
+  const totalWeeks = 26;
+  for (let week = 0; week <= totalWeeks; week += 1) {
+    const ratio = totalWeeks === 0 ? 0 : week / totalWeeks;
+    const lerp = (a, b) => a + (b - a) * ratio;
+    points.push({
+      ageWeeks: week,
+      p3: lerp(preset.start.p3, preset.end.p3),
+      p50: lerp(preset.start.p50, preset.end.p50),
+      p97: lerp(preset.start.p97, preset.end.p97)
+    });
+  }
+  return points;
+};
+
+const normalizeChildSex = (childData) => {
+  if (!childData) return null;
+  const raw = String(childData.sex || childData.gender || '').toLowerCase().trim();
+  if (!raw) return null;
+  if (['m', 'male', 'masculino', 'niño', 'nino', 'boy'].includes(raw)) return 'M';
+  if (['f', 'female', 'femenino', 'niña', 'nina', 'girl'].includes(raw)) return 'F';
+  return null;
+};
+
+const calculateWeeksBetweenDates = (startDate, endDate) => {
+  const start = parseDateSafe(startDate);
+  const end = parseDateSafe(endDate);
+  if (!start || !end) return null;
+  const diffMs = end.getTime() - start.getTime();
+  if (diffMs < 0) return null;
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  return Math.max(0, Math.floor(diffDays / 7));
+};
+
+const estimatePercentileFromPoint = (value, curvePoint) => {
+  if (value === null || value === undefined || !curvePoint) return null;
+  const pairs = [
+    { percentile: 3, value: curvePoint.p3 },
+    { percentile: 10, value: curvePoint.p10 },
+    { percentile: 25, value: curvePoint.p25 },
+    { percentile: 50, value: curvePoint.p50 },
+    { percentile: 75, value: curvePoint.p75 },
+    { percentile: 90, value: curvePoint.p90 },
+    { percentile: 97, value: curvePoint.p97 }
+  ].filter(entry => entry.value !== undefined && entry.value !== null)
+    .sort((a, b) => a.value - b.value);
+
+  if (pairs.length === 0) return null;
+  if (value <= pairs[0].value) return pairs[0].percentile;
+  if (value >= pairs[pairs.length - 1].value) return pairs[pairs.length - 1].percentile;
+
+  for (let i = 0; i < pairs.length - 1; i += 1) {
+    const lower = pairs[i];
+    const upper = pairs[i + 1];
+    if (value >= lower.value && value <= upper.value) {
+      const range = upper.value - lower.value;
+      const ratio = range === 0 ? 0 : (value - lower.value) / range;
+      const percentile = lower.percentile + (upper.percentile - lower.percentile) * ratio;
+      return Math.round(percentile * 10) / 10;
+    }
+  }
+  return null;
+};
+
+const getGrowthPercentilePoints = async (sex, type) => {
+  if (!db) return buildDefaultPercentiles(sex, type);
+  const snapshot = await db.collection('growth_percentiles')
+    .where('type', '==', type)
+    .where('sex', '==', sex)
+    .limit(1)
+    .get();
+  if (snapshot.empty) return buildDefaultPercentiles(sex, type);
+  const data = snapshot.docs[0].data();
+  return Array.isArray(data.points) ? data.points : [];
+};
+
+// Obtener curvas de percentiles por sexo y edad
+app.get('/api/growth/percentiles', authenticateToken, async (req, res) => {
+  try {
+    const { sex, ageWeeks, type } = req.query;
+    const sexValue = String(sex || '').toUpperCase();
+    const typeValue = String(type || 'weight').toLowerCase();
+    if (!sexValue || !['M', 'F'].includes(sexValue)) {
+      return res.status(400).json({
+        success: false,
+        message: 'sex es requerido (M o F)'
+      });
+    }
+    if (!['weight', 'height', 'head'].includes(typeValue)) {
+      return res.status(400).json({
+        success: false,
+        message: 'type debe ser weight, height o head'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('growth_percentiles')
+      .where('type', '==', typeValue)
+      .where('sex', '==', sexValue)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      const fallbackPoints = buildDefaultPercentiles(sexValue, typeValue);
+      return res.json({
+        success: true,
+        data: fallbackPoints,
+        meta: { sex: sexValue, type: typeValue, empty: true, synthetic: true },
+        message: 'Curvas de percentiles no configuradas'
+      });
+    }
+
+    const curve = snapshot.docs[0].data();
+    const points = Array.isArray(curve.points) ? curve.points : [];
+
+    if (ageWeeks !== undefined) {
+      const ageNumber = parseFloat(ageWeeks);
+      if (Number.isNaN(ageNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ageWeeks debe ser numérico'
+        });
+      }
+      const interpolated = interpolatePercentile(points, ageNumber);
+      return res.json({
+        success: true,
+        data: interpolated,
+        meta: { sex: sexValue, type: typeValue }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: points,
+      meta: { sex: sexValue, type: typeValue }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo percentiles:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo percentiles',
       error: error.message
     });
   }
@@ -23833,6 +25056,160 @@ app.get('/api/admin/banners/products-selector', authenticateToken, isAdmin, asyn
   }
 });
 
+// Listar artículos para selector de enlaces en banners (admin)
+app.get('/api/admin/banners/articles-selector', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { search = '', limit = 50 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('articles')
+      .where('status', '==', 'published')
+      .orderBy('publishedAt', 'desc')
+      .limit(parseInt(limit));
+
+    const snapshot = await query.get();
+    let articles = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      articles = articles.filter(a =>
+        a.title?.toLowerCase().includes(searchLower) ||
+        a.summary?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const articleOptions = articles.map(a => ({
+      id: a.id,
+      title: a.title,
+      publishedAt: a.publishedAt || null,
+      coverImageUrl: a.coverImageUrl || null,
+      linkType: 'article',
+      label: `📰 ${a.title}`
+    }));
+
+    res.json({
+      success: true,
+      data: articleOptions
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo artículos para selector:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo artículos',
+      error: error.message
+    });
+  }
+});
+
+// Listar categorías de artículos para selector de enlaces en banners (admin)
+app.get('/api/admin/banners/article-categories-selector', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { search = '', limit = 100 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('article_categories')
+      .orderBy('name', 'asc')
+      .limit(parseInt(limit))
+      .get();
+
+    let categories = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      categories = categories.filter(c =>
+        c.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const categoryOptions = categories.map(c => ({
+      id: c.id,
+      name: c.name,
+      linkType: 'article-category',
+      label: `📂 ${c.name}`
+    }));
+
+    res.json({
+      success: true,
+      data: categoryOptions
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo categorías de artículos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
+
+// Listar categorías de recomendaciones para selector de enlaces en banners (admin)
+app.get('/api/admin/banners/recommendation-categories-selector', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { search = '', limit = 100 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('categories')
+      .orderBy('name', 'asc')
+      .limit(parseInt(limit))
+      .get();
+
+    let categories = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      categories = categories.filter(c =>
+        c.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const categoryOptions = categories.map(c => ({
+      id: c.id,
+      name: c.name,
+      linkType: 'recommendation-category',
+      label: `⭐ ${c.name}`
+    }));
+
+    res.json({
+      success: true,
+      data: categoryOptions
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo categorías de recomendaciones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías de recomendaciones',
+      error: error.message
+    });
+  }
+});
+
 // Listar todos los banners (admin)
 app.get('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -23960,6 +25337,10 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       imageUrl,
       imageStoragePath,
       link,
+      linkType,
+      articleId,
+      articleCategoryId,
+      recommendationCategoryId,
       order,
       duration,
       startDate,
@@ -23984,7 +25365,21 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
     }
 
     // Validar sección
-    const validSections = ['home', 'marketplace', 'products', 'comunidades', 'recomendaciones'];
+    const validSections = [
+      'home',
+      'home1',
+      'home2',
+      'home3',
+      'marketplace',
+      'products',
+      'comunidades',
+      'recomendaciones',
+      'medicina',
+      'crecimiento',
+      'vacunas',
+      'denticion',
+      'hitos'
+    ];
     if (section && !validSections.includes(section)) {
       return res.status(400).json({
         success: false,
@@ -23997,6 +25392,73 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
         success: false,
         message: 'Base de datos no disponible'
       });
+    }
+
+    const validLinkTypes = ['url', 'article', 'article-category', 'recommendation-category', 'none'];
+    let resolvedLinkType = linkType;
+    if (!resolvedLinkType) {
+      if (articleId) {
+        resolvedLinkType = 'article';
+      } else if (link) {
+        resolvedLinkType = 'url';
+      } else {
+        resolvedLinkType = 'none';
+      }
+    }
+    if (!validLinkTypes.includes(resolvedLinkType)) {
+      return res.status(400).json({
+        success: false,
+        message: `Tipo de navegación inválido. Debe ser: ${validLinkTypes.join(', ')}`
+      });
+    }
+    if (resolvedLinkType === 'article' && !articleId) {
+      return res.status(400).json({
+        success: false,
+        message: 'articleId es requerido cuando linkType es article'
+      });
+    }
+    if (resolvedLinkType === 'article-category' && !articleCategoryId) {
+      return res.status(400).json({
+        success: false,
+        message: 'articleCategoryId es requerido cuando linkType es article-category'
+      });
+    }
+    if (resolvedLinkType === 'recommendation-category' && !recommendationCategoryId) {
+      return res.status(400).json({
+        success: false,
+        message: 'recommendationCategoryId es requerido cuando linkType es recommendation-category'
+      });
+    }
+
+    let resolvedArticleId = articleId || null;
+    if (resolvedLinkType === 'article') {
+      const articleDoc = await db.collection('articles').doc(resolvedArticleId).get();
+      if (!articleDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'articleId inválido'
+        });
+      }
+    }
+    let resolvedArticleCategoryId = articleCategoryId || null;
+    if (resolvedLinkType === 'article-category') {
+      const categoryDoc = await db.collection('article_categories').doc(resolvedArticleCategoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'articleCategoryId inválido'
+        });
+      }
+    }
+    let resolvedRecommendationCategoryId = recommendationCategoryId || null;
+    if (resolvedLinkType === 'recommendation-category') {
+      const categoryDoc = await db.collection('categories').doc(resolvedRecommendationCategoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'recommendationCategoryId inválido'
+        });
+      }
     }
 
     const now = new Date();
@@ -24027,7 +25489,11 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       description: description?.trim() || '',
       imageUrl,
       imageStoragePath: imageStoragePath || null,
-      link: link?.trim() || null,
+      link: resolvedLinkType === 'url' ? (link?.trim() || null) : null,
+      linkType: resolvedLinkType,
+      articleId: resolvedLinkType === 'article' ? resolvedArticleId : null,
+      articleCategoryId: resolvedLinkType === 'article-category' ? resolvedArticleCategoryId : null,
+      recommendationCategoryId: resolvedLinkType === 'recommendation-category' ? resolvedRecommendationCategoryId : null,
       section: section || 'home', // Por defecto: home
       order: order || 999,
       duration: duration || 5, // Duración en segundos (por defecto 5s)
@@ -24074,6 +25540,10 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
       imageUrl,
       imageStoragePath,
       link,
+      linkType,
+      articleId,
+      articleCategoryId,
+      recommendationCategoryId,
       section,
       order,
       duration,
@@ -24128,8 +25598,111 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
       updateData.link = link?.trim() || null;
     }
 
+    const validLinkTypes = ['url', 'article', 'article-category', 'recommendation-category', 'none'];
+    if (linkType !== undefined) {
+      if (!validLinkTypes.includes(linkType)) {
+        return res.status(400).json({
+          success: false,
+          message: `Tipo de navegación inválido. Debe ser: ${validLinkTypes.join(', ')}`
+        });
+      }
+      updateData.linkType = linkType;
+    }
+
+    if (articleId !== undefined) {
+      updateData.articleId = articleId || null;
+    }
+
+    if (articleCategoryId !== undefined) {
+      updateData.articleCategoryId = articleCategoryId || null;
+    }
+    if (recommendationCategoryId !== undefined) {
+      updateData.recommendationCategoryId = recommendationCategoryId || null;
+    }
+
+    if (updateData.linkType === 'article' || (linkType === undefined && updateData.articleId)) {
+      const resolvedArticleId = updateData.articleId || bannerDoc.data().articleId;
+      if (!resolvedArticleId) {
+        return res.status(400).json({
+          success: false,
+          message: 'articleId es requerido cuando linkType es article'
+        });
+      }
+      const articleDoc = await db.collection('articles').doc(resolvedArticleId).get();
+      if (!articleDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'articleId inválido'
+        });
+      }
+      updateData.link = null;
+      updateData.articleId = resolvedArticleId;
+      updateData.articleCategoryId = null;
+    } else if (updateData.linkType === 'article-category' || (linkType === undefined && updateData.articleCategoryId)) {
+      const resolvedCategoryId = updateData.articleCategoryId || bannerDoc.data().articleCategoryId;
+      if (!resolvedCategoryId) {
+        return res.status(400).json({
+          success: false,
+          message: 'articleCategoryId es requerido cuando linkType es article-category'
+        });
+      }
+      const categoryDoc = await db.collection('article_categories').doc(resolvedCategoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'articleCategoryId inválido'
+        });
+      }
+      updateData.link = null;
+      updateData.articleCategoryId = resolvedCategoryId;
+      updateData.articleId = null;
+      updateData.recommendationCategoryId = null;
+    } else if (updateData.linkType === 'recommendation-category' || (linkType === undefined && updateData.recommendationCategoryId)) {
+      const resolvedCategoryId = updateData.recommendationCategoryId || bannerDoc.data().recommendationCategoryId;
+      if (!resolvedCategoryId) {
+        return res.status(400).json({
+          success: false,
+          message: 'recommendationCategoryId es requerido cuando linkType es recommendation-category'
+        });
+      }
+      const categoryDoc = await db.collection('categories').doc(resolvedCategoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({
+          success: false,
+          message: 'recommendationCategoryId inválido'
+        });
+      }
+      updateData.link = null;
+      updateData.recommendationCategoryId = resolvedCategoryId;
+      updateData.articleId = null;
+      updateData.articleCategoryId = null;
+    } else if (updateData.linkType === 'url') {
+      updateData.articleId = null;
+      updateData.articleCategoryId = null;
+      updateData.recommendationCategoryId = null;
+    } else if (updateData.linkType === 'none') {
+      updateData.articleId = null;
+      updateData.articleCategoryId = null;
+      updateData.recommendationCategoryId = null;
+      updateData.link = null;
+    }
+
     if (section !== undefined) {
-      const validSections = ['home', 'marketplace', 'products', 'comunidades', 'recomendaciones'];
+      const validSections = [
+        'home',
+        'home1',
+        'home2',
+        'home3',
+        'marketplace',
+        'products',
+        'comunidades',
+        'recomendaciones',
+        'medicina',
+        'crecimiento',
+        'vacunas',
+        'denticion',
+        'hitos'
+      ];
       if (section && !validSections.includes(section)) {
         return res.status(400).json({
           success: false,
@@ -25714,6 +27287,12 @@ app.get('/api/notifications', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.uid;
     const { page = 1, limit = 50, unreadOnly = false } = req.query;
+    const cacheKey = `${req.path}?uid=${userId}&page=${page}&limit=${limit}&unreadOnly=${unreadOnly}`;
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      res.set('Cache-Control', 'private, max-age=10');
+      return res.json(cached);
+    }
 
     if (!db) {
       return res.status(500).json({
@@ -25771,7 +27350,7 @@ app.get('/api/notifications', authenticateToken, async (req, res) => {
 
     console.log(`✅ [NOTIFICATIONS] Notificaciones obtenidas para ${userId}: ${paginatedNotifications.length}`);
 
-    res.json({
+    const responsePayload = {
       success: true,
       data: paginatedNotifications,
       pagination: {
@@ -25781,7 +27360,11 @@ app.get('/api/notifications', authenticateToken, async (req, res) => {
         totalPages: Math.ceil(total / limit),
         unreadCount
       }
-    });
+    };
+
+    setCachedResponse(cacheKey, responsePayload, 10 * 1000);
+    res.set('Cache-Control', 'private, max-age=10');
+    res.json(responsePayload);
 
   } catch (error) {
     console.error('❌ [NOTIFICATIONS] Error obteniendo notificaciones:', error);
@@ -28899,6 +30482,861 @@ app.get('/api/sleep/reminders/:childId', authenticateToken, async (req, res) => 
 });
 
 console.log('🛌 Sistema de predicción de sueño cargado');
+
+// ============================================================================
+// 📰 ARTICULOS (BLOG) - DASHBOARD Y APP
+// ============================================================================
+
+const slugifyText = (value) => {
+  if (!value) return '';
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+};
+
+const stripHtml = (html) => {
+  if (!html) return '';
+  return String(html).replace(/<[^>]*>/g, ' ');
+};
+
+const calculateReadingTimeMinutes = (html) => {
+  const text = stripHtml(html);
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words / 200));
+};
+
+const resolveAuthorInfo = async (uid, fallbackName) => {
+  if (!db) {
+    return { uid, name: fallbackName || 'Usuario' };
+  }
+  const userDoc = await db.collection('users').doc(uid).get();
+  const userData = userDoc.exists ? userDoc.data() : {};
+  return {
+    uid,
+    name: fallbackName || userData.displayName || userData.name || userData.email || 'Usuario'
+  };
+};
+
+const fetchCategoriesMap = async () => {
+  if (!db) return new Map();
+  const snapshot = await db.collection('article_categories').get();
+  const map = new Map();
+  snapshot.forEach(doc => {
+    map.set(doc.id, { id: doc.id, ...doc.data() });
+  });
+  return map;
+};
+
+const fetchKeywordsMap = async () => {
+  if (!db) return new Map();
+  const snapshot = await db.collection('article_keywords').get();
+  const map = new Map();
+  snapshot.forEach(doc => {
+    map.set(doc.id, { id: doc.id, ...doc.data() });
+  });
+  return map;
+};
+
+// =========================
+// Categorias (admin/app)
+// =========================
+
+app.get('/api/articles/categories', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('article_categories').orderBy('name', 'asc').get();
+    const categories = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, data: categories });
+  } catch (error) {
+    console.error('❌ Error obteniendo categorias:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo categorias', error: error.message });
+  }
+});
+
+app.post('/api/admin/article-categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description } = req.body || {};
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'name es requerido' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const slug = slugifyText(name);
+    const categoryData = {
+      name,
+      description: description || '',
+      slug,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('article_categories').add(categoryData);
+    res.json({ success: true, data: { id: ref.id, ...categoryData } });
+  } catch (error) {
+    console.error('❌ Error creando categoria:', error);
+    res.status(500).json({ success: false, message: 'Error creando categoria', error: error.message });
+  }
+});
+
+app.put('/api/admin/article-categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description } = req.body || {};
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const updateData = { updatedAt: new Date() };
+    if (name) {
+      updateData.name = name;
+      updateData.slug = slugifyText(name);
+    }
+    if (description !== undefined) updateData.description = description;
+    await db.collection('article_categories').doc(id).update(updateData);
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ Error actualizando categoria:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando categoria', error: error.message });
+  }
+});
+
+app.delete('/api/admin/article-categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('article_categories').doc(id).delete();
+    res.json({ success: true, message: 'Categoria eliminada' });
+  } catch (error) {
+    console.error('❌ Error eliminando categoria:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando categoria', error: error.message });
+  }
+});
+
+// =========================
+// Palabras clave (admin/app)
+// =========================
+
+app.get('/api/articles/keywords', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('article_keywords').orderBy('name', 'asc').get();
+    const keywords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, data: keywords });
+  } catch (error) {
+    console.error('❌ Error obteniendo palabras clave:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo palabras clave', error: error.message });
+  }
+});
+
+app.post('/api/admin/article-keywords', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'name es requerido' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const slug = slugifyText(name);
+    const keywordData = {
+      name,
+      slug,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('article_keywords').add(keywordData);
+    res.json({ success: true, data: { id: ref.id, ...keywordData } });
+  } catch (error) {
+    console.error('❌ Error creando palabra clave:', error);
+    res.status(500).json({ success: false, message: 'Error creando palabra clave', error: error.message });
+  }
+});
+
+app.put('/api/admin/article-keywords/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body || {};
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const updateData = { updatedAt: new Date() };
+    if (name) {
+      updateData.name = name;
+      updateData.slug = slugifyText(name);
+    }
+    await db.collection('article_keywords').doc(id).update(updateData);
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ Error actualizando palabra clave:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando palabra clave', error: error.message });
+  }
+});
+
+app.delete('/api/admin/article-keywords/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('article_keywords').doc(id).delete();
+    res.json({ success: true, message: 'Palabra clave eliminada' });
+  } catch (error) {
+    console.error('❌ Error eliminando palabra clave:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando palabra clave', error: error.message });
+  }
+});
+
+// =========================
+// Articulos (dashboard/app)
+// =========================
+
+// Subir imagen para artículos (admin)
+app.post('/api/admin/articles/upload-image', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se envió ninguna imagen'
+      });
+    }
+
+    const bucket = admin.storage().bucket();
+    if (!bucket) {
+      return res.status(500).json({
+        success: false,
+        message: 'Storage no disponible'
+      });
+    }
+
+    const fileName = `images/articles/article-${req.user.uid}-${Date.now()}-${req.file.originalname}`;
+    const file = bucket.file(fileName);
+
+    const stream = file.createWriteStream({
+      metadata: {
+        contentType: req.file.mimetype
+      }
+    });
+
+    stream.on('error', (error) => {
+      console.error('❌ [ARTICLES] Error subiendo imagen:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error subiendo imagen',
+        error: error.message
+      });
+    });
+
+    stream.on('finish', async () => {
+      try {
+        await file.makePublic();
+      } catch (error) {
+        console.warn('⚠️ [ARTICLES] Error haciendo imagen pública:', error.message);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          imageUrl: `https://storage.googleapis.com/${bucket.name}/${fileName}`,
+          imageStoragePath: fileName
+        }
+      });
+    });
+
+    stream.end(req.file.buffer);
+  } catch (error) {
+    console.error('❌ [ARTICLES] Error subiendo imagen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo imagen',
+      error: error.message
+    });
+  }
+});
+
+// Listar artículos (admin)
+app.get('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '', status } = req.query;
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    let query = db.collection('articles');
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+
+    const snapshot = await query.orderBy('publishedAt', 'desc').get();
+    const categoriesMap = await fetchCategoriesMap();
+    const keywordsMap = await fetchKeywordsMap();
+
+    const bannerIds = new Set();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      if (data.bannerId) bannerIds.add(data.bannerId);
+    });
+    const bannerMap = new Map();
+    if (bannerIds.size > 0) {
+      const bannerSnapshot = await db.collection('banners')
+        .where(admin.firestore.FieldPath.documentId(), 'in', Array.from(bannerIds).slice(0, 10))
+        .get();
+      bannerSnapshot.forEach(doc => {
+        bannerMap.set(doc.id, { id: doc.id, ...doc.data() });
+      });
+    }
+
+    let articles = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const category = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+      const keywords = Array.isArray(data.keywordIds)
+        ? data.keywordIds.map(id => keywordsMap.get(id)).filter(Boolean)
+        : [];
+      const shareUrl = `munpa://article/${doc.id}`;
+      const webUrl = `https://munpa.online/article/${doc.id}`;
+      const banner = data.bannerId ? bannerMap.get(data.bannerId) || null : null;
+      return {
+        id: doc.id,
+        ...data,
+        category,
+        categoryName: category?.name || null,
+        keywords,
+        keywordNames: keywords.map(k => k.name).filter(Boolean),
+        banner,
+        shareUrl,
+        webUrl
+      };
+    });
+
+    if (search) {
+      const searchLower = String(search).toLowerCase();
+      articles = articles.filter(article =>
+        article.title?.toLowerCase().includes(searchLower) ||
+        article.author?.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const pageNumber = Math.max(parseInt(page), 1);
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const paginated = articles.slice(startIndex, startIndex + limitNumber);
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        total: articles.length,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(articles.length / limitNumber)
+      }
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo artículos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo artículos', error: error.message });
+  }
+});
+
+app.get('/api/articles', authenticateToken, async (req, res) => {
+  try {
+    const { categoryId, keywordId, search = '', page = 1, limit = 20 } = req.query;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    let query = db.collection('articles').where('status', '==', 'published');
+    if (categoryId) query = query.where('categoryId', '==', categoryId);
+    if (keywordId) query = query.where('keywordIds', 'array-contains', keywordId);
+
+    const snapshot = await query.orderBy('publishedAt', 'desc').get();
+    const categoriesMap = await fetchCategoriesMap();
+    const keywordsMap = await fetchKeywordsMap();
+
+    const bannerIds = new Set();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      if (data.bannerId) bannerIds.add(data.bannerId);
+    });
+    const bannerMap = new Map();
+    if (bannerIds.size > 0) {
+      const bannerSnapshot = await db.collection('banners')
+        .where(admin.firestore.FieldPath.documentId(), 'in', Array.from(bannerIds).slice(0, 10))
+        .get();
+      bannerSnapshot.forEach(doc => {
+        bannerMap.set(doc.id, { id: doc.id, ...doc.data() });
+      });
+    }
+
+    let articles = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const category = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+      const keywords = Array.isArray(data.keywordIds)
+        ? data.keywordIds.map(id => keywordsMap.get(id)).filter(Boolean)
+        : [];
+      const shareUrl = `munpa://article/${doc.id}`;
+      const webUrl = `https://munpa.online/article/${doc.id}`;
+      const banner = data.bannerId ? bannerMap.get(data.bannerId) || null : null;
+      return {
+        id: doc.id,
+        ...data,
+        category,
+        categoryName: category?.name || null,
+        keywords,
+        keywordNames: keywords.map(k => k.name).filter(Boolean),
+        banner,
+        shareUrl,
+        webUrl
+      };
+    });
+
+    if (search) {
+      const searchLower = String(search).toLowerCase();
+      articles = articles.filter(article =>
+        article.title?.toLowerCase().includes(searchLower) ||
+        article.author?.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const pageNumber = Math.max(parseInt(page), 1);
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const paginated = articles.slice(startIndex, startIndex + limitNumber);
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        total: articles.length,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(articles.length / limitNumber)
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo articulos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo articulos', error: error.message });
+  }
+});
+
+// Listar artículos por categoría (app)
+app.get('/api/articles/category/:categoryId', authenticateToken, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const { search = '', page = 1, limit = 20 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    let query = db.collection('articles')
+      .where('status', '==', 'published')
+      .where('categoryId', '==', categoryId)
+      .orderBy('publishedAt', 'desc');
+
+    const snapshot = await query.get();
+    const categoriesMap = await fetchCategoriesMap();
+    const keywordsMap = await fetchKeywordsMap();
+
+    let articles = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const category = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+      const keywords = Array.isArray(data.keywordIds)
+        ? data.keywordIds.map(id => keywordsMap.get(id)).filter(Boolean)
+        : [];
+      const shareUrl = `munpa://article/${doc.id}`;
+      const webUrl = `https://munpa.online/article/${doc.id}`;
+      return {
+        id: doc.id,
+        ...data,
+        category,
+        categoryName: category?.name || null,
+        keywords,
+        keywordNames: keywords.map(k => k.name).filter(Boolean),
+        shareUrl,
+        webUrl
+      };
+    });
+
+    if (search) {
+      const searchLower = String(search).toLowerCase();
+      articles = articles.filter(article =>
+        article.title?.toLowerCase().includes(searchLower) ||
+        article.author?.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const pageNumber = Math.max(parseInt(page), 1);
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const paginated = articles.slice(startIndex, startIndex + limitNumber);
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        total: articles.length,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(articles.length / limitNumber)
+      }
+    });
+  } catch (error) {
+    console.error('❌ [ARTICLES] Error obteniendo artículos por categoría:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo artículos', error: error.message });
+  }
+});
+
+app.get('/api/articles/:articleId', authenticateToken, async (req, res) => {
+  try {
+    const { articleId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const doc = await db.collection('articles').doc(articleId).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Articulo no encontrado' });
+    }
+    const data = doc.data();
+    const categoriesMap = await fetchCategoriesMap();
+    const keywordsMap = await fetchKeywordsMap();
+    const category = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+    const keywords = Array.isArray(data.keywordIds)
+      ? data.keywordIds.map(id => keywordsMap.get(id)).filter(Boolean)
+      : [];
+    const shareUrl = `munpa://article/${doc.id}`;
+    const webUrl = `https://munpa.online/article/${doc.id}`;
+    let banner = null;
+    if (data.bannerId) {
+      try {
+        const bannerDoc = await db.collection('banners').doc(data.bannerId).get();
+        if (bannerDoc.exists) {
+          banner = { id: bannerDoc.id, ...bannerDoc.data() };
+        }
+      } catch (error) {
+        console.warn('⚠️ [ARTICLES] Error obteniendo banner:', error.message);
+      }
+    }
+    res.json({
+      success: true,
+      data: {
+        id: doc.id,
+        ...data,
+        category,
+        categoryName: category?.name || null,
+        keywords,
+        keywordNames: keywords.map(k => k.name).filter(Boolean),
+        banner,
+        shareUrl,
+        webUrl
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error obteniendo articulo:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo articulo', error: error.message });
+  }
+});
+
+app.post('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const {
+      title,
+      htmlContent,
+      publishedAt,
+      readingTimeMinutes,
+      authorName,
+      categoryId,
+      keywordIds,
+      coverImageUrl,
+      bannerId,
+      summary,
+      status = 'published'
+    } = req.body || {};
+
+    if (!title || !htmlContent) {
+      return res.status(400).json({ success: false, message: 'title y htmlContent son requeridos' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    const author = await resolveAuthorInfo(uid, authorName);
+    const articleData = {
+      title,
+      htmlContent,
+      summary: summary || '',
+      coverImageUrl: coverImageUrl || '',
+      categoryId: categoryId || null,
+      keywordIds: Array.isArray(keywordIds) ? keywordIds : [],
+      readingTimeMinutes: readingTimeMinutes || calculateReadingTimeMinutes(htmlContent),
+      publishedAt: publishedAt ? new Date(publishedAt) : new Date(),
+      author,
+      bannerId: bannerId || null,
+      status,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const ref = await db.collection('articles').add(articleData);
+    res.json({ success: true, data: { id: ref.id, ...articleData } });
+  } catch (error) {
+    console.error('❌ Error creando articulo:', error);
+    res.status(500).json({ success: false, message: 'Error creando articulo', error: error.message });
+  }
+});
+
+app.put('/api/admin/articles/:articleId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { articleId } = req.params;
+    const {
+      title,
+      htmlContent,
+      publishedAt,
+      readingTimeMinutes,
+      authorName,
+      categoryId,
+      keywordIds,
+      coverImageUrl,
+      bannerId,
+      summary,
+      status
+    } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    const updateData = { updatedAt: new Date() };
+    if (title) updateData.title = title;
+    if (htmlContent) {
+      updateData.htmlContent = htmlContent;
+      updateData.readingTimeMinutes = readingTimeMinutes || calculateReadingTimeMinutes(htmlContent);
+    } else if (readingTimeMinutes) {
+      updateData.readingTimeMinutes = readingTimeMinutes;
+    }
+    if (publishedAt) updateData.publishedAt = new Date(publishedAt);
+    if (categoryId !== undefined) updateData.categoryId = categoryId;
+    if (Array.isArray(keywordIds)) updateData.keywordIds = keywordIds;
+    if (summary !== undefined) updateData.summary = summary;
+    if (coverImageUrl !== undefined) updateData.coverImageUrl = coverImageUrl;
+    if (bannerId !== undefined) updateData.bannerId = bannerId || null;
+    if (status) updateData.status = status;
+    if (authorName) updateData.author = await resolveAuthorInfo(uid, authorName);
+
+    await db.collection('articles').doc(articleId).update(updateData);
+    res.json({ success: true, data: { id: articleId, ...updateData } });
+  } catch (error) {
+    console.error('❌ Error actualizando articulo:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando articulo', error: error.message });
+  }
+});
+
+app.delete('/api/admin/articles/:articleId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { articleId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('articles').doc(articleId).delete();
+    res.json({ success: true, message: 'Articulo eliminado' });
+  } catch (error) {
+    console.error('❌ Error eliminando articulo:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando articulo', error: error.message });
+  }
+});
+
+// =========================
+// Guardar articulos (app)
+// =========================
+
+app.post('/api/articles/:articleId/save', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { articleId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const articleDoc = await db.collection('articles').doc(articleId).get();
+    if (!articleDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Articulo no encontrado' });
+    }
+    await db.collection('users').doc(uid)
+      .collection('saved_articles')
+      .doc(articleId)
+      .set({
+        articleId,
+        savedAt: new Date()
+      });
+    res.json({ success: true, message: 'Articulo guardado' });
+  } catch (error) {
+    console.error('❌ Error guardando articulo:', error);
+    res.status(500).json({ success: false, message: 'Error guardando articulo', error: error.message });
+  }
+});
+
+app.delete('/api/articles/:articleId/save', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { articleId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('users').doc(uid)
+      .collection('saved_articles')
+      .doc(articleId)
+      .delete();
+    res.json({ success: true, message: 'Articulo eliminado de guardados' });
+  } catch (error) {
+    console.error('❌ Error eliminando articulo guardado:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando articulo guardado', error: error.message });
+  }
+});
+
+app.get('/api/articles/saved', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const savedSnapshot = await db.collection('users').doc(uid)
+      .collection('saved_articles')
+      .orderBy('savedAt', 'desc')
+      .get();
+
+    if (savedSnapshot.empty) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const articleIds = savedSnapshot.docs.map(doc => doc.id);
+    const articlesSnapshot = await db.collection('articles')
+      .where(admin.firestore.FieldPath.documentId(), 'in', articleIds.slice(0, 10))
+      .get();
+
+    const categoriesMap = await fetchCategoriesMap();
+    const keywordsMap = await fetchKeywordsMap();
+    const articlesMap = new Map();
+    articlesSnapshot.forEach(doc => {
+      const data = doc.data();
+      const category = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
+      const keywords = Array.isArray(data.keywordIds)
+        ? data.keywordIds.map(id => keywordsMap.get(id)).filter(Boolean)
+        : [];
+      articlesMap.set(doc.id, { id: doc.id, ...data, category, keywords });
+    });
+
+    const savedArticles = savedSnapshot.docs.map(doc => articlesMap.get(doc.id)).filter(Boolean);
+    res.json({ success: true, data: savedArticles });
+  } catch (error) {
+    console.error('❌ Error obteniendo articulos guardados:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo articulos guardados', error: error.message });
+  }
+});
+
+// ============================================================================
+// 📱 VERSIONES DE APP (ADMIN + PUBLICO)
+// ============================================================================
+
+// Obtener configuración de versión (público)
+app.get('/api/app/version', async (req, res) => {
+  try {
+    const { platform } = req.query;
+    const normalizedPlatform = String(platform || '').toLowerCase();
+    if (!['ios', 'android'].includes(normalizedPlatform)) {
+      return res.status(400).json({
+        success: false,
+        message: 'platform es requerido (ios | android)'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const doc = await db.collection('app_versions').doc(normalizedPlatform).get();
+    if (!doc.exists) {
+      return res.json({
+        success: true,
+        data: {
+          platform: normalizedPlatform,
+          minVersion: null,
+          latestVersion: null,
+          forceUpdate: false,
+          message: null
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        platform: normalizedPlatform,
+        ...doc.data()
+      }
+    });
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo versión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo versión',
+      error: error.message
+    });
+  }
+});
+
+// Crear/actualizar configuración de versión (admin)
+app.post('/api/admin/app/version', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { platform, minVersion, latestVersion, forceUpdate, message } = req.body || {};
+    const normalizedPlatform = String(platform || '').toLowerCase();
+    if (!['ios', 'android'].includes(normalizedPlatform)) {
+      return res.status(400).json({
+        success: false,
+        message: 'platform es requerido (ios | android)'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const payload = {
+      minVersion: minVersion || null,
+      latestVersion: latestVersion || null,
+      forceUpdate: Boolean(forceUpdate),
+      message: message || null,
+      updatedAt: new Date()
+    };
+
+    await db.collection('app_versions').doc(normalizedPlatform).set(payload, { merge: true });
+
+    res.json({
+      success: true,
+      data: { platform: normalizedPlatform, ...payload }
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error guardando versión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error guardando versión',
+      error: error.message
+    });
+  }
+});
 
 // ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
