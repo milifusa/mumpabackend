@@ -40,7 +40,7 @@ Body (crear):
   "htmlContent": "<h1>...</h1><p>...</p>",
   "publishedAt": "2026-01-28T12:00:00.000Z",
   "readingTimeMinutes": 4,
-  "authorName": "Dra. Perez",
+  "professionalId": "PROFESSIONAL_ID",
   "categoryId": "CATEGORY_ID",
   "keywordIds": ["KEYWORD_ID_1", "KEYWORD_ID_2"],
   "coverImageUrl": "https://...",
@@ -64,6 +64,7 @@ Si `readingTimeMinutes` no se envia, se calcula automaticamente desde el HTML.
 Campos extra en respuestas:
 - `shareUrl` (deeplink `munpa://article/{id}`)
 - `webUrl` (`https://munpa.online/article/{id}`)
+- `authorProfessional` (perfil profesional que escribió el artículo)
 
 Query params opcionales:
 - `categoryId`, `keywordId`, `search`, `page`, `limit`
@@ -97,6 +98,8 @@ articles/{id}
   keywordIds: [],
   readingTimeMinutes,
   publishedAt,
+  professionalId,
+  authorProfessional: { id, userId, name, headline, photoUrl, contactEmail, contactPhone, website },
   author: { uid, name },
   status: "draft" | "published",
   createdAt,

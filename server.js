@@ -79,6 +79,135 @@ const calculateMonthsFromBirthDate = (birthDate) => {
   return Math.max(0, months);
 };
 
+const calculateAgeInMonthsAtDate = (birthDate, targetDate) => {
+  const birth = parseDateSafe(birthDate);
+  const target = parseDateSafe(targetDate);
+  if (!birth || !target) return null;
+  let years = target.getFullYear() - birth.getFullYear();
+  let months = target.getMonth() - birth.getMonth();
+  if (target.getDate() < birth.getDate()) {
+    months--;
+  }
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+  return Math.max(0, years * 12 + months);
+};
+
+const addMonthsToDate = (date, months) => {
+  const base = parseDateSafe(date);
+  if (!base || !Number.isFinite(months)) return null;
+  const result = new Date(base.getTime());
+  const targetMonth = result.getMonth() + months;
+  result.setMonth(targetMonth);
+  return result;
+};
+
+const addWeeksToDate = (date, weeks) => {
+  const base = parseDateSafe(date);
+  if (!base || !Number.isFinite(weeks)) return null;
+  return new Date(base.getTime() + weeks * 7 * 24 * 60 * 60 * 1000);
+};
+
+const getTodayDateKey = () => new Date().toISOString().slice(0, 10);
+
+const stripUndefined = (payload) => {
+  if (!payload || typeof payload !== 'object') return payload;
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+};
+
+const TEETH_DEFINITIONS = [
+  { id: 'upper-central-incisor-left', name: 'Central incisor', arch: 'upper', type: 'incisor', eruptRangeMonths: [8, 12], shedRangeYears: [6, 7] },
+  { id: 'upper-central-incisor-right', name: 'Central incisor', arch: 'upper', type: 'incisor', eruptRangeMonths: [8, 12], shedRangeYears: [6, 7] },
+  { id: 'upper-lateral-incisor-left', name: 'Lateral incisor', arch: 'upper', type: 'incisor', eruptRangeMonths: [9, 13], shedRangeYears: [7, 8] },
+  { id: 'upper-lateral-incisor-right', name: 'Lateral incisor', arch: 'upper', type: 'incisor', eruptRangeMonths: [9, 13], shedRangeYears: [7, 8] },
+  { id: 'upper-canine-left', name: 'Canine (cuspid)', arch: 'upper', type: 'canine', eruptRangeMonths: [16, 22], shedRangeYears: [10, 12] },
+  { id: 'upper-canine-right', name: 'Canine (cuspid)', arch: 'upper', type: 'canine', eruptRangeMonths: [16, 22], shedRangeYears: [10, 12] },
+  { id: 'upper-first-molar-left', name: 'First molar', arch: 'upper', type: 'molar', eruptRangeMonths: [13, 19], shedRangeYears: [9, 11] },
+  { id: 'upper-first-molar-right', name: 'First molar', arch: 'upper', type: 'molar', eruptRangeMonths: [13, 19], shedRangeYears: [9, 11] },
+  { id: 'upper-second-molar-left', name: 'Second molar', arch: 'upper', type: 'molar', eruptRangeMonths: [25, 33], shedRangeYears: [10, 12] },
+  { id: 'upper-second-molar-right', name: 'Second molar', arch: 'upper', type: 'molar', eruptRangeMonths: [25, 33], shedRangeYears: [10, 12] },
+  { id: 'lower-central-incisor-left', name: 'Central incisor', arch: 'lower', type: 'incisor', eruptRangeMonths: [6, 10], shedRangeYears: [6, 7] },
+  { id: 'lower-central-incisor-right', name: 'Central incisor', arch: 'lower', type: 'incisor', eruptRangeMonths: [6, 10], shedRangeYears: [6, 7] },
+  { id: 'lower-lateral-incisor-left', name: 'Lateral incisor', arch: 'lower', type: 'incisor', eruptRangeMonths: [10, 16], shedRangeYears: [7, 8] },
+  { id: 'lower-lateral-incisor-right', name: 'Lateral incisor', arch: 'lower', type: 'incisor', eruptRangeMonths: [10, 16], shedRangeYears: [7, 8] },
+  { id: 'lower-canine-left', name: 'Canine (cuspid)', arch: 'lower', type: 'canine', eruptRangeMonths: [17, 23], shedRangeYears: [9, 12] },
+  { id: 'lower-canine-right', name: 'Canine (cuspid)', arch: 'lower', type: 'canine', eruptRangeMonths: [17, 23], shedRangeYears: [9, 12] },
+  { id: 'lower-first-molar-left', name: 'First molar', arch: 'lower', type: 'molar', eruptRangeMonths: [14, 18], shedRangeYears: [9, 11] },
+  { id: 'lower-first-molar-right', name: 'First molar', arch: 'lower', type: 'molar', eruptRangeMonths: [14, 18], shedRangeYears: [9, 11] },
+  { id: 'lower-second-molar-left', name: 'Second molar', arch: 'lower', type: 'molar', eruptRangeMonths: [23, 31], shedRangeYears: [10, 12] },
+  { id: 'lower-second-molar-right', name: 'Second molar', arch: 'lower', type: 'molar', eruptRangeMonths: [23, 31], shedRangeYears: [10, 12] }
+];
+
+const TEETH_ALIASES = {
+  'upper-incisor1-left': 'upper-central-incisor-left',
+  'upper-incisor1-right': 'upper-central-incisor-right',
+  'upper-incisor2-left': 'upper-lateral-incisor-left',
+  'upper-incisor2-right': 'upper-lateral-incisor-right',
+  'lower-incisor1-left': 'lower-central-incisor-left',
+  'lower-incisor1-right': 'lower-central-incisor-right',
+  'lower-incisor2-left': 'lower-lateral-incisor-left',
+  'lower-incisor2-right': 'lower-lateral-incisor-right',
+  'upper-molar1-left': 'upper-first-molar-left',
+  'upper-molar1-right': 'upper-first-molar-right',
+  'upper-molar2-left': 'upper-second-molar-left',
+  'upper-molar2-right': 'upper-second-molar-right',
+  'lower-molar1-left': 'lower-first-molar-left',
+  'lower-molar1-right': 'lower-first-molar-right',
+  'lower-molar2-left': 'lower-second-molar-left',
+  'lower-molar2-right': 'lower-second-molar-right'
+};
+
+const getToothDefinition = (toothId) => {
+  const resolvedId = TEETH_ALIASES[toothId] || toothId;
+  return TEETH_DEFINITIONS.find((t) => t.id === resolvedId) || null;
+};
+
+const normalizeTeethingType = (rawType) => {
+  if (!rawType) return null;
+  const value = String(rawType).toLowerCase().trim();
+  if (['erupt', 'eruption', 'erupted', 'erupcion', 'erupción', 'salio', 'salió'].includes(value)) {
+    return 'erupt';
+  }
+  if (['shed', 'fall', 'lost', 'caida', 'caída', 'cayo', 'cayó'].includes(value)) {
+    return 'shed';
+  }
+  return ['erupt', 'shed'].includes(value) ? value : null;
+};
+
+const shouldSendDoulaGreeting = async (uid) => {
+  if (!db) return true;
+  const ref = db.collection('doula_daily_greetings').doc(uid);
+  const doc = await ref.get();
+  const todayKey = getTodayDateKey();
+  if (doc.exists && doc.data()?.lastGreetedDate === todayKey) {
+    return false;
+  }
+  await ref.set({ lastGreetedDate: todayKey, updatedAt: new Date() }, { merge: true });
+  return true;
+};
+
+const normalizeDoulaGreeting = (text, userName, shouldGreet) => {
+  if (!text) return text;
+  const safeName = userName || 'Mamá';
+  const response = String(text).trim();
+  if (!response) return response;
+  const lines = response.split('\n');
+  const firstLine = (lines[0] || '').trim();
+  const hasGreeting = /^¡?hola\b/i.test(firstLine);
+  if (shouldGreet) {
+    if (hasGreeting) return response;
+    return `¡Hola ${safeName}!\n\n${response}`;
+  }
+  if (hasGreeting) {
+    lines.shift();
+    while (lines.length && lines[0].trim() === '') lines.shift();
+    return lines.join('\n');
+  }
+  return response;
+};
+
 const getWeeksFromChildData = (child) => {
   if (!child) return null;
   if (child.isUnborn) {
@@ -1002,11 +1131,13 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
 
 ¿Hay algo relacionado con tu embarazo, tu bebé o tu experiencia como madre/padre en lo que pueda ayudarte? 💝`;
 
+      const shouldGreet = await shouldSendDoulaGreeting(uid);
+      const finalResponse = normalizeDoulaGreeting(offTopicResponse, userName, shouldGreet);
       return res.json({
         success: true,
         message: 'Respuesta de la doula virtual',
         data: {
-          response: offTopicResponse,
+          response: finalResponse,
           timestamp: new Date().toISOString(),
           usedFallback: true,
           source: 'off-topic-filter',
@@ -1029,6 +1160,7 @@ app.post('/api/doula/chat', authenticateToken, async (req, res) => {
     let userName = '';
     let userMemory = null;
     let relevantKnowledge = [];
+    const shouldGreet = await shouldSendDoulaGreeting(uid);
     
     if (db) {
       try {
@@ -1341,11 +1473,12 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
       }
     }
 
+    const finalResponse = normalizeDoulaGreeting(response, userName, shouldGreet);
     res.json({
       success: true,
       message: 'Respuesta de la doula virtual',
       data: {
-        response: response,
+        response: finalResponse,
         timestamp: new Date().toISOString(),
         usedFallback: usedFallback,
         source: usedFallback ? 'fallback' : 'openai'
@@ -4430,19 +4563,39 @@ const filterRecommendationsByLocation = ({
       })
     : items.map(item => ({ ...item }));
 
+  const baseList = items;
+  const isGlobal = (item) => !item.countryId;
+  const isCountryMatch = (item) => normalizedCountryId && String(item.countryId || '') === normalizedCountryId;
+  const isCityMatch = (item) => normalizedCityId && String(item.cityId || '') === normalizedCityId;
   if (hasCoords) {
     const nearby = withDistance.filter(item => typeof item.distance === 'number' && item.distance <= cappedMax);
-    if (nearby.length > 0) return nearby;
+    if (nearby.length > 0) {
+      const ids = new Set(nearby.map(item => item.id));
+      let extra = [];
+      if (normalizedCityId) {
+        extra = baseList.filter(item =>
+          !ids.has(item.id) && (isCityMatch(item) || (!item.cityId && isCountryMatch(item)) || isGlobal(item))
+        );
+      } else if (normalizedCountryId) {
+        extra = baseList.filter(item =>
+          !ids.has(item.id) && (isCountryMatch(item) || isGlobal(item))
+        );
+      } else {
+        extra = baseList.filter(item => !ids.has(item.id) && isGlobal(item));
+      }
+      return nearby.concat(extra);
+    }
   }
 
-  const baseList = items;
   if (normalizedCityId) {
-    const cityMatches = baseList.filter(item => String(item.cityId || '') === normalizedCityId);
+    const cityMatches = baseList.filter(item =>
+      isCityMatch(item) || (!item.cityId && isCountryMatch(item)) || isGlobal(item)
+    );
     if (cityMatches.length > 0) return cityMatches;
   }
 
   if (normalizedCountryId) {
-    const countryMatches = baseList.filter(item => String(item.countryId || '') === normalizedCountryId);
+    const countryMatches = baseList.filter(item => isCountryMatch(item) || isGlobal(item));
     if (countryMatches.length > 0) return countryMatches;
   }
 
@@ -12917,17 +13070,28 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
 
     let weeks = null;
     let months = null;
+    let ageBreakdown = null;
     let pregnant = Boolean(isPregnant);
     let resolvedChildId = childId || null;
 
     if (!resolvedChildId && name && db) {
-      const childSnapshot = await db.collection('children')
+      const trimmedName = String(name).trim();
+      const ownSnapshot = await db.collection('children')
         .where('parentId', '==', req.user.uid)
-        .where('name', '==', String(name).trim())
+        .where('name', '==', trimmedName)
         .limit(1)
         .get();
-      if (!childSnapshot.empty) {
-        resolvedChildId = childSnapshot.docs[0].id;
+      if (!ownSnapshot.empty) {
+        resolvedChildId = ownSnapshot.docs[0].id;
+      } else {
+        const sharedSnapshot = await db.collection('children')
+          .where('sharedWith', 'array-contains', req.user.uid)
+          .where('name', '==', trimmedName)
+          .limit(1)
+          .get();
+        if (!sharedSnapshot.empty) {
+          resolvedChildId = sharedSnapshot.docs[0].id;
+        }
       }
     }
 
@@ -12940,7 +13104,9 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
         });
       }
       const childData = childDoc.data();
-      if (childData.parentId !== req.user.uid) {
+      const isOwner = childData.parentId === req.user.uid;
+      const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(req.user.uid);
+      if (!isOwner && !isShared) {
         return res.status(403).json({
           success: false,
           message: 'No tienes permisos para acceder a este hijo'
@@ -12949,6 +13115,9 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
       pregnant = Boolean(childData.isUnborn);
       weeks = getWeeksFromChildData(childData);
       months = getMonthsFromChildData(childData);
+      if (!pregnant && childData.birthDate) {
+        ageBreakdown = calculateAgeBreakdownFromBirthDate(childData.birthDate);
+      }
     } else if (gestationWeeks || isPregnant) {
       weeks = parseInt(gestationWeeks, 10);
       pregnant = true;
@@ -12957,6 +13126,7 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
     } else if (birthDate) {
       weeks = calculateWeeksFromBirthDate(birthDate);
       months = calculateMonthsFromBirthDate(birthDate);
+      ageBreakdown = calculateAgeBreakdownFromBirthDate(birthDate);
     }
 
     if (pregnant) {
@@ -13002,15 +13172,36 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
       isPregnant: pregnant
     });
 
+    let title = guide.title;
+    let ageLabel = null;
+    if (!pregnant && ageBreakdown && ageBreakdown.totalMonths >= 12) {
+      const parts = [];
+      if (ageBreakdown.years > 0) {
+        parts.push(`${ageBreakdown.years} año${ageBreakdown.years === 1 ? '' : 's'}`);
+      }
+      if (ageBreakdown.months > 0) {
+        parts.push(`${ageBreakdown.months} mes${ageBreakdown.months === 1 ? '' : 'es'}`);
+      }
+      ageLabel = parts.length > 0 ? parts.join(' ') : `${ageBreakdown.totalMonths} meses`;
+      const titleSuffix = title && String(title).includes(':')
+        ? String(title).split(':').slice(1).join(':').trim()
+        : String(title || '');
+      title = `${ageLabel}: ${titleSuffix || 'El descubrimiento'}`;
+    }
+
     const responsePayload = {
       success: true,
       data: {
-        title: guide.title,
+        title,
         subtitle: guide.subtitle,
         description: guide.description,
         tip: guide.tip,
         unit,
         value,
+        ageLabel,
+        ageYears: ageBreakdown ? ageBreakdown.years : null,
+        ageMonths: ageBreakdown ? ageBreakdown.months : null,
+        ageTotalMonths: ageBreakdown ? ageBreakdown.totalMonths : null,
         isPregnant: pregnant,
         source: guide.source
       }
@@ -13179,6 +13370,27 @@ const calculateAgeFromBirthDate = (birthDate) => {
   console.log(`📊 [AGE CALCULATION] Nacimiento: ${birth.toLocaleDateString()} → Edad actual: ${totalMonths} meses (${years} años, ${months} meses)`);
   
   return totalMonths;
+};
+
+const calculateAgeBreakdownFromBirthDate = (birthDate) => {
+  const now = new Date();
+  let birth;
+  if (birthDate && typeof birthDate === 'object' && birthDate._seconds) {
+    birth = new Date(birthDate._seconds * 1000);
+  } else {
+    birth = new Date(birthDate);
+  }
+  let years = now.getFullYear() - birth.getFullYear();
+  let months = now.getMonth() - birth.getMonth();
+  if (now.getDate() < birth.getDate()) {
+    months--;
+  }
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+  const totalMonths = Math.max(0, years * 12 + months);
+  return { years: Math.max(0, years), months: Math.max(0, months), totalMonths };
 };
 
 // Función para calcular edad actual basada en fecha de creación (LEGACY - para compatibilidad con datos antiguos)
@@ -13545,6 +13757,10 @@ Requisitos:
     const content = response.choices?.[0]?.message?.content || '';
     const parsed = extractJsonFromText(content);
     if (!parsed || !parsed.title || !parsed.subtitle || !parsed.description || !parsed.tip) {
+      return getDailyGuideFallback({ unit, value, name, isPregnant });
+    }
+    const expectedPrefix = unit === 'month' ? `Mes ${value}:` : `Semana ${value}:`;
+    if (!String(parsed.title || '').startsWith(expectedPrefix)) {
       return getDailyGuideFallback({ unit, value, name, isPregnant });
     }
     return { ...parsed, source: 'openai' };
@@ -17748,6 +17964,264 @@ app.use((err, req, res, next) => {
 // 1. VACUNAS
 // ==========================================
 
+const buildVaccineSchedulePayload = ({ countryId, countryName, name, items, isActive = true }) => ({
+  countryId,
+  countryName,
+  name,
+  isActive,
+  items: Array.isArray(items) ? items : [],
+  updatedAt: new Date(),
+  createdAt: new Date()
+});
+
+const mapScheduleItemToVaccine = (item, birthDate) => {
+  const ageMonths = Number.isFinite(item.ageMonths) ? item.ageMonths : null;
+  const ageWeeks = Number.isFinite(item.ageWeeks) ? item.ageWeeks : null;
+  const scheduledDate = ageMonths !== null
+    ? addMonthsToDate(birthDate, ageMonths)
+    : addWeeksToDate(birthDate, ageWeeks);
+
+  if (!scheduledDate) return null;
+
+  return {
+    name: item.name,
+    scheduledDate,
+    appliedDate: null,
+    status: 'pending',
+    location: '',
+    batch: '',
+    notes: item.notes || '',
+    source: 'schedule',
+    scheduleItemId: item.id || null,
+    ageMonths,
+    ageWeeks,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  };
+};
+
+// Listar calendarios de vacunas disponibles
+app.get('/api/vaccines/schedules', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('vaccine_schedules')
+      .where('isActive', '==', true)
+      .orderBy('countryName', 'asc')
+      .get();
+    const schedules = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    res.json({ success: true, data: schedules });
+  } catch (error) {
+    console.error('❌ Error listando calendarios de vacunas:', error);
+    res.status(500).json({ success: false, message: 'Error listando calendarios', error: error.message });
+  }
+});
+
+// Obtener calendario por país
+app.get('/api/vaccines/schedules/country/:countryId', authenticateToken, async (req, res) => {
+  try {
+    const { countryId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('vaccine_schedules')
+      .where('countryId', '==', countryId)
+      .where('isActive', '==', true)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Calendario no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    res.json({ success: true, data: { id: doc.id, ...doc.data() } });
+  } catch (error) {
+    console.error('❌ Error obteniendo calendario de vacunas:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo calendario', error: error.message });
+  }
+});
+
+// Admin: crear calendario de vacunas
+app.post('/api/admin/vaccines/schedules', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { countryId, name, items } = req.body || {};
+    if (!countryId || !name) {
+      return res.status(400).json({ success: false, message: 'countryId y name son requeridos' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const countryDoc = await db.collection('countries').doc(countryId).get();
+    if (!countryDoc.exists || countryDoc.data().isActive === false) {
+      return res.status(400).json({ success: false, message: 'País no encontrado o inactivo' });
+    }
+    const payload = buildVaccineSchedulePayload({
+      countryId,
+      countryName: countryDoc.data().name,
+      name,
+      items,
+      isActive: true
+    });
+    const ref = await db.collection('vaccine_schedules').add(payload);
+    res.json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ Error creando calendario de vacunas:', error);
+    res.status(500).json({ success: false, message: 'Error creando calendario', error: error.message });
+  }
+});
+
+// Admin: listar calendarios de vacunas
+app.get('/api/admin/vaccines/schedules', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { isActive } = req.query || {};
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    let query = db.collection('vaccine_schedules');
+    if (isActive !== undefined) {
+      query = query.where('isActive', '==', String(isActive) === 'true');
+    }
+    const snapshot = await query.orderBy('countryName', 'asc').get();
+    const schedules = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    res.json({ success: true, data: schedules });
+  } catch (error) {
+    console.error('❌ Error listando calendarios de vacunas (admin):', error);
+    res.status(500).json({ success: false, message: 'Error listando calendarios', error: error.message });
+  }
+});
+
+// Admin: actualizar calendario de vacunas
+app.put('/api/admin/vaccines/schedules/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, items, isActive } = req.body || {};
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const updateData = {
+      updatedAt: new Date()
+    };
+    if (name !== undefined) updateData.name = name;
+    if (items !== undefined) updateData.items = Array.isArray(items) ? items : [];
+    if (isActive !== undefined) updateData.isActive = Boolean(isActive);
+    await db.collection('vaccine_schedules').doc(id).update(updateData);
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ Error actualizando calendario de vacunas:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando calendario', error: error.message });
+  }
+});
+
+// Admin: eliminar calendario de vacunas
+app.delete('/api/admin/vaccines/schedules/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('vaccine_schedules').doc(id).delete();
+    res.json({ success: true, message: 'Calendario eliminado' });
+  } catch (error) {
+    console.error('❌ Error eliminando calendario de vacunas:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando calendario', error: error.message });
+  }
+});
+
+// Asignar calendario de vacunas a un hijo
+app.post('/api/children/:childId/vaccines/assign-schedule', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { countryId } = req.body || {};
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    if (!countryId) {
+      return res.status(400).json({ success: false, message: 'countryId es requerido' });
+    }
+
+    const childRef = db.collection('children').doc(childId);
+    const childDoc = await childRef.get();
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({ success: false, message: 'No tienes permiso para acceder a este hijo' });
+    }
+
+    const childData = childDoc.data();
+    const birthDate = parseDateSafe(childData.birthDate);
+    if (!birthDate) {
+      return res.status(400).json({ success: false, message: 'El hijo no tiene birthDate válida' });
+    }
+
+    const existingVaccines = await childRef.collection('vaccines').limit(1).get();
+    if (!existingVaccines.empty) {
+      return res.status(400).json({ success: false, message: 'El hijo ya tiene vacunas registradas' });
+    }
+
+    const scheduleSnapshot = await db.collection('vaccine_schedules')
+      .where('countryId', '==', countryId)
+      .where('isActive', '==', true)
+      .limit(1)
+      .get();
+    if (scheduleSnapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Calendario de vacunas no encontrado' });
+    }
+
+    const scheduleDoc = scheduleSnapshot.docs[0];
+    const scheduleData = scheduleDoc.data();
+    const items = Array.isArray(scheduleData.items) ? scheduleData.items : [];
+    if (items.length === 0) {
+      return res.status(400).json({ success: false, message: 'El calendario no tiene vacunas' });
+    }
+
+    const batch = db.batch();
+    const vaccinesToCreate = [];
+    items.forEach(item => {
+      if (!item || !item.name) return;
+      const vaccinePayload = mapScheduleItemToVaccine(item, birthDate);
+      if (!vaccinePayload) return;
+      const docRef = childRef.collection('vaccines').doc();
+      batch.set(docRef, {
+        ...vaccinePayload,
+        scheduleId: scheduleDoc.id,
+        scheduleName: scheduleData.name || '',
+        countryId: scheduleData.countryId,
+        countryName: scheduleData.countryName || ''
+      });
+      vaccinesToCreate.push({ id: docRef.id, ...vaccinePayload });
+    });
+
+    const countryDoc = await db.collection('countries').doc(countryId).get();
+    const countryName = countryDoc.exists ? countryDoc.data().name : scheduleData.countryName || '';
+
+    batch.update(childRef, stripUndefined({
+      vaccinationCountryId: countryId,
+      vaccinationCountryName: countryName || '',
+      vaccinationScheduleId: scheduleDoc.id,
+      vaccinationScheduleName: scheduleData.name || '',
+      vaccinationAssignedAt: new Date(),
+      updatedAt: new Date()
+    }));
+
+    await batch.commit();
+
+    res.json({
+      success: true,
+      message: 'Calendario asignado correctamente',
+      data: vaccinesToCreate
+    });
+  } catch (error) {
+    console.error('❌ Error asignando calendario de vacunas:', error);
+    res.status(500).json({ success: false, message: 'Error asignando calendario', error: error.message });
+  }
+});
+
 // Obtener vacunas de un hijo
 app.get('/api/children/:childId/vaccines', authenticateToken, async (req, res) => {
   try {
@@ -17785,7 +18259,8 @@ app.get('/api/children/:childId/vaccines', authenticateToken, async (req, res) =
 
     res.json({
       success: true,
-      data: vaccines
+      data: vaccines,
+      needsVaccinationCountry: vaccines.length === 0 && !childDoc.data().vaccinationCountryId
     });
 
   } catch (error) {
@@ -20625,6 +21100,337 @@ app.get('/api/children/:childId/measurements/summary', authenticateToken, async 
     });
   }
 });
+
+// ==========================================
+// 6.1.4 DENTICION (ERUPCION Y CAIDA DE DIENTES)
+// ==========================================
+
+const handleTeethingSummary = async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    }
+    const childData = childDoc.data();
+    const isOwner = childData.parentId === uid;
+    const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid);
+    if (!isOwner && !isShared) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos para acceder a este hijo' });
+    }
+
+    const birthDate = childData.birthDate || null;
+    const currentAgeMonths = birthDate ? calculateAgeFromBirthDate(birthDate) : null;
+    const snapshot = await db.collection('children').doc(childId)
+      .collection('teething_events')
+      .orderBy('occurredAt', 'desc')
+      .get();
+
+    const latestByTooth = new Map();
+    const timeline = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const occurredAt = parseDateSafe(data.occurredAt);
+      const ageMonthsAtEvent = birthDate && occurredAt ? calculateAgeInMonthsAtDate(birthDate, occurredAt) : null;
+      const entry = {
+        id: doc.id,
+        toothId: data.toothId,
+        toothName: data.toothName || null,
+        type: data.type,
+        occurredAt: occurredAt ? occurredAt.toISOString() : null,
+        symptoms: Array.isArray(data.symptoms) ? data.symptoms : [],
+        notes: data.notes || null,
+        createdBy: data.createdBy || null,
+        ageMonths: ageMonthsAtEvent,
+        notifyToothFairy: Boolean(data.notifyToothFairy)
+      };
+      if (!latestByTooth.has(entry.toothId)) {
+        latestByTooth.set(entry.toothId, entry);
+      }
+      return entry;
+    });
+
+    const teeth = TEETH_DEFINITIONS.map(def => {
+      const latest = latestByTooth.get(def.id) || null;
+      return {
+        ...def,
+        status: latest ? latest.type : 'none',
+        lastEvent: latest
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        childId,
+        ageMonths: currentAgeMonths,
+        teeth,
+        timeline
+      }
+    });
+  } catch (error) {
+    console.error('❌ [TEETH] Error obteniendo resumen:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo resumen', error: error.message });
+  }
+};
+
+const handleTeethingEventsList = async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { month } = req.query;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    }
+    const childData = childDoc.data();
+    const isOwner = childData.parentId === uid;
+    const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid);
+    if (!isOwner && !isShared) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos para acceder a este hijo' });
+    }
+    const birthDate = childData.birthDate || null;
+    const snapshot = await db.collection('children').doc(childId)
+      .collection('teething_events')
+      .orderBy('occurredAt', 'desc')
+      .get();
+    let events = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const occurredAt = parseDateSafe(data.occurredAt);
+      const ageMonthsAtEvent = birthDate && occurredAt ? calculateAgeInMonthsAtDate(birthDate, occurredAt) : null;
+      return {
+        id: doc.id,
+        toothId: data.toothId,
+        toothName: data.toothName || null,
+        type: data.type,
+        occurredAt: occurredAt ? occurredAt.toISOString() : null,
+        symptoms: Array.isArray(data.symptoms) ? data.symptoms : [],
+        notes: data.notes || null,
+        createdBy: data.createdBy || null,
+        ageMonths: ageMonthsAtEvent,
+        notifyToothFairy: Boolean(data.notifyToothFairy)
+      };
+    });
+
+    if (month !== undefined) {
+      const target = parseInt(month, 10);
+      if (!Number.isNaN(target)) {
+        events = events.filter(event => event.ageMonths === target);
+      }
+    }
+
+    res.json({ success: true, data: events });
+  } catch (error) {
+    console.error('❌ [TEETH] Error listando eventos:', error);
+    res.status(500).json({ success: false, message: 'Error listando eventos', error: error.message });
+  }
+};
+
+const handleTeethingEventCreate = async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const rawBody = req.body || {};
+    const resolvedToothId = rawBody.toothId || rawBody.tooth || rawBody.toothKey || rawBody.id;
+    const resolvedType = normalizeTeethingType(rawBody.type || rawBody.eventType || rawBody.status);
+    const { occurredAt, symptoms, notes } = rawBody;
+    if (!resolvedToothId || !resolvedType) {
+      return res.status(400).json({ success: false, message: 'toothId y type son requeridos', details: { toothId: resolvedToothId || null, type: resolvedType || null } });
+    }
+    const toothDef = getToothDefinition(resolvedToothId);
+    if (!toothDef) {
+      return res.status(400).json({ success: false, message: 'toothId inválido' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    }
+    const childData = childDoc.data();
+    const isOwner = childData.parentId === uid;
+    const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid);
+    if (!isOwner && !isShared) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos para acceder a este hijo' });
+    }
+    const eventDate = parseDateSafe(occurredAt) || new Date();
+    const ageMonthsAtEvent = childData.birthDate ? calculateAgeInMonthsAtDate(childData.birthDate, eventDate) : null;
+    const notifyToothFairy = resolvedType === 'shed' && typeof ageMonthsAtEvent === 'number' && ageMonthsAtEvent >= 48;
+    const payload = {
+      toothId: resolvedToothId,
+      toothName: toothDef.name,
+      type: resolvedType,
+      occurredAt: eventDate,
+      symptoms: Array.isArray(symptoms) ? symptoms : [],
+      notes: notes || null,
+      notifyToothFairy,
+      createdBy: { uid, name: req.user.name || req.user.email || 'Usuario' },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('children').doc(childId)
+      .collection('teething_events')
+      .add(payload);
+
+    if (notifyToothFairy && childData.parentId) {
+      await db.collection('notifications').add({
+        userId: childData.parentId,
+        type: 'tooth_fairy',
+        title: 'Raton Perez',
+        body: `${childData.name || 'Tu hijo'} se le cayo un diente`,
+        data: {
+          childId,
+          toothId,
+          eventId: ref.id
+        },
+        read: false,
+        createdAt: admin.firestore.Timestamp.fromDate(new Date())
+      });
+    }
+
+    res.status(201).json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [TEETH] Error creando evento:', error);
+    res.status(500).json({ success: false, message: 'Error creando evento', error: error.message });
+  }
+};
+
+const handleTeethingEventUpdate = async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, eventId } = req.params;
+    const rawBody = req.body || {};
+    const { occurredAt, symptoms, notes } = rawBody;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    }
+    const childData = childDoc.data();
+    const isOwner = childData.parentId === uid;
+    const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid);
+    if (!isOwner && !isShared) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos para acceder a este hijo' });
+    }
+    const eventRef = db.collection('children').doc(childId)
+      .collection('teething_events').doc(eventId);
+    const eventDoc = await eventRef.get();
+    if (!eventDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Evento no encontrado' });
+    }
+
+    const updateData = { updatedAt: new Date() };
+    if (rawBody.toothId !== undefined || rawBody.tooth !== undefined || rawBody.toothKey !== undefined || rawBody.id !== undefined) {
+      const incomingToothId = rawBody.toothId || rawBody.tooth || rawBody.toothKey || rawBody.id;
+      const toothDef = getToothDefinition(incomingToothId);
+      if (!toothDef) {
+        return res.status(400).json({ success: false, message: 'toothId inválido' });
+      }
+      updateData.toothId = incomingToothId;
+      updateData.toothName = toothDef.name;
+    }
+    if (rawBody.type !== undefined || rawBody.eventType !== undefined || rawBody.status !== undefined) {
+      const normalizedType = normalizeTeethingType(rawBody.type || rawBody.eventType || rawBody.status);
+      if (!normalizedType) {
+        return res.status(400).json({ success: false, message: 'type inválido' });
+      }
+      updateData.type = normalizedType;
+    }
+    if (occurredAt !== undefined) {
+      const parsed = parseDateSafe(occurredAt);
+      if (!parsed) {
+        return res.status(400).json({ success: false, message: 'occurredAt inválido' });
+      }
+      updateData.occurredAt = parsed;
+    }
+    if (symptoms !== undefined) {
+      updateData.symptoms = Array.isArray(symptoms) ? symptoms : [];
+    }
+    if (notes !== undefined) updateData.notes = notes || null;
+
+    const nextType = updateData.type || eventDoc.data().type;
+    const nextOccurredAt = updateData.occurredAt || eventDoc.data().occurredAt;
+    const ageMonthsAtEvent = childData.birthDate && nextOccurredAt
+      ? calculateAgeInMonthsAtDate(childData.birthDate, nextOccurredAt)
+      : null;
+    const notifyToothFairy = nextType === 'shed' && typeof ageMonthsAtEvent === 'number' && ageMonthsAtEvent >= 48;
+    updateData.notifyToothFairy = notifyToothFairy;
+
+    await eventRef.update(stripUndefined(updateData));
+
+    if (notifyToothFairy && childData.parentId && !eventDoc.data().notifyToothFairy) {
+      await db.collection('notifications').add({
+        userId: childData.parentId,
+        type: 'tooth_fairy',
+        title: 'Raton Perez',
+        body: `${childData.name || 'Tu hijo'} se le cayo un diente`,
+        data: {
+          childId,
+          toothId: updateData.toothId || eventDoc.data().toothId,
+          eventId
+        },
+        read: false,
+        createdAt: admin.firestore.Timestamp.fromDate(new Date())
+      });
+    }
+
+    res.json({ success: true, data: { id: eventId, ...updateData } });
+  } catch (error) {
+    console.error('❌ [TEETH] Error actualizando evento:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando evento', error: error.message });
+  }
+};
+
+const handleTeethingEventDelete = async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, eventId } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    }
+    const childData = childDoc.data();
+    const isOwner = childData.parentId === uid;
+    const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid);
+    if (!isOwner && !isShared) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos para acceder a este hijo' });
+    }
+    await db.collection('children').doc(childId)
+      .collection('teething_events').doc(eventId).delete();
+    res.json({ success: true, message: 'Evento eliminado' });
+  } catch (error) {
+    console.error('❌ [TEETH] Error eliminando evento:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando evento', error: error.message });
+  }
+};
+
+app.get('/api/children/:childId/teething/summary', authenticateToken, handleTeethingSummary);
+app.get('/children/:childId/teething/summary', authenticateToken, handleTeethingSummary);
+
+app.get('/api/children/:childId/teething/events', authenticateToken, handleTeethingEventsList);
+app.get('/children/:childId/teething/events', authenticateToken, handleTeethingEventsList);
+
+app.post('/api/children/:childId/teething/events', authenticateToken, handleTeethingEventCreate);
+app.post('/children/:childId/teething/events', authenticateToken, handleTeethingEventCreate);
+
+app.put('/api/children/:childId/teething/events/:eventId', authenticateToken, handleTeethingEventUpdate);
+app.put('/children/:childId/teething/events/:eventId', authenticateToken, handleTeethingEventUpdate);
+
+app.delete('/api/children/:childId/teething/events/:eventId', authenticateToken, handleTeethingEventDelete);
+app.delete('/children/:childId/teething/events/:eventId', authenticateToken, handleTeethingEventDelete);
 
 // ==========================================
 // 6.2 CURVAS DE CRECIMIENTO (PERCENTILES)
@@ -25378,7 +26184,8 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       'crecimiento',
       'vacunas',
       'denticion',
-      'hitos'
+      'hitos',
+      'menu-lateral'
     ];
     if (section && !validSections.includes(section)) {
       return res.status(400).json({
@@ -25394,7 +26201,19 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       });
     }
 
-    const validLinkTypes = ['url', 'article', 'article-category', 'recommendation-category', 'none'];
+    const validLinkTypes = [
+      'url',
+      'article',
+      'article-category',
+      'recommendation-category',
+      'denticion',
+      'crecimiento',
+      'hitos',
+      'medicacion',
+      'vacunas',
+      'solicitud-servicio',
+      'none'
+    ];
     let resolvedLinkType = linkType;
     if (!resolvedLinkType) {
       if (articleId) {
@@ -25598,7 +26417,19 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
       updateData.link = link?.trim() || null;
     }
 
-    const validLinkTypes = ['url', 'article', 'article-category', 'recommendation-category', 'none'];
+    const validLinkTypes = [
+      'url',
+      'article',
+      'article-category',
+      'recommendation-category',
+      'denticion',
+      'crecimiento',
+      'hitos',
+      'medicacion',
+      'vacunas',
+      'solicitud-servicio',
+      'none'
+    ];
     if (linkType !== undefined) {
       if (!validLinkTypes.includes(linkType)) {
         return res.status(400).json({
@@ -28740,6 +29571,37 @@ function getDailyReminder(ageInMonths, ageInDays) {
   return reminders.sort((a, b) => a.priority - b.priority)[0];
 }
 
+const getUpcomingScheduledVaccineReminder = async (childId, childName) => {
+  if (!db) return null;
+  const now = new Date();
+  const targetDate = new Date(now);
+  targetDate.setDate(targetDate.getDate() + 7);
+  const startOfDay = new Date(targetDate);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(targetDate);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const snapshot = await db.collection('children').doc(childId)
+    .collection('vaccines')
+    .where('scheduledDate', '>=', startOfDay)
+    .where('scheduledDate', '<=', endOfDay)
+    .orderBy('scheduledDate', 'asc')
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) return null;
+  const vaccineDoc = snapshot.docs[0].data();
+  if (vaccineDoc.status === 'applied') return null;
+  const name = vaccineDoc.name || 'vacuna';
+  const childLabel = childName || 'tu bebé';
+  return {
+    type: 'vaccine',
+    priority: 1,
+    title: '💉 Vacuna próxima',
+    message: `En una semana ${childLabel} tiene la vacuna ${name}.`
+  };
+};
+
 // Middleware especial para cron jobs: acepta JWT admin o CRON_SECRET
 const authenticateCron = (req, res, next) => {
   console.log('🔍 [CRON] Headers recibidos:', Object.keys(req.headers));
@@ -28864,8 +29726,17 @@ app.get('/api/notifications/daily-reminders', authenticateCron, async (req, res)
 
             console.log(`   👶 Hijo: ${childData.name}, ${ageInMonths} meses, ${ageInDays} días`);
 
-            // Obtener recordatorio sin límite de edad
-            const fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+            // Priorizar vacuna programada 1 semana antes
+            let fallbackReminder = null;
+            try {
+              fallbackReminder = await getUpcomingScheduledVaccineReminder(childDoc.id, childData.name);
+            } catch (error) {
+              console.warn('⚠️ [DAILY] Error buscando vacuna programada:', error.message);
+            }
+            if (!fallbackReminder) {
+              // Obtener recordatorio sin límite de edad
+              fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+            }
             
             if (fallbackReminder) {
               console.log(`   ✅ Tiene recordatorio: ${fallbackReminder.title}`);
@@ -29203,8 +30074,17 @@ app.get('/api/notifications/weekly-reminders', authenticateCron, async (req, res
 
             console.log(`   👶 Hijo: ${childData.name}, ${ageInMonths} meses, ${ageInDays} días`);
 
-            // Obtener recordatorio
-            const fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+            // Priorizar vacuna programada 1 semana antes
+            let fallbackReminder = null;
+            try {
+              fallbackReminder = await getUpcomingScheduledVaccineReminder(childDoc.id, childData.name);
+            } catch (error) {
+              console.warn('⚠️ [WEEKLY] Error buscando vacuna programada:', error.message);
+            }
+            if (!fallbackReminder) {
+              // Obtener recordatorio
+              fallbackReminder = getDailyReminder(ageInMonths, ageInDays);
+            }
             
             if (fallbackReminder) {
               console.log(`   ✅ Tiene recordatorio: ${fallbackReminder.title}`);
@@ -29500,8 +30380,17 @@ app.post('/api/notifications/test-daily-reminder', authenticateToken, async (req
       });
     }
 
-    // Obtener recordatorio
-    const reminder = getDailyReminder(youngestChild.ageInMonths, youngestChild.ageInDays);
+    // Priorizar vacuna programada 1 semana antes
+    let reminder = null;
+    try {
+      reminder = await getUpcomingScheduledVaccineReminder(youngestChild.id, youngestChild.name);
+    } catch (error) {
+      console.warn('⚠️ [TEST] Error buscando vacuna programada:', error.message);
+    }
+    if (!reminder) {
+      // Obtener recordatorio
+      reminder = getDailyReminder(youngestChild.ageInMonths, youngestChild.ageInDays);
+    }
 
     if (!reminder) {
       return res.json({
@@ -30521,6 +31410,74 @@ const resolveAuthorInfo = async (uid, fallbackName) => {
   };
 };
 
+const resolveProfessionalAuthor = async (professionalId) => {
+  if (!db) {
+    return { id: professionalId, name: 'Profesional' };
+  }
+  const doc = await db.collection('professionals').doc(professionalId).get();
+  if (!doc.exists) {
+    const error = new Error('Perfil profesional no encontrado');
+    error.code = 'professional-not-found';
+    throw error;
+  }
+  const data = doc.data() || {};
+  return {
+    id: doc.id,
+    userId: data.userId || null,
+    name: data.name || 'Profesional',
+    headline: data.headline || null,
+    photoUrl: data.photoUrl || null,
+    contactEmail: data.contactEmail || null,
+    contactPhone: data.contactPhone || null,
+    website: data.website || null
+  };
+};
+
+const resolveProfessionalProfileCategory = async (categoryId) => {
+  if (!db) {
+    return { id: categoryId, name: 'Categoría' };
+  }
+  const doc = await db.collection('professional_profile_categories').doc(categoryId).get();
+  if (!doc.exists) {
+    const error = new Error('Categoría de perfil no encontrada');
+    error.code = 'professional-profile-category-not-found';
+    throw error;
+  }
+  const data = doc.data() || {};
+  return {
+    id: doc.id,
+    name: data.name || 'Categoría',
+    logoUrl: data.logoUrl || null
+  };
+};
+
+const fetchProfessionalsMap = async (ids) => {
+  const map = new Map();
+  if (!db || !Array.isArray(ids) || ids.length === 0) return map;
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  const chunkSize = 10;
+  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+    const chunk = uniqueIds.slice(i, i + chunkSize);
+    const snapshot = await db.collection('professionals')
+      .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
+      .get();
+    snapshot.forEach(doc => {
+      const data = doc.data() || {};
+      map.set(doc.id, {
+        id: doc.id,
+        userId: data.userId || null,
+        name: data.name || 'Profesional',
+        headline: data.headline || null,
+        photoUrl: data.photoUrl || null,
+        contactEmail: data.contactEmail || null,
+        contactPhone: data.contactPhone || null,
+        website: data.website || null
+      });
+    });
+  }
+  return map;
+};
+
 const fetchCategoriesMap = async () => {
   if (!db) return new Map();
   const snapshot = await db.collection('article_categories').get();
@@ -30781,9 +31738,11 @@ app.get('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => {
     const keywordsMap = await fetchKeywordsMap();
 
     const bannerIds = new Set();
+    const professionalIds = new Set();
     snapshot.docs.forEach(doc => {
       const data = doc.data();
       if (data.bannerId) bannerIds.add(data.bannerId);
+      if (data.professionalId) professionalIds.add(data.professionalId);
     });
     const bannerMap = new Map();
     if (bannerIds.size > 0) {
@@ -30794,6 +31753,7 @@ app.get('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => {
         bannerMap.set(doc.id, { id: doc.id, ...doc.data() });
       });
     }
+    const professionalsMap = await fetchProfessionalsMap(Array.from(professionalIds));
 
     let articles = snapshot.docs.map(doc => {
       const data = doc.data();
@@ -30804,9 +31764,11 @@ app.get('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => {
       const shareUrl = `munpa://article/${doc.id}`;
       const webUrl = `https://munpa.online/article/${doc.id}`;
       const banner = data.bannerId ? bannerMap.get(data.bannerId) || null : null;
+      const authorProfessional = data.professionalId ? professionalsMap.get(data.professionalId) || null : null;
       return {
         id: doc.id,
         ...data,
+        authorProfessional,
         category,
         categoryName: category?.name || null,
         keywords,
@@ -30821,6 +31783,7 @@ app.get('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => {
       const searchLower = String(search).toLowerCase();
       articles = articles.filter(article =>
         article.title?.toLowerCase().includes(searchLower) ||
+        article.authorProfessional?.name?.toLowerCase().includes(searchLower) ||
         article.author?.name?.toLowerCase().includes(searchLower)
       );
     }
@@ -30861,9 +31824,11 @@ app.get('/api/articles', authenticateToken, async (req, res) => {
     const keywordsMap = await fetchKeywordsMap();
 
     const bannerIds = new Set();
+    const professionalIds = new Set();
     snapshot.docs.forEach(doc => {
       const data = doc.data();
       if (data.bannerId) bannerIds.add(data.bannerId);
+      if (data.professionalId) professionalIds.add(data.professionalId);
     });
     const bannerMap = new Map();
     if (bannerIds.size > 0) {
@@ -30874,6 +31839,7 @@ app.get('/api/articles', authenticateToken, async (req, res) => {
         bannerMap.set(doc.id, { id: doc.id, ...doc.data() });
       });
     }
+    const professionalsMap = await fetchProfessionalsMap(Array.from(professionalIds));
 
     let articles = snapshot.docs.map(doc => {
       const data = doc.data();
@@ -30884,9 +31850,11 @@ app.get('/api/articles', authenticateToken, async (req, res) => {
       const shareUrl = `munpa://article/${doc.id}`;
       const webUrl = `https://munpa.online/article/${doc.id}`;
       const banner = data.bannerId ? bannerMap.get(data.bannerId) || null : null;
+      const authorProfessional = data.professionalId ? professionalsMap.get(data.professionalId) || null : null;
       return {
         id: doc.id,
         ...data,
+        authorProfessional,
         category,
         categoryName: category?.name || null,
         keywords,
@@ -30901,6 +31869,7 @@ app.get('/api/articles', authenticateToken, async (req, res) => {
       const searchLower = String(search).toLowerCase();
       articles = articles.filter(article =>
         article.title?.toLowerCase().includes(searchLower) ||
+        article.authorProfessional?.name?.toLowerCase().includes(searchLower) ||
         article.author?.name?.toLowerCase().includes(searchLower)
       );
     }
@@ -30945,6 +31914,13 @@ app.get('/api/articles/category/:categoryId', authenticateToken, async (req, res
     const categoriesMap = await fetchCategoriesMap();
     const keywordsMap = await fetchKeywordsMap();
 
+    const professionalIds = new Set();
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      if (data.professionalId) professionalIds.add(data.professionalId);
+    });
+    const professionalsMap = await fetchProfessionalsMap(Array.from(professionalIds));
+
     let articles = snapshot.docs.map(doc => {
       const data = doc.data();
       const category = data.categoryId ? categoriesMap.get(data.categoryId) || null : null;
@@ -30953,9 +31929,11 @@ app.get('/api/articles/category/:categoryId', authenticateToken, async (req, res
         : [];
       const shareUrl = `munpa://article/${doc.id}`;
       const webUrl = `https://munpa.online/article/${doc.id}`;
+      const authorProfessional = data.professionalId ? professionalsMap.get(data.professionalId) || null : null;
       return {
         id: doc.id,
         ...data,
+        authorProfessional,
         category,
         categoryName: category?.name || null,
         keywords,
@@ -30969,6 +31947,7 @@ app.get('/api/articles/category/:categoryId', authenticateToken, async (req, res
       const searchLower = String(search).toLowerCase();
       articles = articles.filter(article =>
         article.title?.toLowerCase().includes(searchLower) ||
+        article.authorProfessional?.name?.toLowerCase().includes(searchLower) ||
         article.author?.name?.toLowerCase().includes(searchLower)
       );
     }
@@ -31024,11 +32003,20 @@ app.get('/api/articles/:articleId', authenticateToken, async (req, res) => {
         console.warn('⚠️ [ARTICLES] Error obteniendo banner:', error.message);
       }
     }
+    let authorProfessional = null;
+    if (data.professionalId) {
+      try {
+        authorProfessional = await resolveProfessionalAuthor(data.professionalId);
+      } catch (error) {
+        console.warn('⚠️ [ARTICLES] Error obteniendo profesional:', error.message);
+      }
+    }
     res.json({
       success: true,
       data: {
         id: doc.id,
         ...data,
+        authorProfessional,
         category,
         categoryName: category?.name || null,
         keywords,
@@ -31053,6 +32041,7 @@ app.post('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => 
       publishedAt,
       readingTimeMinutes,
       authorName,
+      professionalId,
       categoryId,
       keywordIds,
       coverImageUrl,
@@ -31061,14 +32050,18 @@ app.post('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => 
       status = 'published'
     } = req.body || {};
 
-    if (!title || !htmlContent) {
-      return res.status(400).json({ success: false, message: 'title y htmlContent son requeridos' });
+    if (!title || !htmlContent || !professionalId) {
+      return res.status(400).json({ success: false, message: 'title, htmlContent y professionalId son requeridos' });
     }
     if (!db) {
       return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
     }
 
-    const author = await resolveAuthorInfo(uid, authorName);
+    const authorProfessional = await resolveProfessionalAuthor(professionalId);
+    const author = {
+      uid: authorProfessional.userId || uid,
+      name: authorProfessional.name || authorName || 'Profesional'
+    };
     const articleData = {
       title,
       htmlContent,
@@ -31079,6 +32072,8 @@ app.post('/api/admin/articles', authenticateToken, isAdmin, async (req, res) => 
       readingTimeMinutes: readingTimeMinutes || calculateReadingTimeMinutes(htmlContent),
       publishedAt: publishedAt ? new Date(publishedAt) : new Date(),
       author,
+      professionalId,
+      authorProfessional,
       bannerId: bannerId || null,
       status,
       createdAt: new Date(),
@@ -31103,6 +32098,7 @@ app.put('/api/admin/articles/:articleId', authenticateToken, isAdmin, async (req
       publishedAt,
       readingTimeMinutes,
       authorName,
+      professionalId,
       categoryId,
       keywordIds,
       coverImageUrl,
@@ -31130,7 +32126,18 @@ app.put('/api/admin/articles/:articleId', authenticateToken, isAdmin, async (req
     if (coverImageUrl !== undefined) updateData.coverImageUrl = coverImageUrl;
     if (bannerId !== undefined) updateData.bannerId = bannerId || null;
     if (status) updateData.status = status;
-    if (authorName) updateData.author = await resolveAuthorInfo(uid, authorName);
+    if (authorName && professionalId === undefined) {
+      return res.status(400).json({ success: false, message: 'Para cambiar autor se requiere professionalId' });
+    }
+    if (professionalId !== undefined) {
+      const authorProfessional = await resolveProfessionalAuthor(professionalId);
+      updateData.professionalId = professionalId;
+      updateData.authorProfessional = authorProfessional;
+      updateData.author = {
+        uid: authorProfessional.userId || uid,
+        name: authorProfessional.name || authorName || 'Profesional'
+      };
+    }
 
     await db.collection('articles').doc(articleId).update(updateData);
     res.json({ success: true, data: { id: articleId, ...updateData } });
@@ -31337,6 +32344,1609 @@ app.post('/api/admin/app/version', authenticateToken, isAdmin, async (req, res) 
     });
   }
 });
+
+// Obtener configuración de versión (admin)
+app.get('/api/admin/app/version', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { platform } = req.query;
+    const normalizedPlatform = String(platform || '').toLowerCase();
+    if (!['ios', 'android'].includes(normalizedPlatform)) {
+      return res.status(400).json({
+        success: false,
+        message: 'platform es requerido (ios | android)'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const doc = await db.collection('app_versions').doc(normalizedPlatform).get();
+    if (!doc.exists) {
+      return res.json({
+        success: true,
+        data: {
+          platform: normalizedPlatform,
+          minVersion: null,
+          latestVersion: null,
+          forceUpdate: false,
+          message: null
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        platform: normalizedPlatform,
+        ...doc.data()
+      }
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo versión:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo versión',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// 👩‍⚕️ SERVICIOS PROFESIONALES (PERFILES + SERVICIOS + PAQUETES)
+// ============================================================================
+
+const buildProfessionalPayload = (data) => ({
+  userId: data.userId,
+  name: data.name || '',
+  headline: data.headline || '',
+  bio: data.bio || '',
+  photoUrl: data.photoUrl || '',
+  specialties: Array.isArray(data.specialties) ? data.specialties : [],
+  tags: Array.isArray(data.tags) ? data.tags : [],
+  profileCategoryId: data.profileCategoryId || null,
+  profileCategory: data.profileCategory || null,
+  location: data.location || '',
+  countryId: data.countryId || null,
+  countryName: data.countryName || null,
+  cityId: data.cityId || null,
+  cityName: data.cityName || null,
+  locations: Array.isArray(data.locations) ? data.locations : [],
+  contactEmail: data.contactEmail || '',
+  contactPhone: data.contactPhone || '',
+  website: data.website || '',
+  address: data.address || '',
+  latitude: Number.isFinite(data.latitude) ? data.latitude : null,
+  longitude: Number.isFinite(data.longitude) ? data.longitude : null,
+  instagram: data.instagram || '',
+  whatsappLink: data.whatsappLink || '',
+  extraInfo: data.extraInfo || '',
+  logoUrl: data.logoUrl || '',
+  status: data.status || 'pending', // pending | active | suspended
+  createdAt: new Date(),
+  updatedAt: new Date()
+});
+
+// =========================
+// Solicitudes de servicios profesionales (pre-registro)
+// =========================
+
+app.post('/api/professionals/requests/upload-logo', authenticateToken, upload.fields([{ name: 'logo', maxCount: 1 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
+  try {
+    const fileUpload = req.files?.logo?.[0] || req.files?.image?.[0] || null;
+    if (!fileUpload) {
+      return res.status(400).json({ success: false, message: 'No se envió ningún logo (usa logo o image)' });
+    }
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg'];
+    if (!allowedTypes.includes(fileUpload.mimetype)) {
+      return res.status(400).json({ success: false, message: 'El logo debe ser PNG o JPG' });
+    }
+    const bucket = admin.storage().bucket();
+    if (!bucket) {
+      return res.status(500).json({ success: false, message: 'Storage no disponible' });
+    }
+    const fileName = `images/professional-requests/logo-${req.user.uid}-${Date.now()}-${fileUpload.originalname}`;
+    const storageFile = bucket.file(fileName);
+    const stream = storageFile.createWriteStream({
+      metadata: { contentType: fileUpload.mimetype }
+    });
+
+    stream.on('error', (error) => {
+      console.error('❌ [PRO-REQ] Error subiendo logo:', error);
+      res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+    });
+
+    stream.on('finish', async () => {
+      try {
+        await storageFile.makePublic();
+      } catch (error) {
+        console.warn('⚠️ [PRO-REQ] Error haciendo logo público:', error.message);
+      }
+      const imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+      res.json({ success: true, data: { imageUrl, imageStoragePath: fileName } });
+    });
+
+    stream.end(fileUpload.buffer);
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error subiendo logo:', error);
+    res.status(500).json({ success: false, message: 'Error subiendo logo', error: error.message });
+  }
+});
+
+app.post('/api/professionals/requests', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const {
+      businessName,
+      summary,
+      profileCategoryId,
+      logoUrl,
+      logoStoragePath,
+      address,
+      countryId,
+      cityId,
+      latitude,
+      longitude,
+      website,
+      instagram,
+      whatsappLink,
+      extraInfo
+    } = req.body || {};
+
+    if (!businessName || String(businessName).trim().length < 3) {
+      return res.status(400).json({ success: false, message: 'businessName es requerido' });
+    }
+    if (!summary || String(summary).trim().length < 10) {
+      return res.status(400).json({ success: false, message: 'summary es requerido (mínimo 10 caracteres)' });
+    }
+    if (!profileCategoryId) {
+      return res.status(400).json({ success: false, message: 'profileCategoryId es requerido' });
+    }
+    const categoryData = await resolveProfessionalProfileCategory(profileCategoryId);
+    if (!logoUrl) {
+      return res.status(400).json({ success: false, message: 'logoUrl es requerido' });
+    }
+    if (!address) {
+      return res.status(400).json({ success: false, message: 'address es requerido' });
+    }
+    if (!countryId || !cityId) {
+      return res.status(400).json({ success: false, message: 'countryId y cityId son requeridos' });
+    }
+    const lat = latitude !== undefined ? parseFloat(latitude) : NaN;
+    const lng = longitude !== undefined ? parseFloat(longitude) : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ success: false, message: 'latitude y longitude son requeridos' });
+    }
+
+    let locationData = {};
+    try {
+      locationData = await resolveCountryCity(countryId, cityId);
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+
+    const payload = {
+      userId: req.user.uid,
+      businessName: String(businessName).trim(),
+      summary: String(summary).trim(),
+      profileCategoryId,
+      profileCategory: categoryData,
+      logoUrl,
+      logoStoragePath: logoStoragePath || null,
+      address: String(address).trim(),
+      countryId: locationData.countryId,
+      countryName: locationData.countryName,
+      cityId: locationData.cityId,
+      cityName: locationData.cityName,
+      latitude: lat,
+      longitude: lng,
+      website: website || null,
+      instagram: instagram || null,
+      whatsappLink: whatsappLink || null,
+      extraInfo: extraInfo || null,
+      status: 'pending',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const ref = await db.collection('professional_service_requests').add(payload);
+    res.status(201).json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error creando solicitud:', error);
+    res.status(500).json({ success: false, message: 'Error creando solicitud', error: error.message });
+  }
+});
+
+app.get('/api/admin/professionals/requests', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status, search = '' } = req.query;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    let query = db.collection('professional_service_requests');
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+    const snapshot = await query.orderBy('createdAt', 'desc').get();
+    let items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (search) {
+      const searchLower = String(search).toLowerCase();
+      items = items.filter(item =>
+        item.businessName?.toLowerCase().includes(searchLower) ||
+        item.summary?.toLowerCase().includes(searchLower)
+      );
+    }
+    const pageNumber = Math.max(parseInt(page), 1);
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const paginated = items.slice(startIndex, startIndex + limitNumber);
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        total: items.length,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(items.length / limitNumber)
+      }
+    });
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error listando solicitudes:', error);
+    res.status(500).json({ success: false, message: 'Error listando solicitudes', error: error.message });
+  }
+});
+
+app.get('/api/admin/professionals/requests/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const doc = await db.collection('professional_service_requests').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    }
+    res.json({ success: true, data: { id: doc.id, ...doc.data() } });
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error obteniendo solicitud:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo solicitud', error: error.message });
+  }
+});
+
+app.put('/api/admin/professionals/requests/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const docRef = db.collection('professional_service_requests').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    }
+
+    const updateData = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(updateData, 'countryId')
+      || Object.prototype.hasOwnProperty.call(updateData, 'cityId')) {
+      try {
+        const resolved = await resolveCountryCity(updateData.countryId, updateData.cityId);
+        updateData.countryId = resolved.countryId;
+        updateData.countryName = resolved.countryName;
+        updateData.cityId = resolved.cityId;
+        updateData.cityName = resolved.cityName;
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(updateData, 'profileCategoryId')) {
+      if (!updateData.profileCategoryId) {
+        return res.status(400).json({ success: false, message: 'profileCategoryId inválido' });
+      }
+      try {
+        const categoryData = await resolveProfessionalProfileCategory(updateData.profileCategoryId);
+        updateData.profileCategory = categoryData;
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updateData, 'latitude')
+      || Object.prototype.hasOwnProperty.call(updateData, 'longitude')) {
+      const lat = updateData.latitude !== undefined ? parseFloat(updateData.latitude) : NaN;
+      const lng = updateData.longitude !== undefined ? parseFloat(updateData.longitude) : NaN;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return res.status(400).json({ success: false, message: 'latitude y longitude inválidos' });
+      }
+      updateData.latitude = lat;
+      updateData.longitude = lng;
+    }
+
+    updateData.updatedAt = new Date();
+    await docRef.update(stripUndefined(updateData));
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error actualizando solicitud (admin):', error);
+    res.status(500).json({ success: false, message: 'Error actualizando solicitud', error: error.message });
+  }
+});
+
+app.patch('/api/admin/professionals/requests/:id/status', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body || {};
+    if (!['pending', 'approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'status inválido' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const requestRef = db.collection('professional_service_requests').doc(id);
+    const requestDoc = await requestRef.get();
+    if (!requestDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Solicitud no encontrada' });
+    }
+    const requestData = requestDoc.data() || {};
+
+    let professionalId = requestData.professionalId || null;
+    let professionalPayload = null;
+    if (status === 'approved') {
+      if (professionalId) {
+        return res.status(400).json({
+          success: false,
+          message: 'La solicitud ya tiene un perfil asociado',
+          professionalId
+        });
+      }
+      const missingFields = [];
+      if (!requestData.userId) missingFields.push('userId');
+      if (!requestData.businessName) missingFields.push('businessName');
+      if (!requestData.summary) missingFields.push('summary');
+      if (!requestData.profileCategoryId) missingFields.push('profileCategoryId');
+      if (!requestData.logoUrl) missingFields.push('logoUrl');
+      if (!requestData.address) missingFields.push('address');
+      if (!requestData.countryId) missingFields.push('countryId');
+      if (!requestData.cityId) missingFields.push('cityId');
+      if (!Number.isFinite(parseFloat(requestData.latitude))) missingFields.push('latitude');
+      if (!Number.isFinite(parseFloat(requestData.longitude))) missingFields.push('longitude');
+      if (missingFields.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Faltan campos obligatorios para aprobar',
+          fields: missingFields
+        });
+      }
+
+      let categoryData;
+      try {
+        categoryData = await resolveProfessionalProfileCategory(requestData.profileCategoryId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+
+      professionalPayload = stripUndefined({
+        userId: requestData.userId,
+        name: requestData.businessName,
+        headline: requestData.summary,
+        bio: requestData.summary,
+        photoUrl: requestData.logoUrl,
+        profileCategoryId: requestData.profileCategoryId,
+        profileCategory: categoryData,
+        location: requestData.address,
+        address: requestData.address,
+        countryId: requestData.countryId,
+        countryName: requestData.countryName,
+        cityId: requestData.cityId,
+        cityName: requestData.cityName,
+        latitude: parseFloat(requestData.latitude),
+        longitude: parseFloat(requestData.longitude),
+        website: requestData.website || '',
+        instagram: requestData.instagram || '',
+        whatsappLink: requestData.whatsappLink || '',
+        extraInfo: requestData.extraInfo || '',
+        logoUrl: requestData.logoUrl,
+        status: 'active',
+        updatedAt: new Date()
+      });
+
+      const existingProfile = await db.collection('professionals')
+        .where('userId', '==', requestData.userId)
+        .limit(1)
+        .get();
+      if (!existingProfile.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'El usuario ya tiene un perfil profesional',
+          professionalId: existingProfile.docs[0].id
+        });
+      }
+      const payload = buildProfessionalPayload({
+        ...professionalPayload,
+        status: 'active'
+      });
+      const createdRef = await db.collection('professionals').add(payload);
+      professionalId = createdRef.id;
+    }
+
+    await requestRef.update(stripUndefined({
+      status,
+      professionalId: professionalId || null,
+      adminNotes: notes || null,
+      updatedAt: new Date()
+    }));
+
+    res.json({ success: true, data: { id, status, professionalId: professionalId || null } });
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error actualizando solicitud:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando solicitud', error: error.message });
+  }
+});
+
+// =========================
+// Categorías de perfil profesional (admin/app)
+// =========================
+
+app.get('/api/professionals/profile-categories', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('professional_profile_categories')
+      .orderBy('name', 'asc')
+      .get();
+    const categories = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, data: categories });
+  } catch (error) {
+    console.error('❌ [PRO] Error obteniendo categorías de perfil:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo categorías', error: error.message });
+  }
+});
+
+app.post('/api/admin/professionals/profile-categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, logoUrl } = req.body || {};
+    if (!name || !logoUrl) {
+      return res.status(400).json({ success: false, message: 'name y logoUrl son requeridos' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const categoryData = {
+      name,
+      description: description || '',
+      logoUrl: logoUrl || '',
+      slug: slugifyText(name),
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('professional_profile_categories').add(categoryData);
+    res.json({ success: true, data: { id: ref.id, ...categoryData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando categoría de perfil:', error);
+    res.status(500).json({ success: false, message: 'Error creando categoría', error: error.message });
+  }
+});
+
+app.put('/api/admin/professionals/profile-categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, logoUrl } = req.body || {};
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const updateData = { updatedAt: new Date() };
+    if (name) {
+      updateData.name = name;
+      updateData.slug = slugifyText(name);
+    }
+    if (description !== undefined) updateData.description = description;
+    if (logoUrl !== undefined) updateData.logoUrl = logoUrl || '';
+    await db.collection('professional_profile_categories').doc(id).update(updateData);
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando categoría de perfil:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando categoría', error: error.message });
+  }
+});
+
+app.delete('/api/admin/professionals/profile-categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('professional_profile_categories').doc(id).delete();
+    res.json({ success: true, message: 'Categoría eliminada' });
+  } catch (error) {
+    console.error('❌ [PRO] Error eliminando categoría de perfil:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando categoría', error: error.message });
+  }
+});
+
+// Subir logo de categoría de perfil (admin)
+app.post('/api/admin/professionals/profile-categories/upload-logo', authenticateToken, isAdmin, upload.fields([{ name: 'image', maxCount: 1 }, { name: 'logo', maxCount: 1 }]), async (req, res) => {
+  try {
+    const fileUpload = req.files?.image?.[0] || req.files?.logo?.[0] || null;
+    if (!fileUpload) {
+      return res.status(400).json({ success: false, message: 'No se envió ninguna imagen' });
+    }
+    const bucket = admin.storage().bucket();
+    if (!bucket) {
+      return res.status(500).json({ success: false, message: 'Storage no disponible' });
+    }
+    const fileName = `images/professional-profile-categories/cat-${req.user.uid}-${Date.now()}-${fileUpload.originalname}`;
+    const storageFile = bucket.file(fileName);
+    const stream = storageFile.createWriteStream({
+      metadata: {
+        contentType: fileUpload.mimetype
+      }
+    });
+
+    stream.on('error', (error) => {
+      console.error('❌ [PRO] Error subiendo logo categoría de perfil:', error);
+      res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+    });
+
+    stream.on('finish', async () => {
+      try {
+        await storageFile.makePublic();
+      } catch (error) {
+        console.warn('⚠️ [PRO] Error haciendo logo público (perfil):', error.message);
+      }
+      const imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+      res.json({ success: true, data: { imageUrl, imageStoragePath: fileName } });
+    });
+
+    stream.end(fileUpload.buffer);
+  } catch (error) {
+    console.error('❌ [PRO] Error subiendo logo categoría de perfil:', error);
+    res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+  }
+});
+
+// =========================
+// Categorías de servicios profesionales (admin/app)
+// =========================
+
+app.get('/api/professionals/service-categories', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('professional_service_categories')
+      .orderBy('name', 'asc')
+      .get();
+    const categories = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, data: categories });
+  } catch (error) {
+    console.error('❌ [PRO] Error obteniendo categorías:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo categorías', error: error.message });
+  }
+});
+
+app.post('/api/admin/professionals/service-categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, logoUrl } = req.body || {};
+    if (!name || !logoUrl) {
+      return res.status(400).json({ success: false, message: 'name y logoUrl son requeridos' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const categoryData = {
+      name,
+      description: description || '',
+      logoUrl: logoUrl || '',
+      slug: slugifyText(name),
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('professional_service_categories').add(categoryData);
+    res.json({ success: true, data: { id: ref.id, ...categoryData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando categoría:', error);
+    res.status(500).json({ success: false, message: 'Error creando categoría', error: error.message });
+  }
+});
+
+app.put('/api/admin/professionals/service-categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, logoUrl } = req.body || {};
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const updateData = { updatedAt: new Date() };
+    if (name) {
+      updateData.name = name;
+      updateData.slug = slugifyText(name);
+    }
+    if (description !== undefined) updateData.description = description;
+    if (logoUrl !== undefined) updateData.logoUrl = logoUrl || '';
+    await db.collection('professional_service_categories').doc(id).update(updateData);
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando categoría:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando categoría', error: error.message });
+  }
+});
+
+app.delete('/api/admin/professionals/service-categories/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    await db.collection('professional_service_categories').doc(id).delete();
+    res.json({ success: true, message: 'Categoría eliminada' });
+  } catch (error) {
+    console.error('❌ [PRO] Error eliminando categoría:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando categoría', error: error.message });
+  }
+});
+
+// Subir logo de categoría de servicio (admin)
+app.post('/api/admin/professionals/service-categories/upload-logo', authenticateToken, isAdmin, upload.fields([{ name: 'image', maxCount: 1 }, { name: 'logo', maxCount: 1 }]), async (req, res) => {
+  try {
+    const fileUpload = req.files?.image?.[0] || req.files?.logo?.[0] || null;
+    if (!fileUpload) {
+      return res.status(400).json({ success: false, message: 'No se envió ninguna imagen' });
+    }
+    const bucket = admin.storage().bucket();
+    if (!bucket) {
+      return res.status(500).json({ success: false, message: 'Storage no disponible' });
+    }
+    const fileName = `images/professional-service-categories/cat-${req.user.uid}-${Date.now()}-${fileUpload.originalname}`;
+    const storageFile = bucket.file(fileName);
+    const stream = storageFile.createWriteStream({
+      metadata: {
+        contentType: fileUpload.mimetype
+      }
+    });
+
+    stream.on('error', (error) => {
+      console.error('❌ [PRO] Error subiendo logo categoría:', error);
+      res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+    });
+
+    stream.on('finish', async () => {
+      try {
+        await storageFile.makePublic();
+      } catch (error) {
+        console.warn('⚠️ [PRO] Error haciendo logo público:', error.message);
+      }
+      const imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+      res.json({ success: true, data: { imageUrl, imageStoragePath: fileName } });
+    });
+
+    stream.end(fileUpload.buffer);
+  } catch (error) {
+    console.error('❌ [PRO] Error subiendo logo categoría:', error);
+    res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+  }
+});
+
+// Subir foto del profesional (usuario)
+app.post('/api/professionals/upload-photo', authenticateToken, upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
+  try {
+    const fileUpload = req.files?.photo?.[0] || req.files?.image?.[0] || null;
+    if (!fileUpload) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se envió ninguna foto (usa campo photo o image)'
+      });
+    }
+
+    const bucket = admin.storage().bucket();
+    if (!bucket) {
+      return res.status(500).json({
+        success: false,
+        message: 'Storage no disponible'
+      });
+    }
+
+    const fileName = `images/professionals/pro-${req.user.uid}-${Date.now()}-${fileUpload.originalname}`;
+    const storageFile = bucket.file(fileName);
+
+    const stream = storageFile.createWriteStream({
+      metadata: {
+        contentType: fileUpload.mimetype
+      }
+    });
+
+    stream.on('error', (error) => {
+      console.error('❌ [PRO] Error subiendo foto:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error subiendo foto',
+        error: error.message
+      });
+    });
+
+    stream.on('finish', async () => {
+      try {
+        await storageFile.makePublic();
+      } catch (error) {
+        console.warn('⚠️ [PRO] Error haciendo foto pública:', error.message);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          photoUrl: `https://storage.googleapis.com/${bucket.name}/${fileName}`,
+          photoStoragePath: fileName
+        }
+      });
+    });
+
+    stream.end(fileUpload.buffer);
+  } catch (error) {
+    console.error('❌ [PRO] Error subiendo foto:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo foto',
+      error: error.message
+    });
+  }
+});
+
+// Proxy para avatar (evita CORS de ui-avatars.com)
+app.get('/api/professionals/avatar', async (req, res) => {
+  try {
+    const { name, background = '667eea', color = 'fff', size = 120 } = req.query || {};
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'name es requerido' });
+    }
+    const sizeNumber = Math.max(16, Math.min(512, parseInt(size, 10) || 120));
+    const url = `https://ui-avatars.com/api/?name=${encodeURIComponent(String(name))}&background=${encodeURIComponent(String(background))}&color=${encodeURIComponent(String(color))}&size=${sizeNumber}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      return res.status(502).json({ success: false, message: 'Error obteniendo avatar' });
+    }
+    const contentType = response.headers.get('content-type') || 'image/png';
+    const arrayBuffer = await response.arrayBuffer();
+    res.set('Content-Type', contentType);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    console.error('❌ [PRO] Error en proxy de avatar:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo avatar', error: error.message });
+  }
+});
+
+// Proxy de imágenes para fotos de profesionales (evita CORS de Storage)
+app.get('/api/professionals/photo', async (req, res) => {
+  try {
+    const { url } = req.query || {};
+    if (!url || !isValidUrl(String(url))) {
+      return res.status(400).json({ success: false, message: 'url inválida' });
+    }
+    const response = await fetch(String(url));
+    if (!response.ok) {
+      return res.status(502).json({ success: false, message: 'Error obteniendo imagen' });
+    }
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const arrayBuffer = await response.arrayBuffer();
+    res.set('Content-Type', contentType);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    console.error('❌ [PRO] Error en proxy de foto:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo imagen', error: error.message });
+  }
+});
+
+// Proxy logo solicitudes profesionales (evita CORS)
+app.get('/api/professionals/requests/logo', authenticateToken, async (req, res) => {
+  try {
+    const { url } = req.query || {};
+    if (!url || !isValidUrl(String(url))) {
+      return res.status(400).json({ success: false, message: 'url inválida' });
+    }
+    const response = await fetch(String(url));
+    if (!response.ok) {
+      return res.status(502).json({ success: false, message: 'Error obteniendo imagen' });
+    }
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const arrayBuffer = await response.arrayBuffer();
+    res.set('Content-Type', contentType);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    console.error('❌ [PRO-REQ] Error en proxy de logo:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo imagen', error: error.message });
+  }
+});
+
+// Crear perfil profesional (usuario)
+app.post('/api/professionals', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    const existing = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (!existing.empty) {
+      return res.status(400).json({ success: false, message: 'El perfil ya existe' });
+    }
+
+    const { profileCategoryId, categoryId } = req.body || {};
+    const resolvedProfileCategoryId = profileCategoryId || categoryId || null;
+    if (!resolvedProfileCategoryId) {
+      return res.status(400).json({ success: false, message: 'profileCategoryId es requerido' });
+    }
+    let categoryData = null;
+    try {
+      categoryData = await resolveProfessionalProfileCategory(resolvedProfileCategoryId);
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+
+    let locationData = {};
+    if (req.body?.countryId || req.body?.cityId) {
+      try {
+        locationData = await resolveCountryCity(req.body.countryId, req.body.cityId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    let locations = [];
+    if (Array.isArray(req.body?.locations)) {
+      for (const loc of req.body.locations) {
+        try {
+          const resolved = await resolveCountryCity(loc?.countryId, loc?.cityId);
+          locations.push({
+            countryId: resolved.countryId,
+            countryName: resolved.countryName,
+            cityId: resolved.cityId,
+            cityName: resolved.cityName
+          });
+        } catch (err) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+      }
+    }
+
+    const payload = buildProfessionalPayload({
+      ...req.body,
+      profileCategoryId: resolvedProfileCategoryId,
+      profileCategory: categoryData,
+      ...locationData,
+      locations,
+      userId: req.user.uid
+    });
+
+    const ref = await db.collection('professionals').add(payload);
+    res.json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando perfil:', error);
+    res.status(500).json({ success: false, message: 'Error creando perfil', error: error.message });
+  }
+});
+
+// Obtener perfil propio
+app.get('/api/professionals/me', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    res.json({ success: true, data: { id: doc.id, ...doc.data() } });
+  } catch (error) {
+    console.error('❌ [PRO] Error obteniendo perfil:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo perfil', error: error.message });
+  }
+});
+
+// Actualizar perfil propio
+app.put('/api/professionals/me', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    let locationData = {};
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'countryId')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'cityId')) {
+      try {
+        locationData = await resolveCountryCity(req.body.countryId, req.body.cityId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    let locations = undefined;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'locations')) {
+      if (!Array.isArray(req.body.locations)) {
+        return res.status(400).json({ success: false, message: 'locations debe ser un array' });
+      }
+      locations = [];
+      for (const loc of req.body.locations) {
+        try {
+          const resolved = await resolveCountryCity(loc?.countryId, loc?.cityId);
+          locations.push({
+            countryId: resolved.countryId,
+            countryName: resolved.countryName,
+            cityId: resolved.cityId,
+            cityName: resolved.cityName
+          });
+        } catch (err) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+      }
+    }
+
+    let categoryData = undefined;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileCategoryId')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'categoryId')) {
+      const incomingId = req.body.profileCategoryId || req.body.categoryId;
+      if (!incomingId) {
+        return res.status(400).json({ success: false, message: 'profileCategoryId inválido' });
+      }
+      try {
+        categoryData = await resolveProfessionalProfileCategory(incomingId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    const updateData = {
+      ...req.body,
+      ...locationData,
+      updatedAt: new Date()
+    };
+    if (categoryData !== undefined) {
+      updateData.profileCategoryId = req.body.profileCategoryId || req.body.categoryId;
+      updateData.profileCategory = categoryData;
+    }
+    if (locations !== undefined) {
+      updateData.locations = locations;
+    }
+    delete updateData.userId;
+    delete updateData.status;
+
+    await db.collection('professionals').doc(doc.id).update(stripUndefined(updateData));
+    res.json({ success: true, data: { id: doc.id, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando perfil:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando perfil', error: error.message });
+  }
+});
+
+// Admin: actualizar perfil profesional por ID
+app.put('/api/professionals/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    const doc = await db.collection('professionals').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+
+    let locationData = {};
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'countryId')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'cityId')) {
+      try {
+        locationData = await resolveCountryCity(req.body.countryId, req.body.cityId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    let locations = undefined;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'locations')) {
+      if (!Array.isArray(req.body.locations)) {
+        return res.status(400).json({ success: false, message: 'locations debe ser un array' });
+      }
+      locations = [];
+      for (const loc of req.body.locations) {
+        try {
+          const resolved = await resolveCountryCity(loc?.countryId, loc?.cityId);
+          locations.push({
+            countryId: resolved.countryId,
+            countryName: resolved.countryName,
+            cityId: resolved.cityId,
+            cityName: resolved.cityName
+          });
+        } catch (err) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+      }
+    }
+
+    let categoryData = undefined;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileCategoryId')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'categoryId')) {
+      const incomingId = req.body.profileCategoryId || req.body.categoryId;
+      if (!incomingId) {
+        return res.status(400).json({ success: false, message: 'profileCategoryId inválido' });
+      }
+      try {
+        categoryData = await resolveProfessionalProfileCategory(incomingId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    const updateData = {
+      ...req.body,
+      ...locationData,
+      updatedAt: new Date()
+    };
+    if (categoryData !== undefined) {
+      updateData.profileCategoryId = req.body.profileCategoryId || req.body.categoryId;
+      updateData.profileCategory = categoryData;
+    }
+    if (locations !== undefined) {
+      updateData.locations = locations;
+    }
+    delete updateData.userId;
+
+    await db.collection('professionals').doc(id).update(stripUndefined(updateData));
+    res.json({ success: true, data: { id, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando perfil (admin):', error);
+    res.status(500).json({ success: false, message: 'Error actualizando perfil', error: error.message });
+  }
+});
+
+// Listado público de profesionales (solo activos)
+app.get('/api/professionals', authenticateToken, async (req, res) => {
+  try {
+    const { search = '', page = 1, limit = 20 } = req.query;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const snapshot = await db.collection('professionals')
+      .where('status', '==', 'active')
+      .get();
+    let items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (search) {
+      const searchLower = String(search).toLowerCase();
+      items = items.filter(item =>
+        item.name?.toLowerCase().includes(searchLower) ||
+        item.headline?.toLowerCase().includes(searchLower) ||
+        item.specialties?.join(' ').toLowerCase().includes(searchLower)
+      );
+    }
+    const pageNumber = Math.max(parseInt(page), 1);
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const paginated = items.slice(startIndex, startIndex + limitNumber);
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        total: items.length,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(items.length / limitNumber)
+      }
+    });
+  } catch (error) {
+    console.error('❌ [PRO] Error listando profesionales:', error);
+    res.status(500).json({ success: false, message: 'Error listando profesionales', error: error.message });
+  }
+});
+
+// Detalle público de profesional (admin puede ver aunque esté pending)
+app.get('/api/professionals/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    let isAdminUser = false;
+    try {
+      const userDoc = await db.collection('users').doc(req.user.uid).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        isAdminUser = userData.role === 'admin' || userData.isAdmin === true;
+      }
+    } catch (_) {
+      // Si falla la verificación, se mantiene como no admin
+    }
+    const doc = await db.collection('professionals').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    if (!isAdminUser && doc.data().status !== 'active') {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    res.json({ success: true, data: { id: doc.id, ...doc.data() } });
+  } catch (error) {
+    console.error('❌ [PRO] Error obteniendo profesional:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo profesional', error: error.message });
+  }
+});
+
+// Admin: aprobar/suspender
+app.patch('/api/admin/professionals/:id/status', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+    if (!['pending', 'active', 'suspended'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'status inválido' });
+    }
+    await db.collection('professionals').doc(id).update({ status, updatedAt: new Date() });
+    res.json({ success: true, message: 'Estado actualizado', data: { id, status } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando estado:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando estado', error: error.message });
+  }
+});
+
+// Admin: enlazar profesional con usuario del app (userId o email)
+app.patch('/api/admin/professionals/:id/link-user', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, email } = req.body || {};
+    if (!userId && !email) {
+      return res.status(400).json({ success: false, message: 'userId o email es requerido' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    let resolvedUserId = userId;
+    if (!resolvedUserId && email) {
+      if (!auth) {
+        return res.status(500).json({ success: false, message: 'Auth no disponible' });
+      }
+      const userRecord = await auth.getUserByEmail(String(email).trim());
+      resolvedUserId = userRecord?.uid;
+    }
+    if (!resolvedUserId) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    const proDoc = await db.collection('professionals').doc(id).get();
+    if (!proDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+
+    await db.collection('professionals').doc(id).update({
+      userId: resolvedUserId,
+      updatedAt: new Date()
+    });
+    res.json({ success: true, message: 'Perfil enlazado', data: { id, userId: resolvedUserId } });
+  } catch (error) {
+    console.error('❌ [PRO] Error enlazando usuario:', error);
+    res.status(500).json({ success: false, message: 'Error enlazando usuario', error: error.message });
+  }
+});
+
+// Admin: listar profesionales
+app.get('/api/admin/professionals', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '', status } = req.query;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    let query = db.collection('professionals');
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+
+    const snapshot = await query.orderBy('createdAt', 'desc').get();
+    let items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    if (search) {
+      const searchLower = String(search).toLowerCase();
+      items = items.filter(item =>
+        item.name?.toLowerCase().includes(searchLower) ||
+        item.headline?.toLowerCase().includes(searchLower) ||
+        item.contactEmail?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    const pageNumber = Math.max(parseInt(page), 1);
+    const limitNumber = Math.max(parseInt(limit), 1);
+    const startIndex = (pageNumber - 1) * limitNumber;
+    const paginated = items.slice(startIndex, startIndex + limitNumber);
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        total: items.length,
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.ceil(items.length / limitNumber)
+      }
+    });
+  } catch (error) {
+    console.error('❌ [PRO] Error listando profesionales (admin):', error);
+    res.status(500).json({ success: false, message: 'Error listando profesionales', error: error.message });
+  }
+});
+
+// =========================
+// Servicios (por profesional)
+// =========================
+
+// Servicios públicos por profesional (admin puede ver todos)
+app.get('/api/professionals/:id/services', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    let isAdminUser = false;
+    try {
+      const userDoc = await db.collection('users').doc(req.user.uid).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        isAdminUser = userData.role === 'admin' || userData.isAdmin === true;
+      }
+    } catch (_) {
+      // Mantener no admin si falla
+    }
+    const proDoc = await db.collection('professionals').doc(id).get();
+    if (!proDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    if (!isAdminUser && proDoc.data().status !== 'active') {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    let servicesQuery = db.collection('professionals').doc(id)
+      .collection('services')
+      .orderBy('createdAt', 'desc');
+    if (!isAdminUser) {
+      servicesQuery = servicesQuery.where('isActive', '==', true);
+    }
+    const servicesSnapshot = await servicesQuery.get();
+    const services = servicesSnapshot.docs.map(s => ({ id: s.id, ...s.data() }));
+    res.json({ success: true, data: services });
+  } catch (error) {
+    console.error('❌ [PRO] Error listando servicios públicos:', error);
+    res.status(500).json({ success: false, message: 'Error listando servicios', error: error.message });
+  }
+});
+
+// Admin: crear servicio para un profesional específico
+app.post('/api/professionals/:id/services', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, price, durationMinutes, type, currency, isActive, mediaUrl, categoryId } = req.body || {};
+    if (!title || price === undefined) {
+      return res.status(400).json({ success: false, message: 'title y price son requeridos' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const proDoc = await db.collection('professionals').doc(id).get();
+    if (!proDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const now = new Date();
+    const payload = {
+      title,
+      description: description || null,
+      price,
+      durationMinutes: durationMinutes || null,
+      type: type || 'consulta',
+      currency: currency || 'USD',
+      isActive: isActive !== undefined ? isActive : true,
+      mediaUrl: mediaUrl || null,
+      categoryId: categoryId || null,
+      createdAt: now,
+      updatedAt: now
+    };
+    const ref = await db.collection('professionals').doc(id)
+      .collection('services')
+      .add(payload);
+    res.status(201).json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando servicio (admin):', error);
+    res.status(500).json({ success: false, message: 'Error creando servicio', error: error.message });
+  }
+});
+
+app.get('/api/professionals/me/services', authenticateToken, async (req, res) => {
+  try {
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    const servicesSnapshot = await db.collection('professionals').doc(doc.id)
+      .collection('services')
+      .orderBy('createdAt', 'desc')
+      .get();
+    const services = servicesSnapshot.docs.map(s => ({ id: s.id, ...s.data() }));
+    res.json({ success: true, data: services });
+  } catch (error) {
+    console.error('❌ [PRO] Error listando servicios:', error);
+    res.status(500).json({ success: false, message: 'Error listando servicios', error: error.message });
+  }
+});
+
+app.post('/api/professionals/me/services', authenticateToken, async (req, res) => {
+  try {
+    const { title, description, price, durationMinutes, type, currency, isActive, mediaUrl, categoryId } = req.body || {};
+    if (!title || price === undefined) {
+      return res.status(400).json({ success: false, message: 'title y price son requeridos' });
+    }
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    if (categoryId) {
+      const categoryDoc = await db.collection('professional_service_categories').doc(categoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({ success: false, message: 'categoryId inválido' });
+      }
+    }
+
+    const serviceData = {
+      title,
+      description: description || '',
+      price,
+      currency: currency || 'USD',
+      type: type || 'consulta', // consulta | asesoria | producto | otro
+      categoryId: categoryId || null,
+      durationMinutes: durationMinutes || null,
+      isActive: isActive !== undefined ? Boolean(isActive) : true,
+      mediaUrl: mediaUrl || null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('professionals').doc(doc.id)
+      .collection('services')
+      .add(serviceData);
+    res.json({ success: true, data: { id: ref.id, ...serviceData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando servicio:', error);
+    res.status(500).json({ success: false, message: 'Error creando servicio', error: error.message });
+  }
+});
+
+app.put('/api/professionals/me/services/:serviceId', authenticateToken, async (req, res) => {
+  try {
+    const { serviceId } = req.params;
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    const updateData = { ...req.body, updatedAt: new Date() };
+    if (updateData.isActive !== undefined) {
+      updateData.isActive = Boolean(updateData.isActive);
+    }
+    if (updateData.categoryId !== undefined && updateData.categoryId !== null) {
+      const categoryDoc = await db.collection('professional_service_categories').doc(updateData.categoryId).get();
+      if (!categoryDoc.exists) {
+        return res.status(400).json({ success: false, message: 'categoryId inválido' });
+      }
+    }
+    await db.collection('professionals').doc(doc.id)
+      .collection('services').doc(serviceId)
+      .update(updateData);
+    res.json({ success: true, data: { id: serviceId, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando servicio:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando servicio', error: error.message });
+  }
+});
+
+app.delete('/api/professionals/me/services/:serviceId', authenticateToken, async (req, res) => {
+  try {
+    const { serviceId } = req.params;
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    await db.collection('professionals').doc(doc.id)
+      .collection('services').doc(serviceId)
+      .delete();
+    res.json({ success: true, message: 'Servicio eliminado' });
+  } catch (error) {
+    console.error('❌ [PRO] Error eliminando servicio:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando servicio', error: error.message });
+  }
+});
+
+// =========================
+// Paquetes (por profesional)
+// =========================
+
+app.get('/api/professionals/me/packages', authenticateToken, async (req, res) => {
+  try {
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    const packagesSnapshot = await db.collection('professionals').doc(doc.id)
+      .collection('packages')
+      .orderBy('createdAt', 'desc')
+      .get();
+    const packages = packagesSnapshot.docs.map(p => ({ id: p.id, ...p.data() }));
+    res.json({ success: true, data: packages });
+  } catch (error) {
+    console.error('❌ [PRO] Error listando paquetes:', error);
+    res.status(500).json({ success: false, message: 'Error listando paquetes', error: error.message });
+  }
+});
+
+// Admin: listar paquetes de un profesional por ID
+app.get('/api/professionals/:id/packages', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const profDoc = await db.collection('professionals').doc(id).get();
+    if (!profDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const packagesSnapshot = await db.collection('professionals').doc(id)
+      .collection('packages')
+      .orderBy('createdAt', 'desc')
+      .get();
+    const packages = packagesSnapshot.docs.map(p => ({ id: p.id, ...p.data() }));
+    res.json({ success: true, data: packages });
+  } catch (error) {
+    console.error('❌ [PRO] Error listando paquetes (admin):', error);
+    res.status(500).json({ success: false, message: 'Error listando paquetes', error: error.message });
+  }
+});
+
+// Admin: crear paquete para un profesional específico
+app.post('/api/professionals/:id/packages', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, price, currency, isActive, items, validDays } = req.body || {};
+    if (!title || price === undefined) {
+      return res.status(400).json({ success: false, message: 'title y price son requeridos' });
+    }
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+    const proDoc = await db.collection('professionals').doc(id).get();
+    if (!proDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const now = new Date();
+    const payload = {
+      title,
+      description: description || null,
+      price,
+      currency: currency || 'USD',
+      isActive: isActive !== undefined ? isActive : true,
+      items: Array.isArray(items) ? items : [],
+      validDays: validDays || null,
+      createdAt: now,
+      updatedAt: now
+    };
+    const ref = await db.collection('professionals').doc(id)
+      .collection('packages')
+      .add(payload);
+    res.status(201).json({ success: true, data: { id: ref.id, ...payload } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando paquete (admin):', error);
+    res.status(500).json({ success: false, message: 'Error creando paquete', error: error.message });
+  }
+});
+
+app.post('/api/professionals/me/packages', authenticateToken, async (req, res) => {
+  try {
+    const { title, description, price, sessionCount } = req.body || {};
+    if (!title || price === undefined || !sessionCount) {
+      return res.status(400).json({ success: false, message: 'title, price y sessionCount son requeridos' });
+    }
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    const packageData = {
+      title,
+      description: description || '',
+      price,
+      sessionCount,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const ref = await db.collection('professionals').doc(doc.id)
+      .collection('packages')
+      .add(packageData);
+    res.json({ success: true, data: { id: ref.id, ...packageData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error creando paquete:', error);
+    res.status(500).json({ success: false, message: 'Error creando paquete', error: error.message });
+  }
+});
+
+app.put('/api/professionals/me/packages/:packageId', authenticateToken, async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    const updateData = { ...req.body, updatedAt: new Date() };
+    await db.collection('professionals').doc(doc.id)
+      .collection('packages').doc(packageId)
+      .update(updateData);
+    res.json({ success: true, data: { id: packageId, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando paquete:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando paquete', error: error.message });
+  }
+});
+
+app.delete('/api/professionals/me/packages/:packageId', authenticateToken, async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    const snapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .limit(1)
+      .get();
+    if (snapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil no encontrado' });
+    }
+    const doc = snapshot.docs[0];
+    await db.collection('professionals').doc(doc.id)
+      .collection('packages').doc(packageId)
+      .delete();
+    res.json({ success: true, message: 'Paquete eliminado' });
+  } catch (error) {
+    console.error('❌ [PRO] Error eliminando paquete:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando paquete', error: error.message });
+  }
+});
+
 
 // ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL

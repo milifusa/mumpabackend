@@ -14,6 +14,10 @@
   ],
   "crons": [
     {
+      "path": "/api/notifications/daily-reminders",
+      "schedule": "0 9 * * *"
+    },
+    {
       "path": "/api/notifications/weekly-reminders",
       "schedule": "0 15-23,0,1 * * *"
     },
