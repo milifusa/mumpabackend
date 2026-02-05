@@ -22949,7 +22949,6 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
     }
 
     let normalizedLocation = {
-      address: '',
       city: locationData.cityName || '',
       state: '',
       country: locationData.countryName || null
@@ -22957,7 +22956,6 @@ app.post('/api/marketplace/products', authenticateToken, async (req, res) => {
     if (location && typeof location === 'object') {
       const hasLat = location.latitude !== undefined && location.latitude !== null;
       const hasLng = location.longitude !== undefined && location.longitude !== null;
-      normalizedLocation.address = location.address || '';
       normalizedLocation.city = location.city || locationData.cityName || '';
       normalizedLocation.state = location.state || '';
       normalizedLocation.country = location.country || locationData.countryName || null;
@@ -23228,7 +23226,6 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
         updateData.location = {
           latitude: lat,
           longitude: lng,
-          address: location.address || '',
           city: location.city || '',
           state: location.state || '',
           country: location.country || updateData.countryName || 'México'

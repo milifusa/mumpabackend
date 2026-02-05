@@ -37,12 +37,11 @@ Un marketplace donde los usuarios pueden:
   
   // Ubicación
   location: {
-    state: "Ciudad de México",
     city: "Coyoacán",
-    coordinates: {
-      lat: 19.3467,
-      lng: -99.1617
-    }
+    state: "Ciudad de México",
+    country: "México",
+    latitude: 19.3467,
+    longitude: -99.1617
   },
   
   // Estado del producto

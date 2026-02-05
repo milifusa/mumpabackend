@@ -47,8 +47,11 @@
       "type": "venta",
       "price": 1500,
       "location": {
+        "city": "Coyoacán",
         "state": "Ciudad de México",
-        "city": "Coyoacán"
+        "country": "México",
+        "latitude": 19.3467,
+        "longitude": -99.1617
       },
       "status": "disponible",
       "views": 45,
@@ -86,8 +89,11 @@
     "type": "venta",
     "price": 1500,
     "location": {
+      "city": "Coyoacán",
       "state": "Ciudad de México",
-      "city": "Coyoacán"
+      "country": "México",
+      "latitude": 19.3467,
+      "longitude": -99.1617
     },
     "status": "disponible",
     "views": 46,
@@ -114,12 +120,11 @@
   "type": "venta",
   "price": 1500,
   "location": {
-    "state": "Ciudad de México",
     "city": "Coyoacán",
-    "coordinates": {
-      "lat": 19.3467,
-      "lng": -99.1617
-    }
+    "state": "Ciudad de México",
+    "country": "México",
+    "latitude": 19.3467,
+    "longitude": -99.1617
   }
 }
 ```
