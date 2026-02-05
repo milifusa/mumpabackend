@@ -17054,6 +17054,10 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
         status: 'upcoming',
         attendees: [],
         attendeeCount: 0,
+        waitlist: [],  // NUEVO: Lista de espera
+        waitlistCount: 0,  // NUEVO: Contador de lista de espera
+        checkedInAttendees: [],  // NUEVO: Asistentes que hicieron check-in
+        checkedInCount: 0,  // NUEVO: Contador de check-ins
         requiresConfirmation: eventData.requiresConfirmation === true,
         reminderSent: false,
         reminderSentAt: null
@@ -17340,10 +17344,64 @@ app.post('/api/posts/:postId/attend', authenticateToken, async (req, res) => {
     }
 
     // Verificar si hay cupo disponible
-    if (eventData.maxAttendees && attendees.length >= eventData.maxAttendees) {
-      return res.status(400).json({
-        success: false,
-        message: 'El evento está lleno. No hay más cupos disponibles'
+    const isEventFull = eventData.maxAttendees && attendees.length >= eventData.maxAttendees;
+    
+    if (isEventFull) {
+      // Si el evento está lleno, agregar a lista de espera
+      const waitlist = eventData.waitlist || [];
+      
+      // Verificar que no esté ya en la lista de espera
+      if (waitlist.includes(uid)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ya estás en la lista de espera para este evento'
+        });
+      }
+
+      await db.collection('posts').doc(postId).update({
+        'eventData.waitlist': admin.firestore.FieldValue.arrayUnion(uid),
+        'eventData.waitlistCount': admin.firestore.FieldValue.increment(1),
+        updatedAt: new Date()
+      });
+
+      console.log(`📋 [EVENT] Usuario ${uid} agregado a lista de espera del evento ${postId}`);
+
+      // Notificar al usuario que fue agregado a lista de espera
+      try {
+        const userDoc = await db.collection('users').doc(uid).get();
+        if (userDoc.exists) {
+          const userData = userDoc.data();
+          const userTokens = userData.fcmTokens || [];
+
+          if (userTokens.length > 0) {
+            const notification = {
+              title: `📋 Agregado a lista de espera`,
+              body: `Te agregamos a la lista de espera de "${eventData.title}". Te notificaremos si se libera un cupo.`
+            };
+
+            const notificationData = {
+              type: 'event_waitlist_added',
+              postId: postId,
+              screen: 'CommunityPostScreen'
+            };
+
+            await sendPushNotification(userTokens, notification, notificationData);
+          }
+        }
+      } catch (notificationError) {
+        console.error('❌ [EVENT] Error enviando notificación de lista de espera:', notificationError);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Agregado a lista de espera. Te notificaremos si se libera un cupo.',
+        data: {
+          postId: postId,
+          attendeeCount: attendees.length,
+          waitlistCount: waitlist.length + 1,
+          userInWaitlist: true,
+          userAttending: false
+        }
       });
     }
 
@@ -17461,6 +17519,58 @@ app.delete('/api/posts/:postId/attend', authenticateToken, async (req, res) => {
 
     console.log(`✅ [EVENT] Usuario ${uid} canceló asistencia al evento ${postId}`);
 
+    // Promover al primero de la lista de espera si hay cupo y hay gente esperando
+    try {
+      const waitlist = eventData.waitlist || [];
+      if (waitlist.length > 0) {
+        const nextUserId = waitlist[0];
+        
+        // Obtener el documento actualizado
+        const updatedPostDoc = await db.collection('posts').doc(postId).get();
+        const updatedEventData = updatedPostDoc.data().eventData;
+        const currentAttendees = updatedEventData.attendees || [];
+        
+        // Verificar que hay cupo disponible
+        if (!updatedEventData.maxAttendees || currentAttendees.length < updatedEventData.maxAttendees) {
+          // Mover de lista de espera a asistentes
+          await db.collection('posts').doc(postId).update({
+            'eventData.waitlist': admin.firestore.FieldValue.arrayRemove(nextUserId),
+            'eventData.waitlistCount': admin.firestore.FieldValue.increment(-1),
+            'eventData.attendees': admin.firestore.FieldValue.arrayUnion(nextUserId),
+            'eventData.attendeeCount': admin.firestore.FieldValue.increment(1)
+          });
+
+          console.log(`✅ [EVENT] Usuario ${nextUserId} promovido de lista de espera a asistente`);
+
+          // Notificar al usuario promovido
+          const nextUserDoc = await db.collection('users').doc(nextUserId).get();
+          if (nextUserDoc.exists) {
+            const nextUserData = nextUserDoc.data();
+            const nextUserTokens = nextUserData.fcmTokens || [];
+
+            if (nextUserTokens.length > 0) {
+              const notification = {
+                title: `🎉 ¡Tienes un cupo disponible!`,
+                body: `Se liberó un cupo para "${eventData.title}". ¡Ya estás confirmado!`
+              };
+
+              const notificationData = {
+                type: 'event_waitlist_promoted',
+                postId: postId,
+                screen: 'CommunityPostScreen'
+              };
+
+              await sendPushNotification(nextUserTokens, notification, notificationData);
+              console.log(`✅ [EVENT] Notificación de promoción enviada a ${nextUserId}`);
+            }
+          }
+        }
+      }
+    } catch (waitlistError) {
+      console.error('❌ [EVENT] Error procesando lista de espera:', waitlistError);
+      // No fallar la cancelación si falla la promoción de lista de espera
+    }
+
     res.json({
       success: true,
       message: 'Asistencia cancelada exitosamente',
@@ -17476,6 +17586,510 @@ app.delete('/api/posts/:postId/attend', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error cancelando asistencia',
+      error: error.message
+    });
+  }
+});
+
+// Generar código QR para check-in del evento (solo organizador)
+app.get('/api/posts/:postId/qr-code', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Verificar que el usuario es el organizador
+    if (postData.authorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el organizador puede generar el código QR del evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+
+    // Generar o recuperar el código único del evento
+    let checkInCode = eventData.checkInCode;
+    if (!checkInCode) {
+      // Generar un código único de 8 caracteres
+      checkInCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+      
+      // Guardar el código en el evento
+      await db.collection('posts').doc(postId).update({
+        'eventData.checkInCode': checkInCode,
+        updatedAt: new Date()
+      });
+
+      console.log(`✅ [EVENT] Código de check-in generado para evento ${postId}: ${checkInCode}`);
+    }
+
+    // Crear la URL de check-in
+    const checkInUrl = `https://mumpa.app/event/${postId}/checkin?code=${checkInCode}`;
+
+    res.json({
+      success: true,
+      data: {
+        postId: postId,
+        eventTitle: eventData.title,
+        checkInCode: checkInCode,
+        checkInUrl: checkInUrl,
+        // El frontend puede usar esta URL para generar el QR
+        qrData: checkInUrl
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error generando código QR:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando código QR',
+      error: error.message
+    });
+  }
+});
+
+// Hacer check-in en el evento (escanear QR o ingresar código)
+app.post('/api/posts/:postId/checkin', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: 'El código de check-in es requerido'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+
+    // Verificar que el usuario está en la lista de asistentes
+    const attendees = eventData.attendees || [];
+    if (!attendees.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes confirmar tu asistencia antes de hacer check-in'
+      });
+    }
+
+    // Verificar el código
+    if (eventData.checkInCode !== code.toUpperCase()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Código de check-in inválido'
+      });
+    }
+
+    // Verificar si ya hizo check-in
+    const checkedInAttendees = eventData.checkedInAttendees || [];
+    if (checkedInAttendees.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya hiciste check-in en este evento'
+      });
+    }
+
+    // Registrar check-in
+    await db.collection('posts').doc(postId).update({
+      'eventData.checkedInAttendees': admin.firestore.FieldValue.arrayUnion(uid),
+      'eventData.checkedInCount': admin.firestore.FieldValue.increment(1),
+      [`eventData.checkInTimes.${uid}`]: new Date(),
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ [EVENT] Usuario ${uid} hizo check-in en evento ${postId}`);
+
+    // Notificar al organizador
+    try {
+      if (postData.authorId !== uid) {
+        const organizerDoc = await db.collection('users').doc(postData.authorId).get();
+        if (organizerDoc.exists) {
+          const organizerData = organizerDoc.data();
+          const organizerTokens = organizerData.fcmTokens || [];
+
+          if (organizerTokens.length > 0) {
+            const userDoc = await db.collection('users').doc(uid).get();
+            const userData = userDoc.exists ? userDoc.data() : {};
+            const userName = userData.displayName || userData.name || 'Un usuario';
+
+            const notification = {
+              title: `✅ Check-in registrado`,
+              body: `${userName} hizo check-in en "${eventData.title}"`
+            };
+
+            const notificationData = {
+              type: 'event_checkin',
+              postId: postId,
+              attendeeId: uid,
+              screen: 'CommunityPostScreen'
+            };
+
+            await sendPushNotification(organizerTokens, notification, notificationData);
+          }
+        }
+      }
+    } catch (notificationError) {
+      console.error('❌ [EVENT] Error enviando notificación de check-in:', notificationError);
+    }
+
+    res.json({
+      success: true,
+      message: 'Check-in realizado exitosamente',
+      data: {
+        postId: postId,
+        checkedInCount: checkedInAttendees.length + 1,
+        userCheckedIn: true,
+        checkInTime: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error haciendo check-in:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error haciendo check-in',
+      error: error.message
+    });
+  }
+});
+
+// Exportar evento a Google Calendar (.ics)
+app.get('/api/posts/:postId/calendar', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityDoc = await db.collection('communities').doc(postData.communityId).get();
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para exportar el evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+
+    // Convertir fecha de Firestore a formato de fecha
+    const eventDate = eventData.eventDate.toDate();
+    const eventEndDate = eventData.eventEndDate 
+      ? eventData.eventEndDate.toDate() 
+      : new Date(eventDate.getTime() + 2 * 60 * 60 * 1000); // +2 horas por defecto
+
+    // Función auxiliar para formatear fecha en formato iCalendar
+    const formatICalDate = (date) => {
+      return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    };
+
+    // Construir ubicación
+    let locationText = '';
+    if (eventData.location) {
+      const parts = [];
+      if (eventData.location.name) parts.push(eventData.location.name);
+      if (eventData.location.address) parts.push(eventData.location.address);
+      locationText = parts.join(', ');
+    }
+
+    // Construir descripción
+    let description = postData.content || '';
+    if (eventData.description) {
+      description += '\\n\\n' + eventData.description;
+    }
+    if (eventData.maxAttendees) {
+      description += `\\n\\nCupo limitado: ${eventData.maxAttendees} personas`;
+    }
+
+    // Generar archivo .ics
+    const icsContent = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Munpa//Event Calendar//ES
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:munpa-event-${postId}@munpa.app
+DTSTAMP:${formatICalDate(new Date())}
+DTSTART:${formatICalDate(eventDate)}
+DTEND:${formatICalDate(eventEndDate)}
+SUMMARY:${eventData.title}
+DESCRIPTION:${description.replace(/\n/g, '\\n')}
+LOCATION:${locationText}
+STATUS:CONFIRMED
+SEQUENCE:0
+BEGIN:VALARM
+TRIGGER:-PT24H
+ACTION:DISPLAY
+DESCRIPTION:Recordatorio: ${eventData.title} mañana
+END:VALARM
+END:VEVENT
+END:VCALENDAR`;
+
+    // Enviar como archivo descargable
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="evento-${postId}.ics"`);
+    res.send(icsContent);
+
+    console.log(`✅ [EVENT] Archivo .ics generado para evento ${postId}`);
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error generando archivo de calendario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando archivo de calendario',
+      error: error.message
+    });
+  }
+});
+
+// Obtener enlace para agregar a Google Calendar
+app.get('/api/posts/:postId/calendar/google', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+
+    // Convertir fecha de Firestore a formato de fecha
+    const eventDate = eventData.eventDate.toDate();
+    const eventEndDate = eventData.eventEndDate 
+      ? eventData.eventEndDate.toDate() 
+      : new Date(eventDate.getTime() + 2 * 60 * 60 * 1000);
+
+    // Formatear fechas para Google Calendar (YYYYMMDDTHHmmssZ)
+    const formatGoogleDate = (date) => {
+      return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    };
+
+    // Construir ubicación
+    let location = '';
+    if (eventData.location) {
+      const parts = [];
+      if (eventData.location.name) parts.push(eventData.location.name);
+      if (eventData.location.address) parts.push(eventData.location.address);
+      location = parts.join(', ');
+    }
+
+    // Construir descripción
+    let details = postData.content || '';
+    if (eventData.description) {
+      details += '\n\n' + eventData.description;
+    }
+
+    // Crear URL de Google Calendar
+    const googleCalendarUrl = new URL('https://calendar.google.com/calendar/render');
+    googleCalendarUrl.searchParams.append('action', 'TEMPLATE');
+    googleCalendarUrl.searchParams.append('text', eventData.title);
+    googleCalendarUrl.searchParams.append('dates', `${formatGoogleDate(eventDate)}/${formatGoogleDate(eventEndDate)}`);
+    googleCalendarUrl.searchParams.append('details', details);
+    googleCalendarUrl.searchParams.append('location', location);
+    googleCalendarUrl.searchParams.append('sf', 'true');
+    googleCalendarUrl.searchParams.append('output', 'xml');
+
+    res.json({
+      success: true,
+      data: {
+        googleCalendarUrl: googleCalendarUrl.toString(),
+        eventTitle: eventData.title,
+        eventDate: eventDate,
+        eventEndDate: eventEndDate
+      }
+    });
+
+    console.log(`✅ [EVENT] URL de Google Calendar generada para evento ${postId}`);
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error generando URL de Google Calendar:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando URL de Google Calendar',
+      error: error.message
+    });
+  }
+});
+
+// Salir de la lista de espera
+app.delete('/api/posts/:postId/waitlist', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+    const waitlist = eventData.waitlist || [];
+
+    // Verificar que el usuario está en la lista de espera
+    if (!waitlist.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'No estás en la lista de espera de este evento'
+      });
+    }
+
+    // Remover de lista de espera
+    await db.collection('posts').doc(postId).update({
+      'eventData.waitlist': admin.firestore.FieldValue.arrayRemove(uid),
+      'eventData.waitlistCount': admin.firestore.FieldValue.increment(-1),
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ [EVENT] Usuario ${uid} salió de la lista de espera del evento ${postId}`);
+
+    res.json({
+      success: true,
+      message: 'Saliste de la lista de espera exitosamente',
+      data: {
+        postId: postId,
+        waitlistCount: waitlist.length - 1,
+        userInWaitlist: false
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error saliendo de lista de espera:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error saliendo de lista de espera',
       error: error.message
     });
   }
