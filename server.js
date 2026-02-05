@@ -16933,7 +16933,7 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
   try {
     const { uid } = req.user;
     const { communityId } = req.params;
-    const { content, imageUrl, attachedLists = [] } = req.body;
+    const { content, imageUrl, attachedLists = [], postType = 'normal', eventData } = req.body;
 
     if (!db) {
       return res.status(500).json({
@@ -16974,6 +16974,114 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
         success: false,
         message: 'La URL de la imagen debe ser válida'
       });
+    }
+
+    // NUEVO: Validar datos de evento si postType es "event"
+    let validatedEventData = null;
+    if (postType === 'event') {
+      if (!eventData) {
+        return res.status(400).json({
+          success: false,
+          message: 'Los datos del evento son requeridos para posts tipo evento'
+        });
+      }
+
+      // Validar campos requeridos del evento
+      if (!eventData.title || eventData.title.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'El título del evento es obligatorio'
+        });
+      }
+
+      if (!eventData.eventDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'La fecha del evento es obligatoria'
+        });
+      }
+
+      // Validar que la fecha del evento sea futura
+      const eventDate = new Date(eventData.eventDate);
+      if (isNaN(eventDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'La fecha del evento no es válida'
+        });
+      }
+
+      if (eventDate < new Date()) {
+        return res.status(400).json({
+          success: false,
+          message: 'La fecha del evento debe ser futura'
+        });
+      }
+
+      // Validar eventEndDate si existe
+      let eventEndDate = null;
+      if (eventData.eventEndDate) {
+        eventEndDate = new Date(eventData.eventEndDate);
+        if (isNaN(eventEndDate.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha de finalización del evento no es válida'
+          });
+        }
+        if (eventEndDate < eventDate) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha de finalización debe ser posterior a la fecha de inicio'
+          });
+        }
+      }
+
+      // Validar maxAttendees si existe
+      if (eventData.maxAttendees !== undefined && eventData.maxAttendees !== null) {
+        const maxAttendees = parseInt(eventData.maxAttendees);
+        if (isNaN(maxAttendees) || maxAttendees < 1) {
+          return res.status(400).json({
+            success: false,
+            message: 'El número máximo de asistentes debe ser mayor a 0'
+          });
+        }
+      }
+
+      // Construir objeto eventData validado
+      validatedEventData = {
+        title: eventData.title.trim(),
+        description: eventData.description ? eventData.description.trim() : '',
+        eventDate: admin.firestore.Timestamp.fromDate(eventDate),
+        status: 'upcoming',
+        attendees: [],
+        attendeeCount: 0,
+        requiresConfirmation: eventData.requiresConfirmation === true,
+        reminderSent: false,
+        reminderSentAt: null
+      };
+
+      // Agregar campos opcionales
+      if (eventEndDate) {
+        validatedEventData.eventEndDate = admin.firestore.Timestamp.fromDate(eventEndDate);
+      }
+
+      if (eventData.maxAttendees !== undefined && eventData.maxAttendees !== null) {
+        validatedEventData.maxAttendees = parseInt(eventData.maxAttendees);
+      }
+
+      if (eventData.location) {
+        validatedEventData.location = {
+          name: eventData.location.name || '',
+          address: eventData.location.address || '',
+          latitude: eventData.location.latitude || null,
+          longitude: eventData.location.longitude || null
+        };
+      }
+
+      if (validatedEventData.requiresConfirmation) {
+        validatedEventData.pendingAttendees = [];
+      }
+
+      console.log('✅ [EVENT] Datos del evento validados:', validatedEventData.title);
     }
 
     // Validar y verificar que las listas existen y pertenecen al usuario o son públicas
@@ -17018,6 +17126,7 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
       communityId: communityId,
       authorId: uid,
       content: content.trim(),
+      postType: postType,  // "normal" o "event"
       isPinned: false,
       likes: [],
       likeCount: 0,
@@ -17031,6 +17140,12 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
       postData.imageUrl = imageUrl;
     }
 
+    // Agregar datos del evento si es tipo "event"
+    if (postType === 'event' && validatedEventData) {
+      postData.eventData = validatedEventData;
+      console.log(`📅 [EVENT] Creando evento: ${validatedEventData.title}`);
+    }
+
     // Agregar listas adjuntas si hay
     if (validatedLists.length > 0) {
       postData.attachedLists = validatedLists;
@@ -17039,7 +17154,11 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
 
     const postRef = await db.collection('posts').add(postData);
     
-    console.log('✅ [POST] Publicación creada exitosamente:', postRef.id);
+    if (postType === 'event') {
+      console.log('✅ [EVENT] Evento creado exitosamente:', postRef.id);
+    } else {
+      console.log('✅ [POST] Publicación creada exitosamente:', postRef.id);
+    }
 
     // Enviar notificaciones push a todos los miembros de la comunidad (excepto al autor)
     try {
@@ -17071,13 +17190,18 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
         const allTokens = usersWithTokens.flatMap(u => u.tokens);
         
         if (allTokens.length > 0) {
+          const isEvent = postType === 'event';
           const notification = {
-            title: `📢 ${authorName} publicó en ${communityName}`,
-            body: content.trim().length > 100 ? content.trim().substring(0, 100) + '...' : content.trim()
+            title: isEvent 
+              ? `📅 ${authorName} creó un evento en ${communityName}`
+              : `📢 ${authorName} publicó en ${communityName}`,
+            body: isEvent && validatedEventData
+              ? validatedEventData.title
+              : (content.trim().length > 100 ? content.trim().substring(0, 100) + '...' : content.trim())
           };
 
           const notificationData = {
-            type: 'community_post',
+            type: isEvent ? 'community_event' : 'community_post',
             postId: postRef.id,
             communityId: communityId,
             communityName: communityName,
@@ -17096,7 +17220,7 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
               const notifRef = db.collection('notifications').doc();
               batch.set(notifRef, {
                 userId: userWithTokens.userId,
-                type: 'community_post',
+                type: isEvent ? 'community_event' : 'community_post',
                 title: notification.title,
                 body: notification.body,
                 data: notificationData,
@@ -17118,7 +17242,7 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
 
     res.json({
       success: true,
-      message: 'Publicación creada exitosamente',
+      message: postType === 'event' ? 'Evento creado exitosamente' : 'Publicación creada exitosamente',
       data: {
         id: postRef.id,
         ...postData
@@ -17130,6 +17254,693 @@ app.post('/api/communities/:communityId/posts', authenticateToken, async (req, r
     res.status(500).json({
       success: false,
       message: 'Error creando publicación',
+      error: error.message
+    });
+  }
+});
+
+// ===== ENDPOINTS PARA EVENTOS =====
+
+// Confirmar asistencia a un evento
+app.post('/api/posts/:postId/attend', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityDoc = await db.collection('communities').doc(postData.communityId).get();
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para asistir al evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+
+    // Verificar que el evento no está cancelado
+    if (eventData.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Este evento ha sido cancelado'
+      });
+    }
+
+    // Verificar que el evento no ha pasado
+    const eventDate = eventData.eventDate.toDate();
+    if (eventDate < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este evento ya pasó'
+      });
+    }
+
+    // Verificar que el usuario no esté ya en la lista
+    const attendees = eventData.attendees || [];
+    if (attendees.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya confirmaste tu asistencia a este evento'
+      });
+    }
+
+    // Verificar si hay cupo disponible
+    if (eventData.maxAttendees && attendees.length >= eventData.maxAttendees) {
+      return res.status(400).json({
+        success: false,
+        message: 'El evento está lleno. No hay más cupos disponibles'
+      });
+    }
+
+    // Agregar al usuario a la lista de asistentes
+    await db.collection('posts').doc(postId).update({
+      'eventData.attendees': admin.firestore.FieldValue.arrayUnion(uid),
+      'eventData.attendeeCount': admin.firestore.FieldValue.increment(1),
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ [EVENT] Usuario ${uid} confirmó asistencia al evento ${postId}`);
+
+    // Enviar notificación al organizador
+    try {
+      const organizerDoc = await db.collection('users').doc(postData.authorId).get();
+      if (organizerDoc.exists) {
+        const organizerData = organizerDoc.data();
+        const organizerTokens = organizerData.fcmTokens || [];
+
+        if (organizerTokens.length > 0) {
+          const attendeeDoc = await db.collection('users').doc(uid).get();
+          const attendeeData = attendeeDoc.exists ? attendeeDoc.data() : {};
+          const attendeeName = attendeeData.displayName || attendeeData.name || 'Un usuario';
+
+          const notification = {
+            title: `📅 Nueva confirmación para tu evento`,
+            body: `${attendeeName} confirmó asistencia a "${eventData.title}"`
+          };
+
+          const notificationData = {
+            type: 'event_attendance_confirmed',
+            postId: postId,
+            attendeeId: uid,
+            screen: 'CommunityPostScreen'
+          };
+
+          await sendPushNotification(organizerTokens, notification, notificationData);
+          console.log(`✅ [EVENT] Notificación enviada al organizador`);
+        }
+      }
+    } catch (notificationError) {
+      console.error('❌ [EVENT] Error enviando notificación al organizador:', notificationError);
+    }
+
+    res.json({
+      success: true,
+      message: 'Asistencia confirmada exitosamente',
+      data: {
+        postId: postId,
+        attendeeCount: attendees.length + 1,
+        userAttending: true
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error confirmando asistencia:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error confirmando asistencia',
+      error: error.message
+    });
+  }
+});
+
+// Cancelar asistencia a un evento
+app.delete('/api/posts/:postId/attend', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    const eventData = postData.eventData;
+    const attendees = eventData.attendees || [];
+
+    // Verificar que el usuario está en la lista
+    if (!attendees.includes(uid)) {
+      return res.status(400).json({
+        success: false,
+        message: 'No has confirmado asistencia a este evento'
+      });
+    }
+
+    // Remover al usuario de la lista de asistentes
+    await db.collection('posts').doc(postId).update({
+      'eventData.attendees': admin.firestore.FieldValue.arrayRemove(uid),
+      'eventData.attendeeCount': admin.firestore.FieldValue.increment(-1),
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ [EVENT] Usuario ${uid} canceló asistencia al evento ${postId}`);
+
+    res.json({
+      success: true,
+      message: 'Asistencia cancelada exitosamente',
+      data: {
+        postId: postId,
+        attendeeCount: attendees.length - 1,
+        userAttending: false
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error cancelando asistencia:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cancelando asistencia',
+      error: error.message
+    });
+  }
+});
+
+// Obtener lista de asistentes de un evento
+app.get('/api/posts/:postId/attendees', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post/evento
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que es un evento
+    if (postData.postType !== 'event' || !postData.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityDoc = await db.collection('communities').doc(postData.communityId).get();
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para ver los asistentes'
+      });
+    }
+
+    const eventData = postData.eventData;
+    const attendeeIds = eventData.attendees || [];
+
+    // Obtener información de los asistentes
+    const attendees = [];
+    for (const attendeeId of attendeeIds) {
+      try {
+        const attendeeDoc = await db.collection('users').doc(attendeeId).get();
+        if (attendeeDoc.exists) {
+          const attendeeData = attendeeDoc.data();
+          attendees.push({
+            userId: attendeeId,
+            userName: attendeeData.displayName || attendeeData.name || 'Usuario',
+            userPhoto: attendeeData.photoUrl || null
+          });
+        }
+      } catch (error) {
+        console.warn(`⚠️ [EVENT] Error obteniendo datos del asistente ${attendeeId}:`, error.message);
+      }
+    }
+
+    // Calcular cupos disponibles
+    const maxAttendees = eventData.maxAttendees || null;
+    const spotsAvailable = maxAttendees ? Math.max(0, maxAttendees - attendees.length) : null;
+
+    res.json({
+      success: true,
+      data: {
+        attendees,
+        attendeeCount: attendees.length,
+        maxAttendees,
+        spotsAvailable,
+        eventTitle: eventData.title,
+        eventDate: eventData.eventDate,
+        eventStatus: eventData.status
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENT] Error obteniendo asistentes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo asistentes',
+      error: error.message
+    });
+  }
+});
+
+// Obtener solo eventos de una comunidad
+app.get('/api/communities/:communityId/events', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { communityId } = req.params;
+    const { filter = 'upcoming', page = 1, limit = 10 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityDoc = await db.collection('communities').doc(communityId).get();
+
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para ver los eventos'
+      });
+    }
+
+    // Obtener eventos
+    let postsSnapshot;
+    try {
+      postsSnapshot = await db.collection('posts')
+        .where('communityId', '==', communityId)
+        .where('postType', '==', 'event')
+        .orderBy('createdAt', 'desc')
+        .get();
+    } catch (indexError) {
+      console.log('⚠️ [EVENTS] Índice no disponible, obteniendo sin ordenamiento:', indexError.message);
+      postsSnapshot = await db.collection('posts')
+        .where('communityId', '==', communityId)
+        .where('postType', '==', 'event')
+        .get();
+    }
+
+    let events = [];
+    const now = new Date();
+
+    for (const doc of postsSnapshot.docs) {
+      const eventPost = doc.data();
+      
+      if (!eventPost.eventData) continue;
+
+      const eventDate = eventPost.eventData.eventDate.toDate();
+      
+      // Filtrar según el parámetro filter
+      if (filter === 'upcoming' && eventDate < now) continue;
+      if (filter === 'past' && eventDate >= now) continue;
+      if (eventPost.eventData.status === 'cancelled' && filter !== 'all') continue;
+
+      // Obtener datos del autor
+      let authorData = { displayName: 'Usuario Desconocido', photoUrl: null };
+      try {
+        const authorDoc = await db.collection('users').doc(eventPost.authorId).get();
+        if (authorDoc.exists) {
+          const data = authorDoc.data();
+          authorData = {
+            displayName: data.displayName || data.name || 'Usuario',
+            photoUrl: data.photoUrl || null
+          };
+        }
+      } catch (error) {
+        console.warn(`⚠️ [EVENTS] Error obteniendo autor ${eventPost.authorId}:`, error.message);
+      }
+
+      // Verificar si el usuario está asistiendo
+      const attendees = eventPost.eventData.attendees || [];
+      const userAttending = attendees.includes(uid);
+
+      events.push({
+        id: doc.id,
+        postType: eventPost.postType,
+        content: eventPost.content,
+        imageUrl: eventPost.imageUrl || null,
+        eventData: {
+          title: eventPost.eventData.title,
+          description: eventPost.eventData.description || '',
+          eventDate: eventPost.eventData.eventDate,
+          eventEndDate: eventPost.eventData.eventEndDate || null,
+          location: eventPost.eventData.location || null,
+          attendeeCount: eventPost.eventData.attendeeCount || 0,
+          maxAttendees: eventPost.eventData.maxAttendees || null,
+          status: eventPost.eventData.status
+        },
+        author: {
+          id: eventPost.authorId,
+          name: authorData.displayName,
+          photo: authorData.photoUrl
+        },
+        userAttending,
+        likes: eventPost.likes || [],
+        likeCount: eventPost.likeCount || 0,
+        commentCount: eventPost.commentCount || 0,
+        createdAt: eventPost.createdAt
+      });
+    }
+
+    // Ordenar eventos por fecha del evento
+    events.sort((a, b) => {
+      const dateA = a.eventData.eventDate.toDate();
+      const dateB = b.eventData.eventDate.toDate();
+      return filter === 'past' ? dateB - dateA : dateA - dateB;
+    });
+
+    // Paginación
+    const total = events.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedEvents = events.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedEvents,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [EVENTS] Error obteniendo eventos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo eventos',
+      error: error.message
+    });
+  }
+});
+
+// Editar post o evento (solo el autor)
+app.put('/api/posts/:postId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+    const { content, imageUrl, eventData } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que el usuario es el autor
+    if (postData.authorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Solo el autor puede editar esta publicación'
+      });
+    }
+
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    // Actualizar contenido si se proporciona
+    if (content !== undefined) {
+      if (!content || content.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'El contenido no puede estar vacío'
+        });
+      }
+      updateData.content = content.trim();
+    }
+
+    // Actualizar imagen si se proporciona
+    if (imageUrl !== undefined) {
+      if (imageUrl && !imageUrl.startsWith('http')) {
+        return res.status(400).json({
+          success: false,
+          message: 'La URL de la imagen debe ser válida'
+        });
+      }
+      updateData.imageUrl = imageUrl || null;
+    }
+
+    // Si es un evento, actualizar datos del evento
+    if (postData.postType === 'event' && eventData) {
+      const currentEventData = postData.eventData || {};
+
+      // Actualizar título del evento
+      if (eventData.title !== undefined) {
+        if (!eventData.title || eventData.title.trim().length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'El título del evento es obligatorio'
+          });
+        }
+        updateData['eventData.title'] = eventData.title.trim();
+      }
+
+      // Actualizar descripción
+      if (eventData.description !== undefined) {
+        updateData['eventData.description'] = eventData.description.trim();
+      }
+
+      // Actualizar fecha del evento
+      if (eventData.eventDate !== undefined) {
+        const newEventDate = new Date(eventData.eventDate);
+        if (isNaN(newEventDate.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha del evento no es válida'
+          });
+        }
+        if (newEventDate < new Date()) {
+          return res.status(400).json({
+            success: false,
+            message: 'La fecha del evento debe ser futura'
+          });
+        }
+        updateData['eventData.eventDate'] = admin.firestore.Timestamp.fromDate(newEventDate);
+        
+        // Si se cambió la fecha, notificar a los asistentes
+        const oldEventDate = currentEventData.eventDate?.toDate();
+        if (oldEventDate && oldEventDate.getTime() !== newEventDate.getTime()) {
+          updateData['eventData.dateChanged'] = true;
+        }
+      }
+
+      // Actualizar fecha de finalización
+      if (eventData.eventEndDate !== undefined) {
+        if (eventData.eventEndDate) {
+          const newEventEndDate = new Date(eventData.eventEndDate);
+          if (isNaN(newEventEndDate.getTime())) {
+            return res.status(400).json({
+              success: false,
+              message: 'La fecha de finalización no es válida'
+            });
+          }
+          updateData['eventData.eventEndDate'] = admin.firestore.Timestamp.fromDate(newEventEndDate);
+        } else {
+          updateData['eventData.eventEndDate'] = null;
+        }
+      }
+
+      // Actualizar ubicación
+      if (eventData.location !== undefined) {
+        updateData['eventData.location'] = {
+          name: eventData.location.name || '',
+          address: eventData.location.address || '',
+          latitude: eventData.location.latitude || null,
+          longitude: eventData.location.longitude || null
+        };
+      }
+
+      // Actualizar máximo de asistentes
+      if (eventData.maxAttendees !== undefined) {
+        const maxAttendees = eventData.maxAttendees ? parseInt(eventData.maxAttendees) : null;
+        if (maxAttendees !== null && (isNaN(maxAttendees) || maxAttendees < 1)) {
+          return res.status(400).json({
+            success: false,
+            message: 'El número máximo de asistentes debe ser mayor a 0'
+          });
+        }
+        updateData['eventData.maxAttendees'] = maxAttendees;
+      }
+
+      // Actualizar estado del evento
+      if (eventData.status !== undefined) {
+        const validStatuses = ['upcoming', 'ongoing', 'completed', 'cancelled'];
+        if (!validStatuses.includes(eventData.status)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Estado del evento inválido'
+          });
+        }
+        updateData['eventData.status'] = eventData.status;
+
+        // Si se cancela, notificar a los asistentes
+        if (eventData.status === 'cancelled' && currentEventData.status !== 'cancelled') {
+          updateData['eventData.cancelledAt'] = new Date();
+          
+          // Notificar a los asistentes sobre la cancelación
+          try {
+            const attendees = currentEventData.attendees || [];
+            if (attendees.length > 0) {
+              const attendeePromises = attendees.map(async (attendeeId) => {
+                try {
+                  const attendeeDoc = await db.collection('users').doc(attendeeId).get();
+                  if (attendeeDoc.exists) {
+                    const attendeeData = attendeeDoc.data();
+                    return { userId: attendeeId, tokens: attendeeData.fcmTokens || [] };
+                  }
+                } catch (error) {
+                  console.warn(`⚠️ [EVENT] Error obteniendo tokens del asistente ${attendeeId}:`, error.message);
+                }
+                return { userId: attendeeId, tokens: [] };
+              });
+
+              const usersWithTokens = await Promise.all(attendeePromises);
+              const allTokens = usersWithTokens.flatMap(u => u.tokens);
+
+              if (allTokens.length > 0) {
+                const notification = {
+                  title: '❌ Evento cancelado',
+                  body: `El evento "${currentEventData.title}" ha sido cancelado`
+                };
+
+                const notificationData = {
+                  type: 'event_cancelled',
+                  postId: postId,
+                  screen: 'CommunityPostScreen'
+                };
+
+                await sendPushNotification(allTokens, notification, notificationData);
+                console.log(`✅ [EVENT] Notificaciones de cancelación enviadas a ${attendees.length} asistentes`);
+              }
+            }
+          } catch (notificationError) {
+            console.error('❌ [EVENT] Error enviando notificaciones de cancelación:', notificationError);
+          }
+        }
+      }
+
+      console.log('✅ [EVENT] Actualizando evento:', postId);
+    }
+
+    // Aplicar actualizaciones
+    await db.collection('posts').doc(postId).update(updateData);
+
+    console.log(`✅ [POST] Post ${postId} actualizado exitosamente`);
+
+    res.json({
+      success: true,
+      message: postData.postType === 'event' ? 'Evento actualizado exitosamente' : 'Publicación actualizada exitosamente',
+      data: updateData
+    });
+
+  } catch (error) {
+    console.error('❌ [POST] Error actualizando publicación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando publicación',
       error: error.message
     });
   }
