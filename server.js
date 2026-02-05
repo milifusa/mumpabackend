@@ -25990,6 +25990,586 @@ app.get('/api/admin/marketplace/transactions', authenticateToken, isAdmin, async
 });
 
 // ============================================================================
+// 📅 ENDPOINTS ADMIN - GESTIÓN DE EVENTOS
+// ============================================================================
+
+// Obtener todos los eventos (admin dashboard)
+app.get('/api/admin/events', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { 
+      status, 
+      communityId, 
+      page = 1, 
+      limit = 20,
+      sortBy = 'date',  // date, created, attendees, checkins
+      order = 'desc'
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Query base
+    let query = db.collection('posts').where('postType', '==', 'event');
+
+    // Aplicar filtros
+    if (communityId) {
+      query = query.where('communityId', '==', communityId);
+    }
+
+    // Obtener todos los eventos
+    const snapshot = await query.get();
+
+    let events = [];
+    const now = new Date();
+
+    for (const doc of snapshot.docs) {
+      const eventPost = doc.data();
+      
+      if (!eventPost.eventData) continue;
+
+      const eventDate = eventPost.eventData.eventDate.toDate();
+      
+      // Filtrar por status si se especifica
+      if (status) {
+        if (status === 'upcoming' && eventDate < now) continue;
+        if (status === 'past' && eventDate >= now) continue;
+        if (status === 'cancelled' && eventPost.eventData.status !== 'cancelled') continue;
+      }
+
+      // Obtener datos del autor y comunidad
+      let authorData = { displayName: 'Usuario Desconocido' };
+      let communityName = 'Comunidad';
+
+      try {
+        const authorDoc = await db.collection('users').doc(eventPost.authorId).get();
+        if (authorDoc.exists) {
+          const data = authorDoc.data();
+          authorData = {
+            id: eventPost.authorId,
+            displayName: data.displayName || data.name || 'Usuario',
+            email: data.email || null,
+            photoUrl: data.photoUrl || null
+          };
+        }
+
+        const communityDoc = await db.collection('communities').doc(eventPost.communityId).get();
+        if (communityDoc.exists) {
+          communityName = communityDoc.data().name || 'Comunidad';
+        }
+      } catch (error) {
+        console.warn(`⚠️ [ADMIN] Error obteniendo datos adicionales:`, error.message);
+      }
+
+      // Calcular métricas
+      const attendeeCount = eventPost.eventData.attendeeCount || 0;
+      const checkedInCount = eventPost.eventData.checkedInCount || 0;
+      const waitlistCount = eventPost.eventData.waitlistCount || 0;
+      const attendanceRate = attendeeCount > 0 ? (checkedInCount / attendeeCount) * 100 : 0;
+
+      events.push({
+        id: doc.id,
+        title: eventPost.eventData.title,
+        description: eventPost.eventData.description || '',
+        eventDate: eventPost.eventData.eventDate,
+        eventEndDate: eventPost.eventData.eventEndDate || null,
+        location: eventPost.eventData.location || null,
+        status: eventPost.eventData.status,
+        
+        // Métricas
+        attendeeCount,
+        checkedInCount,
+        waitlistCount,
+        maxAttendees: eventPost.eventData.maxAttendees || null,
+        attendanceRate: Math.round(attendanceRate),
+        
+        // Info adicional
+        author: authorData,
+        communityId: eventPost.communityId,
+        communityName,
+        imageUrl: eventPost.imageUrl || null,
+        
+        // Interacciones
+        likeCount: eventPost.likeCount || 0,
+        commentCount: eventPost.commentCount || 0,
+        
+        // Fechas
+        createdAt: eventPost.createdAt,
+        updatedAt: eventPost.updatedAt
+      });
+    }
+
+    // Ordenar
+    events.sort((a, b) => {
+      switch (sortBy) {
+        case 'date':
+          const dateA = a.eventDate.toDate();
+          const dateB = b.eventDate.toDate();
+          return order === 'desc' ? dateB - dateA : dateA - dateB;
+        
+        case 'created':
+          const createdA = a.createdAt.toDate ? a.createdAt.toDate() : new Date(a.createdAt);
+          const createdB = b.createdAt.toDate ? b.createdAt.toDate() : new Date(b.createdAt);
+          return order === 'desc' ? createdB - createdA : createdA - createdB;
+        
+        case 'attendees':
+          return order === 'desc' 
+            ? b.attendeeCount - a.attendeeCount 
+            : a.attendeeCount - b.attendeeCount;
+        
+        case 'checkins':
+          return order === 'desc' 
+            ? b.checkedInCount - a.checkedInCount 
+            : a.checkedInCount - b.checkedInCount;
+        
+        default:
+          return 0;
+      }
+    });
+
+    // Paginación
+    const total = events.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedEvents = events.slice(startIndex, endIndex);
+
+    // Calcular estadísticas generales
+    const stats = {
+      total: total,
+      upcoming: events.filter(e => e.eventDate.toDate() >= now && e.status !== 'cancelled').length,
+      past: events.filter(e => e.eventDate.toDate() < now).length,
+      cancelled: events.filter(e => e.status === 'cancelled').length,
+      totalAttendees: events.reduce((sum, e) => sum + e.attendeeCount, 0),
+      totalCheckins: events.reduce((sum, e) => sum + e.checkedInCount, 0),
+      totalWaitlist: events.reduce((sum, e) => sum + e.waitlistCount, 0),
+      averageAttendanceRate: events.length > 0 
+        ? Math.round(events.reduce((sum, e) => sum + e.attendanceRate, 0) / events.length)
+        : 0
+    };
+
+    res.json({
+      success: true,
+      data: paginatedEvents,
+      stats,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo eventos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo eventos',
+      error: error.message
+    });
+  }
+});
+
+// Obtener detalle completo de un evento (admin)
+app.get('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el evento
+    const eventDoc = await db.collection('posts').doc(eventId).get();
+
+    if (!eventDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Evento no encontrado'
+      });
+    }
+
+    const eventPost = eventDoc.data();
+
+    if (eventPost.postType !== 'event' || !eventPost.eventData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Obtener datos del autor
+    let authorData = { displayName: 'Usuario Desconocido' };
+    try {
+      const authorDoc = await db.collection('users').doc(eventPost.authorId).get();
+      if (authorDoc.exists) {
+        const data = authorDoc.data();
+        authorData = {
+          id: eventPost.authorId,
+          displayName: data.displayName || data.name || 'Usuario',
+          email: data.email || null,
+          photoUrl: data.photoUrl || null
+        };
+      }
+    } catch (error) {
+      console.warn(`⚠️ [ADMIN] Error obteniendo autor:`, error.message);
+    }
+
+    // Obtener datos de la comunidad
+    let communityData = { name: 'Comunidad' };
+    try {
+      const communityDoc = await db.collection('communities').doc(eventPost.communityId).get();
+      if (communityDoc.exists) {
+        const data = communityDoc.data();
+        communityData = {
+          id: eventPost.communityId,
+          name: data.name || 'Comunidad',
+          imageUrl: data.imageUrl || null,
+          memberCount: data.members?.length || 0
+        };
+      }
+    } catch (error) {
+      console.warn(`⚠️ [ADMIN] Error obteniendo comunidad:`, error.message);
+    }
+
+    // Obtener lista detallada de asistentes
+    const attendeeIds = eventPost.eventData.attendees || [];
+    const attendeesList = [];
+    
+    for (const attendeeId of attendeeIds) {
+      try {
+        const attendeeDoc = await db.collection('users').doc(attendeeId).get();
+        if (attendeeDoc.exists) {
+          const data = attendeeDoc.data();
+          const checkedIn = (eventPost.eventData.checkedInAttendees || []).includes(attendeeId);
+          const checkInTime = eventPost.eventData.checkInTimes?.[attendeeId] || null;
+          
+          attendeesList.push({
+            userId: attendeeId,
+            userName: data.displayName || data.name || 'Usuario',
+            userEmail: data.email || null,
+            userPhoto: data.photoUrl || null,
+            checkedIn,
+            checkInTime
+          });
+        }
+      } catch (error) {
+        console.warn(`⚠️ [ADMIN] Error obteniendo asistente ${attendeeId}:`, error.message);
+      }
+    }
+
+    // Obtener lista de espera
+    const waitlistIds = eventPost.eventData.waitlist || [];
+    const waitlistList = [];
+    
+    for (const userId of waitlistIds) {
+      try {
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          const data = userDoc.data();
+          waitlistList.push({
+            userId: userId,
+            userName: data.displayName || data.name || 'Usuario',
+            userEmail: data.email || null,
+            userPhoto: data.photoUrl || null
+          });
+        }
+      } catch (error) {
+        console.warn(`⚠️ [ADMIN] Error obteniendo usuario en espera ${userId}:`, error.message);
+      }
+    }
+
+    // Construir respuesta completa
+    const response = {
+      id: eventId,
+      postType: eventPost.postType,
+      content: eventPost.content,
+      imageUrl: eventPost.imageUrl || null,
+      
+      eventData: {
+        title: eventPost.eventData.title,
+        description: eventPost.eventData.description || '',
+        eventDate: eventPost.eventData.eventDate,
+        eventEndDate: eventPost.eventData.eventEndDate || null,
+        location: eventPost.eventData.location || null,
+        status: eventPost.eventData.status,
+        maxAttendees: eventPost.eventData.maxAttendees || null,
+        checkInCode: eventPost.eventData.checkInCode || null,
+        requiresConfirmation: eventPost.eventData.requiresConfirmation || false
+      },
+      
+      author: authorData,
+      community: communityData,
+      
+      attendees: attendeesList,
+      waitlist: waitlistList,
+      
+      metrics: {
+        attendeeCount: attendeesList.length,
+        checkedInCount: attendeesList.filter(a => a.checkedIn).length,
+        waitlistCount: waitlistList.length,
+        attendanceRate: attendeesList.length > 0 
+          ? Math.round((attendeesList.filter(a => a.checkedIn).length / attendeesList.length) * 100)
+          : 0,
+        likeCount: eventPost.likeCount || 0,
+        commentCount: eventPost.commentCount || 0
+      },
+      
+      dates: {
+        createdAt: eventPost.createdAt,
+        updatedAt: eventPost.updatedAt,
+        publishedAt: eventPost.publishedAt || eventPost.createdAt
+      }
+    };
+
+    res.json({
+      success: true,
+      data: response
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo detalle de evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo detalle de evento',
+      error: error.message
+    });
+  }
+});
+
+// Cancelar evento (admin)
+app.patch('/api/admin/events/:eventId/cancel', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { reason } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const eventDoc = await db.collection('posts').doc(eventId).get();
+
+    if (!eventDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Evento no encontrado'
+      });
+    }
+
+    const eventPost = eventDoc.data();
+
+    if (eventPost.postType !== 'event') {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Actualizar estado
+    await db.collection('posts').doc(eventId).update({
+      'eventData.status': 'cancelled',
+      'eventData.cancelledAt': new Date(),
+      'eventData.cancelReason': reason || 'Cancelado por administrador',
+      updatedAt: new Date()
+    });
+
+    // Notificar a todos los asistentes y lista de espera
+    try {
+      const attendees = eventPost.eventData.attendees || [];
+      const waitlist = eventPost.eventData.waitlist || [];
+      const allUsers = [...attendees, ...waitlist];
+
+      if (allUsers.length > 0) {
+        const usersPromises = allUsers.map(async (userId) => {
+          try {
+            const userDoc = await db.collection('users').doc(userId).get();
+            if (userDoc.exists) {
+              const userData = userDoc.data();
+              return { userId, tokens: userData.fcmTokens || [] };
+            }
+          } catch (error) {
+            console.warn(`⚠️ [ADMIN] Error obteniendo tokens del usuario ${userId}:`, error.message);
+          }
+          return { userId, tokens: [] };
+        });
+
+        const usersWithTokens = await Promise.all(usersPromises);
+        const allTokens = usersWithTokens.flatMap(u => u.tokens);
+
+        if (allTokens.length > 0) {
+          const notification = {
+            title: '❌ Evento cancelado',
+            body: `El evento "${eventPost.eventData.title}" ha sido cancelado por el administrador${reason ? ': ' + reason : ''}`
+          };
+
+          const notificationData = {
+            type: 'event_cancelled_admin',
+            postId: eventId,
+            screen: 'CommunityPostScreen'
+          };
+
+          await sendPushNotification(allTokens, notification, notificationData);
+          console.log(`✅ [ADMIN] Notificaciones de cancelación enviadas a ${allUsers.length} usuarios`);
+        }
+      }
+    } catch (notificationError) {
+      console.error('❌ [ADMIN] Error enviando notificaciones:', notificationError);
+    }
+
+    console.log(`✅ [ADMIN] Evento ${eventId} cancelado por admin`);
+
+    res.json({
+      success: true,
+      message: 'Evento cancelado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error cancelando evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cancelando evento',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar evento (admin)
+app.delete('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const eventDoc = await db.collection('posts').doc(eventId).get();
+
+    if (!eventDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Evento no encontrado'
+      });
+    }
+
+    // Eliminar el documento
+    await db.collection('posts').doc(eventId).delete();
+
+    console.log(`✅ [ADMIN] Evento ${eventId} eliminado permanentemente`);
+
+    res.json({
+      success: true,
+      message: 'Evento eliminado permanentemente'
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando evento',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas de eventos (admin dashboard)
+app.get('/api/admin/events/stats/summary', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const eventsSnapshot = await db.collection('posts')
+      .where('postType', '==', 'event')
+      .get();
+
+    const events = eventsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    const now = new Date();
+
+    // Estadísticas generales
+    const stats = {
+      totalEvents: events.length,
+      upcomingEvents: events.filter(e => {
+        const eventDate = e.eventData?.eventDate?.toDate();
+        return eventDate && eventDate >= now && e.eventData.status !== 'cancelled';
+      }).length,
+      pastEvents: events.filter(e => {
+        const eventDate = e.eventData?.eventDate?.toDate();
+        return eventDate && eventDate < now;
+      }).length,
+      cancelledEvents: events.filter(e => e.eventData?.status === 'cancelled').length,
+      
+      totalAttendees: events.reduce((sum, e) => sum + (e.eventData?.attendeeCount || 0), 0),
+      totalCheckins: events.reduce((sum, e) => sum + (e.eventData?.checkedInCount || 0), 0),
+      totalWaitlist: events.reduce((sum, e) => sum + (e.eventData?.waitlistCount || 0), 0),
+      
+      averageAttendeesPerEvent: events.length > 0
+        ? Math.round(events.reduce((sum, e) => sum + (e.eventData?.attendeeCount || 0), 0) / events.length)
+        : 0,
+      
+      averageAttendanceRate: events.length > 0
+        ? Math.round(events.reduce((sum, e) => {
+            const attendees = e.eventData?.attendeeCount || 0;
+            const checkins = e.eventData?.checkedInCount || 0;
+            return sum + (attendees > 0 ? (checkins / attendees) * 100 : 0);
+          }, 0) / events.length)
+        : 0,
+      
+      eventsWithWaitlist: events.filter(e => (e.eventData?.waitlistCount || 0) > 0).length,
+      eventsWithCheckIn: events.filter(e => (e.eventData?.checkedInCount || 0) > 0).length,
+      
+      // Top comunidades con más eventos
+      topCommunities: Object.entries(
+        events.reduce((acc, e) => {
+          acc[e.communityId] = (acc[e.communityId] || 0) + 1;
+          return acc;
+        }, {})
+      )
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([communityId, count]) => ({ communityId, eventCount: count })),
+      
+      // Eventos por mes (últimos 6 meses)
+      eventsByMonth: {},
+      
+      // Engagement
+      totalLikes: events.reduce((sum, e) => sum + (e.likeCount || 0), 0),
+      totalComments: events.reduce((sum, e) => sum + (e.commentCount || 0), 0)
+    };
+
+    res.json({
+      success: true,
+      data: stats
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas de eventos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // 🏷️ CATEGORÍAS DINÁMICAS PARA MARKETPLACE
 // ============================================================================
 
