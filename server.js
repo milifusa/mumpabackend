@@ -18628,6 +18628,8 @@ app.get('/api/communities/:communityId/posts', authenticateToken, async (req, re
         imageUrl: postData.imageUrl,
         authorId: postData.authorId,
         authorName: authorName,
+        postType: postData.postType || 'normal',  // NUEVO: tipo de post
+        eventData: postData.eventData || null,     // NUEVO: datos del evento si existe
         attachedLists: postData.attachedLists || [], // Listas adjuntas
         isPinned: postData.isPinned || false, // Post fijado
         likes: postData.likes || [],
@@ -18717,6 +18719,8 @@ app.get('/api/communities/posts/top', authenticateToken, async (req, res) => {
         authorId: postData.authorId,
         authorName: authorName,
         communityId: postData.communityId,
+        postType: postData.postType || 'normal',  // NUEVO: tipo de post
+        eventData: postData.eventData || null,     // NUEVO: datos del evento si existe
         likeCount: postData.likeCount || 0,
         commentCount: postData.commentCount || 0,
         createdAt: postData.createdAt
