@@ -18022,6 +18022,225 @@ app.get('/api/posts/:postId/calendar/google', authenticateToken, async (req, res
   }
 });
 
+// Obtener banners activos (banners normales + eventos marcados como banner)
+app.get('/api/banners', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { section } = req.query; // 'home', 'communities', 'marketplace', etc.
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const now = new Date();
+    let allBanners = [];
+
+    // 1. OBTENER BANNERS NORMALES (de la colección banners)
+    try {
+      let bannersQuery = db.collection('banners')
+        .where('isActive', '==', true);
+      
+      // Filtrar por sección si se especifica
+      if (section) {
+        bannersQuery = bannersQuery.where('section', '==', section);
+      }
+
+      const bannersSnapshot = await bannersQuery.get();
+
+      for (const doc of bannersSnapshot.docs) {
+        const banner = doc.data();
+        
+        // Verificar fechas de programación
+        const startDate = banner.startDate ? banner.startDate.toDate() : null;
+        const endDate = banner.endDate ? banner.endDate.toDate() : null;
+        
+        // Solo mostrar si está dentro del rango de fechas
+        const isInDateRange = (!startDate || startDate <= now) && (!endDate || endDate >= now);
+        
+        if (isInDateRange) {
+          allBanners.push({
+            id: doc.id,
+            type: 'banner', // ⬅️ NUEVO: tipo de banner
+            isEvent: false, // ⬅️ NUEVO: indica que NO es un evento
+            
+            title: banner.title,
+            description: banner.description || '',
+            imageUrl: banner.imageUrl,
+            link: banner.link || null,
+            
+            order: banner.order || 999,
+            duration: banner.duration || 5,
+            section: banner.section || 'home',
+            
+            startDate: banner.startDate || null,
+            endDate: banner.endDate || null,
+            
+            views: banner.views || 0,
+            clicks: banner.clicks || 0,
+            
+            createdAt: banner.createdAt
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ [BANNER] Error obteniendo banners normales:', error.message);
+    }
+
+    // 2. OBTENER EVENTOS MARCADOS COMO BANNER
+    try {
+      // Obtener comunidades del usuario
+      const communitiesSnapshot = await db.collection('communities')
+        .where('members', 'array-contains', uid)
+        .get();
+
+      const userCommunityIds = communitiesSnapshot.docs.map(doc => doc.id);
+
+      if (userCommunityIds.length > 0) {
+        // Firestore no permite "in" con más de 10 elementos
+        const chunkSize = 10;
+        for (let i = 0; i < userCommunityIds.length; i += chunkSize) {
+          const chunk = userCommunityIds.slice(i, i + chunkSize);
+          
+          const eventsSnapshot = await db.collection('posts')
+            .where('postType', '==', 'event')
+            .where('communityId', 'in', chunk)
+            .where('eventData.isBanner', '==', true)
+            .get();
+
+          for (const doc of eventsSnapshot.docs) {
+            const eventPost = doc.data();
+            
+            if (!eventPost.eventData) continue;
+            
+            const eventDate = eventPost.eventData.eventDate.toDate();
+            const isCancelled = eventPost.eventData.status === 'cancelled';
+            
+            // Verificar visibilidad del evento
+            const eventSection = eventPost.eventData.bannerSection || 'home';
+            const publishedAt = eventPost.eventData.bannerPublishedAt 
+              ? eventPost.eventData.bannerPublishedAt.toDate() 
+              : eventPost.createdAt.toDate();
+            
+            // Filtrar por sección si se especifica
+            if (section && eventSection !== section) continue;
+            
+            // Mostrar desde que se publica hasta la hora del evento
+            const shouldShow = publishedAt <= now && eventDate >= now && !isCancelled;
+            
+            if (shouldShow) {
+              // Obtener nombre de comunidad
+              let communityName = 'Comunidad';
+              try {
+                const communityDoc = await db.collection('communities').doc(eventPost.communityId).get();
+                if (communityDoc.exists) {
+                  communityName = communityDoc.data().name || 'Comunidad';
+                }
+              } catch (error) {
+                console.warn(`⚠️ [BANNER] Error obteniendo comunidad:`, error.message);
+              }
+
+              // Obtener nombre del autor
+              let authorName = 'Usuario';
+              try {
+                const authorDoc = await db.collection('users').doc(eventPost.authorId).get();
+                if (authorDoc.exists) {
+                  authorName = authorDoc.data().displayName || 'Usuario';
+                }
+              } catch (error) {
+                console.warn(`⚠️ [BANNER] Error obteniendo autor:`, error.message);
+              }
+
+              allBanners.push({
+                id: doc.id,
+                type: 'event', // ⬅️ NUEVO: tipo de banner
+                isEvent: true,  // ⬅️ NUEVO: indica que ES un evento
+                
+                title: eventPost.eventData.title,
+                description: eventPost.eventData.description || '',
+                imageUrl: eventPost.imageUrl || null,
+                link: `/communities/${eventPost.communityId}/events/${doc.id}`, // Link al evento
+                
+                // Datos específicos del evento
+                eventDate: eventPost.eventData.eventDate,
+                eventEndDate: eventPost.eventData.eventEndDate || null,
+                location: eventPost.eventData.location || null,
+                communityId: eventPost.communityId,
+                communityName,
+                authorId: eventPost.authorId,
+                authorName,
+                attendeeCount: eventPost.eventData.attendeeCount || 0,
+                maxAttendees: eventPost.eventData.maxAttendees || null,
+                isUserAttending: (eventPost.eventData.attendees || []).includes(uid),
+                
+                // Configuración del banner
+                order: eventPost.eventData.bannerOrder || 1,
+                duration: eventPost.eventData.bannerDuration || 5,
+                section: eventSection,
+                
+                startDate: eventPost.eventData.bannerPublishedAt || eventPost.createdAt,
+                endDate: eventPost.eventData.eventDate, // El evento es el límite
+                
+                likeCount: eventPost.likeCount || 0,
+                commentCount: eventPost.commentCount || 0,
+                createdAt: eventPost.createdAt,
+                bannerUpdatedAt: eventPost.eventData.bannerUpdatedAt || null
+              });
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('⚠️ [BANNER] Error obteniendo eventos banner:', error.message);
+    }
+
+    // 3. ORDENAR TODOS LOS BANNERS
+    allBanners.sort((a, b) => {
+      // Primero por orden
+      if (a.order !== b.order) {
+        return a.order - b.order;
+      }
+      
+      // Si tienen el mismo orden, eventos van antes (por fecha)
+      if (a.isEvent && !b.isEvent) {
+        return -1;
+      }
+      if (!a.isEvent && b.isEvent) {
+        return 1;
+      }
+      
+      // Si ambos son eventos, ordenar por fecha del evento (más próximo primero)
+      if (a.isEvent && b.isEvent) {
+        const dateA = a.eventDate.toDate();
+        const dateB = b.eventDate.toDate();
+        return dateA - dateB;
+      }
+      
+      // Si ambos son banners normales, mantener orden actual
+      return 0;
+    });
+
+    console.log(`✅ [BANNER] ${allBanners.length} banners encontrados para usuario ${uid}${section ? ` (sección: ${section})` : ''}`);
+    console.log(`   - Banners normales: ${allBanners.filter(b => !b.isEvent).length}`);
+    console.log(`   - Eventos: ${allBanners.filter(b => b.isEvent).length}`);
+
+    res.json({
+      success: true,
+      data: allBanners
+    });
+
+  } catch (error) {
+    console.error('❌ [BANNER] Error obteniendo banners:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo banners',
+      error: error.message
+    });
+  }
+});
+
 // Salir de la lista de espera
 app.delete('/api/posts/:postId/waitlist', authenticateToken, async (req, res) => {
   try {
@@ -26082,6 +26301,7 @@ app.get('/api/admin/events', authenticateToken, isAdmin, async (req, res) => {
         eventEndDate: eventPost.eventData.eventEndDate || null,
         location: eventPost.eventData.location || null,
         status: eventPost.eventData.status,
+        isBanner: eventPost.eventData.isBanner || false,  // NUEVO: estado de banner
         
         // Métricas
         attendeeCount,
@@ -26302,6 +26522,8 @@ app.get('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, re
         eventEndDate: eventPost.eventData.eventEndDate || null,
         location: eventPost.eventData.location || null,
         status: eventPost.eventData.status,
+        isBanner: eventPost.eventData.isBanner || false,  // NUEVO: estado de banner
+        bannerUpdatedAt: eventPost.eventData.bannerUpdatedAt || null,  // NUEVO: cuándo se marcó como banner
         maxAttendees: eventPost.eventData.maxAttendees || null,
         checkInCode: eventPost.eventData.checkInCode || null,
         requiresConfirmation: eventPost.eventData.requiresConfirmation || false
@@ -26445,6 +26667,186 @@ app.patch('/api/admin/events/:eventId/cancel', authenticateToken, isAdmin, async
   }
 });
 
+// Editar evento (admin)
+app.put('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { 
+      title, 
+      description, 
+      eventDate, 
+      eventEndDate, 
+      location,
+      maxAttendees,
+      requiresConfirmation,
+      status
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const eventDoc = await db.collection('posts').doc(eventId).get();
+
+    if (!eventDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Evento no encontrado'
+      });
+    }
+
+    const eventPost = eventDoc.data();
+
+    if (eventPost.postType !== 'event') {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Preparar datos de actualización
+    const updateData = {
+      updatedAt: new Date()
+    };
+
+    // Actualizar solo los campos que se proporcionan
+    if (title !== undefined) {
+      if (!title || title.trim().length < 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'El título debe tener al menos 3 caracteres'
+        });
+      }
+      updateData['eventData.title'] = title.trim();
+    }
+
+    if (description !== undefined) {
+      updateData['eventData.description'] = description.trim();
+    }
+
+    if (eventDate !== undefined) {
+      try {
+        const parsedDate = new Date(eventDate);
+        if (isNaN(parsedDate.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'Fecha del evento inválida'
+          });
+        }
+        updateData['eventData.eventDate'] = parsedDate;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: 'Formato de fecha inválido'
+        });
+      }
+    }
+
+    if (eventEndDate !== undefined) {
+      if (eventEndDate) {
+        try {
+          const parsedEndDate = new Date(eventEndDate);
+          if (isNaN(parsedEndDate.getTime())) {
+            return res.status(400).json({
+              success: false,
+              message: 'Fecha de fin del evento inválida'
+            });
+          }
+          updateData['eventData.eventEndDate'] = parsedEndDate;
+        } catch (error) {
+          return res.status(400).json({
+            success: false,
+            message: 'Formato de fecha de fin inválido'
+          });
+        }
+      } else {
+        updateData['eventData.eventEndDate'] = null;
+      }
+    }
+
+    if (location !== undefined) {
+      updateData['eventData.location'] = location;
+    }
+
+    if (maxAttendees !== undefined) {
+      if (maxAttendees !== null) {
+        const maxAttendeesNum = parseInt(maxAttendees);
+        if (isNaN(maxAttendeesNum) || maxAttendeesNum < 1) {
+          return res.status(400).json({
+            success: false,
+            message: 'El máximo de asistentes debe ser un número positivo'
+          });
+        }
+        
+        // Verificar que el nuevo máximo no sea menor que los asistentes actuales
+        const currentAttendees = eventPost.eventData?.attendeeCount || 0;
+        if (maxAttendeesNum < currentAttendees) {
+          return res.status(400).json({
+            success: false,
+            message: `No puedes reducir el límite a ${maxAttendeesNum} porque ya hay ${currentAttendees} asistentes confirmados`
+          });
+        }
+        
+        updateData['eventData.maxAttendees'] = maxAttendeesNum;
+      } else {
+        updateData['eventData.maxAttendees'] = null;
+      }
+    }
+
+    if (requiresConfirmation !== undefined) {
+      updateData['eventData.requiresConfirmation'] = Boolean(requiresConfirmation);
+    }
+
+    if (status !== undefined) {
+      const validStatuses = ['active', 'cancelled', 'completed'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Estado inválido. Debe ser: ${validStatuses.join(', ')}`
+        });
+      }
+      updateData['eventData.status'] = status;
+    }
+
+    // Actualizar el evento
+    await db.collection('posts').doc(eventId).update(updateData);
+
+    console.log(`✅ [ADMIN] Evento ${eventId} actualizado por admin ${req.user.uid}`);
+
+    // Obtener el evento actualizado
+    const updatedEventDoc = await db.collection('posts').doc(eventId).get();
+    const updatedEvent = updatedEventDoc.data();
+
+    res.json({
+      success: true,
+      message: 'Evento actualizado exitosamente',
+      data: {
+        id: eventId,
+        title: updatedEvent.eventData.title,
+        description: updatedEvent.eventData.description,
+        eventDate: updatedEvent.eventData.eventDate,
+        eventEndDate: updatedEvent.eventData.eventEndDate,
+        location: updatedEvent.eventData.location,
+        maxAttendees: updatedEvent.eventData.maxAttendees,
+        requiresConfirmation: updatedEvent.eventData.requiresConfirmation,
+        status: updatedEvent.eventData.status,
+        updatedAt: updatedEvent.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando evento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando evento',
+      error: error.message
+    });
+  }
+});
+
 // Eliminar evento (admin)
 app.delete('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -26481,6 +26883,112 @@ app.delete('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req,
     res.status(500).json({
       success: false,
       message: 'Error eliminando evento',
+      error: error.message
+    });
+  }
+});
+
+// Marcar/desmarcar evento como banner (admin)
+app.patch('/api/admin/events/:eventId/banner', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { 
+      isBanner, 
+      section = 'home',        // 'home', 'communities', 'marketplace', etc.
+      order = 1,               // Orden de aparición
+      duration = 5,            // Duración en carrusel (segundos)
+      publishNow = true        // Si se publica inmediatamente o no
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (typeof isBanner !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'El campo isBanner debe ser un booleano'
+      });
+    }
+
+    const eventDoc = await db.collection('posts').doc(eventId).get();
+
+    if (!eventDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Evento no encontrado'
+      });
+    }
+
+    const eventPost = eventDoc.data();
+
+    if (eventPost.postType !== 'event') {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta publicación no es un evento'
+      });
+    }
+
+    // Si se está marcando como banner, verificar que el evento no esté cancelado
+    if (isBanner && eventPost.eventData?.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede marcar como banner un evento cancelado'
+      });
+    }
+
+    // Preparar datos de actualización
+    const updateData = {
+      'eventData.isBanner': isBanner,
+      'eventData.bannerUpdatedAt': new Date(),
+      'eventData.bannerUpdatedBy': req.user.uid,
+      updatedAt: new Date()
+    };
+
+    // Si se está marcando como banner, agregar configuración
+    if (isBanner) {
+      updateData['eventData.bannerSection'] = section;
+      updateData['eventData.bannerOrder'] = parseInt(order);
+      updateData['eventData.bannerDuration'] = parseInt(duration);
+      
+      // Si publishNow es true, se publica inmediatamente
+      // Si es false, se puede configurar una fecha específica de publicación
+      if (publishNow) {
+        updateData['eventData.bannerPublishedAt'] = new Date();
+      }
+    }
+
+    // Actualizar estado de banner
+    await db.collection('posts').doc(eventId).update(updateData);
+
+    console.log(`✅ [ADMIN] Evento ${eventId} ${isBanner ? 'marcado' : 'desmarcado'} como banner`);
+    if (isBanner) {
+      console.log(`   - Sección: ${section}, Orden: ${order}, Duración: ${duration}s`);
+    }
+
+    res.json({
+      success: true,
+      message: isBanner ? 'Evento marcado como banner' : 'Banner removido del evento',
+      data: {
+        eventId,
+        isBanner,
+        ...(isBanner && {
+          section,
+          order,
+          duration,
+          publishedAt: publishNow ? new Date() : null
+        })
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando banner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando estado de banner',
       error: error.message
     });
   }

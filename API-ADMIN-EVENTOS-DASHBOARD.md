@@ -57,6 +57,7 @@ GET /api/admin/events?status=upcoming&sortBy=attendees&order=desc&page=1&limit=2
         "longitude": -78.4678
       },
       "status": "upcoming",
+      "isBanner": true,
       
       "attendeeCount": 15,
       "checkedInCount": 0,
@@ -226,7 +227,95 @@ PATCH /api/admin/events/:eventId/cancel
 
 ---
 
-### 4. Eliminar Evento Permanentemente
+### 4. Editar Evento
+
+```http
+PUT /api/admin/events/:eventId
+```
+
+**Descripción:** Permite al administrador editar los detalles de un evento existente.
+
+**Body:** (todos los campos son opcionales, solo envía los que quieres actualizar)
+```json
+{
+  "title": "Nuevo título del evento",
+  "description": "Nueva descripción",
+  "eventDate": "2026-03-25T10:00:00Z",
+  "eventEndDate": "2026-03-25T12:00:00Z",
+  "location": {
+    "name": "Nuevo Centro Comunitario",
+    "address": "Calle Nueva 789",
+    "city": "Ciudad de México",
+    "latitude": -0.1807,
+    "longitude": -78.4678
+  },
+  "maxAttendees": 50,
+  "requiresConfirmation": true,
+  "status": "active"
+}
+```
+
+**Campos Editables:**
+
+| Campo | Tipo | Descripción | Validación |
+|-------|------|-------------|------------|
+| title | string | Título del evento | Mínimo 3 caracteres |
+| description | string | Descripción del evento | - |
+| eventDate | string (ISO) | Fecha y hora del evento | Debe ser fecha válida |
+| eventEndDate | string (ISO) | Fecha y hora de fin | Debe ser fecha válida o null |
+| location | object | Ubicación del evento | - |
+| maxAttendees | number/null | Cupo máximo | Debe ser ≥ asistentes actuales |
+| requiresConfirmation | boolean | Si requiere confirmación | - |
+| status | string | Estado del evento | 'active', 'cancelled', 'completed' |
+
+**Response Success:**
+```json
+{
+  "success": true,
+  "message": "Evento actualizado exitosamente",
+  "data": {
+    "id": "event_123",
+    "title": "Nuevo título del evento",
+    "description": "Nueva descripción",
+    "eventDate": "2026-03-25T10:00:00Z",
+    "eventEndDate": "2026-03-25T12:00:00Z",
+    "location": {
+      "name": "Nuevo Centro Comunitario",
+      "address": "Calle Nueva 789",
+      "city": "Ciudad de México"
+    },
+    "maxAttendees": 50,
+    "requiresConfirmation": true,
+    "status": "active",
+    "updatedAt": "2026-02-05T16:30:00Z"
+  }
+}
+```
+
+**Response Error (Validación):**
+```json
+{
+  "success": false,
+  "message": "No puedes reducir el límite a 20 porque ya hay 25 asistentes confirmados"
+}
+```
+
+**Response Error (Estado Inválido):**
+```json
+{
+  "success": false,
+  "message": "Estado inválido. Debe ser: active, cancelled, completed"
+}
+```
+
+**Notas Importantes:**
+- ⚠️ Solo puedes reducir `maxAttendees` si el nuevo valor es mayor o igual a los asistentes confirmados actuales
+- 📅 Si cambias la fecha del evento, los asistentes NO son notificados automáticamente
+- 🚫 Si cambias el status a 'cancelled', considera usar el endpoint de cancelación que envía notificaciones
+
+---
+
+### 5. Eliminar Evento Permanentemente
 
 ```http
 DELETE /api/admin/events/:eventId
@@ -244,7 +333,60 @@ DELETE /api/admin/events/:eventId
 
 ---
 
-### 5. Estadísticas Generales de Eventos
+### 6. Marcar/Desmarcar Evento como Banner
+
+```http
+PATCH /api/admin/events/:eventId/banner
+```
+
+**Descripción:** Marca o desmarca un evento para que aparezca como banner destacado en la aplicación móvil.
+
+**Body:**
+```json
+{
+  "isBanner": true
+}
+```
+
+**Características:**
+- Los eventos marcados como banner aparecen en una sección destacada del app
+- Solo eventos futuros y no cancelados se muestran como banner
+- Los usuarios solo ven banners de sus comunidades
+- Los banners se ordenan por fecha del evento (más próximo primero)
+
+**Response Success:**
+```json
+{
+  "success": true,
+  "message": "Evento marcado como banner",
+  "data": {
+    "eventId": "event_123",
+    "isBanner": true
+  }
+}
+```
+
+**Response Error (Evento Cancelado):**
+```json
+{
+  "success": false,
+  "message": "No se puede marcar como banner un evento cancelado"
+}
+```
+
+**Response Error (Tipo Inválido):**
+```json
+{
+  "success": false,
+  "message": "El campo isBanner debe ser un booleano"
+}
+```
+
+**Ver:** `API-BANNERS-EVENTOS.md` para documentación completa del sistema de banners.
+
+---
+
+### 7. Estadísticas Generales de Eventos
 
 ```http
 GET /api/admin/events/stats/summary
@@ -585,14 +727,24 @@ curl -X GET "https://mumpabackend.vercel.app/api/admin/events/stats/summary" \
   -H "Authorization: Bearer {ADMIN_TOKEN}"
 ```
 
+### Test de Banner
+```bash
+curl -X PATCH "https://mumpabackend.vercel.app/api/admin/events/EVENT_ID/banner" \
+  -H "Authorization: Bearer {ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"isBanner": true}'
+```
+
 ---
 
 ## 📋 Checklist de Implementación
 
 - [x] Endpoint de listado con filtros
 - [x] Endpoint de detalle completo
+- [x] Endpoint de edición de eventos
 - [x] Endpoint de cancelación con notificaciones
 - [x] Endpoint de eliminación
+- [x] Endpoint de marcar/desmarcar banner
 - [x] Endpoint de estadísticas
 - [x] Métricas calculadas automáticamente
 - [x] Paginación implementada
@@ -610,6 +762,7 @@ curl -X GET "https://mumpabackend.vercel.app/api/admin/events/stats/summary" \
 - [ ] Edición de eventos desde dashboard
 - [ ] Bulk actions (cancelar múltiples eventos)
 - [ ] Plantillas de eventos
+- [ ] Prioridad de banners (orden personalizado)
 
 ---
 
@@ -618,6 +771,7 @@ curl -X GET "https://mumpabackend.vercel.app/api/admin/events/stats/summary" \
 **Documentación Relacionada:**
 - `API-EVENTOS-COMUNIDAD.md` - API de eventos para usuarios
 - `EVENTOS-FUNCIONALIDADES-AVANZADAS.md` - Funcionalidades avanzadas
+- `API-BANNERS-EVENTOS.md` - Sistema de banners destacados
 - `RESUMEN-EVENTOS-COMUNIDAD.md` - Guía de uso
 
 **Código Fuente:**
