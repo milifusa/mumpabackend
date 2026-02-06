@@ -26674,6 +26674,8 @@ app.put('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, re
     const { 
       title, 
       description, 
+      content,              // NUEVO: contenido del post
+      imageUrl,             // NUEVO: imagen del post
       eventDate, 
       eventEndDate, 
       location,
@@ -26712,7 +26714,16 @@ app.put('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, re
       updatedAt: new Date()
     };
 
-    // Actualizar solo los campos que se proporcionan
+    // Actualizar campos del post (nivel superior)
+    if (content !== undefined) {
+      updateData['content'] = content.trim();
+    }
+
+    if (imageUrl !== undefined) {
+      updateData['imageUrl'] = imageUrl || null;
+    }
+
+    // Actualizar solo los campos de eventData que se proporcionan
     if (title !== undefined) {
       if (!title || title.trim().length < 3) {
         return res.status(400).json({
@@ -26816,25 +26827,140 @@ app.put('/api/admin/events/:eventId', authenticateToken, isAdmin, async (req, re
 
     console.log(`✅ [ADMIN] Evento ${eventId} actualizado por admin ${req.user.uid}`);
 
-    // Obtener el evento actualizado
+    // Obtener el evento actualizado completo (como el GET /api/admin/events/:eventId)
     const updatedEventDoc = await db.collection('posts').doc(eventId).get();
-    const updatedEvent = updatedEventDoc.data();
+    const updatedEventPost = updatedEventDoc.data();
+
+    // Obtener datos del autor
+    let authorData = { displayName: 'Usuario Desconocido' };
+    try {
+      const authorDoc = await db.collection('users').doc(updatedEventPost.authorId).get();
+      if (authorDoc.exists) {
+        const data = authorDoc.data();
+        authorData = {
+          id: updatedEventPost.authorId,
+          displayName: data.displayName || data.name || 'Usuario',
+          email: data.email || null,
+          photoUrl: data.photoUrl || null
+        };
+      }
+    } catch (error) {
+      console.warn(`⚠️ [ADMIN] Error obteniendo autor:`, error.message);
+    }
+
+    // Obtener datos de la comunidad
+    let communityData = { name: 'Comunidad' };
+    try {
+      const communityDoc = await db.collection('communities').doc(updatedEventPost.communityId).get();
+      if (communityDoc.exists) {
+        const data = communityDoc.data();
+        communityData = {
+          id: updatedEventPost.communityId,
+          name: data.name || 'Comunidad',
+          imageUrl: data.imageUrl || null,
+          memberCount: data.members?.length || 0
+        };
+      }
+    } catch (error) {
+      console.warn(`⚠️ [ADMIN] Error obteniendo comunidad:`, error.message);
+    }
+
+    // Obtener lista detallada de asistentes
+    const attendeeIds = updatedEventPost.eventData.attendees || [];
+    const attendeesList = [];
+    
+    for (const attendeeId of attendeeIds) {
+      try {
+        const attendeeDoc = await db.collection('users').doc(attendeeId).get();
+        if (attendeeDoc.exists) {
+          const data = attendeeDoc.data();
+          const checkedIn = (updatedEventPost.eventData.checkedInAttendees || []).includes(attendeeId);
+          const checkInTime = updatedEventPost.eventData.checkInTimes?.[attendeeId] || null;
+          
+          attendeesList.push({
+            userId: attendeeId,
+            userName: data.displayName || data.name || 'Usuario',
+            userEmail: data.email || null,
+            userPhoto: data.photoUrl || null,
+            checkedIn,
+            checkInTime
+          });
+        }
+      } catch (error) {
+        console.warn(`⚠️ [ADMIN] Error obteniendo asistente ${attendeeId}:`, error.message);
+      }
+    }
+
+    // Obtener lista de espera
+    const waitlistIds = updatedEventPost.eventData.waitlist || [];
+    const waitlistList = [];
+    
+    for (const userId of waitlistIds) {
+      try {
+        const userDoc = await db.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          const data = userDoc.data();
+          waitlistList.push({
+            userId: userId,
+            userName: data.displayName || data.name || 'Usuario',
+            userEmail: data.email || null,
+            userPhoto: data.photoUrl || null
+          });
+        }
+      } catch (error) {
+        console.warn(`⚠️ [ADMIN] Error obteniendo usuario en espera ${userId}:`, error.message);
+      }
+    }
+
+    // Construir respuesta completa (igual que GET /api/admin/events/:eventId)
+    const response = {
+      id: eventId,
+      postType: updatedEventPost.postType,
+      content: updatedEventPost.content,
+      imageUrl: updatedEventPost.imageUrl || null,
+      
+      eventData: {
+        title: updatedEventPost.eventData.title,
+        description: updatedEventPost.eventData.description || '',
+        eventDate: updatedEventPost.eventData.eventDate,
+        eventEndDate: updatedEventPost.eventData.eventEndDate || null,
+        location: updatedEventPost.eventData.location || null,
+        status: updatedEventPost.eventData.status,
+        isBanner: updatedEventPost.eventData.isBanner || false,
+        bannerUpdatedAt: updatedEventPost.eventData.bannerUpdatedAt || null,
+        maxAttendees: updatedEventPost.eventData.maxAttendees || null,
+        checkInCode: updatedEventPost.eventData.checkInCode || null,
+        requiresConfirmation: updatedEventPost.eventData.requiresConfirmation || false
+      },
+      
+      author: authorData,
+      community: communityData,
+      
+      attendees: attendeesList,
+      waitlist: waitlistList,
+      
+      metrics: {
+        attendeeCount: attendeesList.length,
+        checkedInCount: attendeesList.filter(a => a.checkedIn).length,
+        waitlistCount: waitlistList.length,
+        attendanceRate: attendeesList.length > 0 
+          ? Math.round((attendeesList.filter(a => a.checkedIn).length / attendeesList.length) * 100)
+          : 0,
+        likeCount: updatedEventPost.likeCount || 0,
+        commentCount: updatedEventPost.commentCount || 0
+      },
+      
+      dates: {
+        createdAt: updatedEventPost.createdAt,
+        updatedAt: updatedEventPost.updatedAt,
+        publishedAt: updatedEventPost.publishedAt || updatedEventPost.createdAt
+      }
+    };
 
     res.json({
       success: true,
       message: 'Evento actualizado exitosamente',
-      data: {
-        id: eventId,
-        title: updatedEvent.eventData.title,
-        description: updatedEvent.eventData.description,
-        eventDate: updatedEvent.eventData.eventDate,
-        eventEndDate: updatedEvent.eventData.eventEndDate,
-        location: updatedEvent.eventData.location,
-        maxAttendees: updatedEvent.eventData.maxAttendees,
-        requiresConfirmation: updatedEvent.eventData.requiresConfirmation,
-        status: updatedEvent.eventData.status,
-        updatedAt: updatedEvent.updatedAt
-      }
+      data: response
     });
 
   } catch (error) {

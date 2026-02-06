@@ -239,7 +239,9 @@ PUT /api/admin/events/:eventId
 ```json
 {
   "title": "Nuevo título del evento",
-  "description": "Nueva descripción",
+  "description": "Nueva descripción del evento",
+  "content": "Contenido del post actualizado",
+  "imageUrl": "https://storage.googleapis.com/.../nueva-imagen.jpg",
   "eventDate": "2026-03-25T10:00:00Z",
   "eventEndDate": "2026-03-25T12:00:00Z",
   "location": {
@@ -261,6 +263,8 @@ PUT /api/admin/events/:eventId
 |-------|------|-------------|------------|
 | title | string | Título del evento | Mínimo 3 caracteres |
 | description | string | Descripción del evento | - |
+| content | string | Contenido del post | - |
+| imageUrl | string/null | URL de la imagen del evento | - |
 | eventDate | string (ISO) | Fecha y hora del evento | Debe ser fecha válida |
 | eventEndDate | string (ISO) | Fecha y hora de fin | Debe ser fecha válida o null |
 | location | object | Ubicación del evento | - |
@@ -268,26 +272,65 @@ PUT /api/admin/events/:eventId
 | requiresConfirmation | boolean | Si requiere confirmación | - |
 | status | string | Estado del evento | 'active', 'cancelled', 'completed' |
 
-**Response Success:**
+**Response Success (Formato Completo):**
 ```json
 {
   "success": true,
   "message": "Evento actualizado exitosamente",
   "data": {
     "id": "event_123",
-    "title": "Nuevo título del evento",
-    "description": "Nueva descripción",
-    "eventDate": "2026-03-25T10:00:00Z",
-    "eventEndDate": "2026-03-25T12:00:00Z",
-    "location": {
-      "name": "Nuevo Centro Comunitario",
-      "address": "Calle Nueva 789",
-      "city": "Ciudad de México"
+    "postType": "event",
+    "content": "Contenido del post actualizado",
+    "imageUrl": "https://storage.googleapis.com/.../nueva-imagen.jpg",
+    
+    "eventData": {
+      "title": "Nuevo título del evento",
+      "description": "Nueva descripción del evento",
+      "eventDate": "2026-03-25T10:00:00Z",
+      "eventEndDate": "2026-03-25T12:00:00Z",
+      "location": {
+        "name": "Nuevo Centro Comunitario",
+        "address": "Calle Nueva 789",
+        "city": "Ciudad de México"
+      },
+      "status": "active",
+      "isBanner": false,
+      "maxAttendees": 50,
+      "checkInCode": "ABC12345",
+      "requiresConfirmation": true
     },
-    "maxAttendees": 50,
-    "requiresConfirmation": true,
-    "status": "active",
-    "updatedAt": "2026-02-05T16:30:00Z"
+    
+    "author": {
+      "id": "user_abc",
+      "displayName": "Dra. María",
+      "email": "maria@example.com",
+      "photoUrl": "https://..."
+    },
+    
+    "community": {
+      "id": "comm_xyz",
+      "name": "Mamás Primerizas",
+      "imageUrl": "https://...",
+      "memberCount": 150
+    },
+    
+    "attendees": [...],
+    "waitlist": [...],
+    
+    "metrics": {
+      "attendeeCount": 25,
+      "checkedInCount": 12,
+      "waitlistCount": 5,
+      "attendanceRate": 48,
+      "likeCount": 42,
+      "commentCount": 8
+    },
+    
+    "dates": {
+      "createdAt": "2026-02-01T10:00:00Z",
+      "updatedAt": "2026-02-05T16:30:00Z",
+      "publishedAt": "2026-02-01T10:00:00Z"
+    }
   }
 }
 ```
@@ -312,6 +355,8 @@ PUT /api/admin/events/:eventId
 - ⚠️ Solo puedes reducir `maxAttendees` si el nuevo valor es mayor o igual a los asistentes confirmados actuales
 - 📅 Si cambias la fecha del evento, los asistentes NO son notificados automáticamente
 - 🚫 Si cambias el status a 'cancelled', considera usar el endpoint de cancelación que envía notificaciones
+- 🖼️ **NUEVO**: Ahora puedes actualizar `imageUrl` y `content` del post
+- 📊 **Respuesta completa**: El endpoint devuelve toda la información del evento (igual que GET)
 
 ---
 
