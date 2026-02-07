@@ -36733,7 +36733,8 @@ app.post('/api/admin/milestones/categories', authenticateToken, isAdmin, async (
       description,
       icon,
       color,
-      order = 999
+      order = 999,
+      isActive = true
     } = req.body;
 
     if (!db) {
@@ -36769,6 +36770,7 @@ app.post('/api/admin/milestones/categories', authenticateToken, isAdmin, async (
       icon: icon || '📋',
       color: color || '#2196F3',
       order: parseInt(order) || 999,
+      isActive: isActive !== undefined ? isActive : true,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
@@ -36823,6 +36825,7 @@ app.get('/api/admin/milestones/categories', authenticateToken, isAdmin, async (r
         icon: data.icon || '📋',
         color: data.color || '#2196F3',
         order: data.order || 999,
+        isActive: data.isActive !== undefined ? data.isActive : true,
         createdAt: data.createdAt?.toDate()?.toISOString() || null,
         updatedAt: data.updatedAt?.toDate()?.toISOString() || null
       });
@@ -36873,6 +36876,7 @@ app.get('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdm
       icon: data.icon || '📋',
       color: data.color || '#2196F3',
       order: data.order || 999,
+      isActive: data.isActive !== undefined ? data.isActive : true,
       createdAt: data.createdAt?.toDate()?.toISOString() || null,
       updatedAt: data.updatedAt?.toDate()?.toISOString() || null
     };
@@ -36901,7 +36905,8 @@ app.put('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdm
       description,
       icon,
       color,
-      order
+      order,
+      isActive
     } = req.body;
 
     if (!db) {
@@ -36943,6 +36948,7 @@ app.put('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdm
     if (icon !== undefined) updateData.icon = icon;
     if (color !== undefined) updateData.color = color;
     if (order !== undefined) updateData.order = parseInt(order);
+    if (isActive !== undefined) updateData.isActive = isActive;
 
     await db.collection('milestoneCategories').doc(categoryId).update(updateData);
 
@@ -36962,6 +36968,7 @@ app.put('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdm
         icon: updatedData.icon || '📋',
         color: updatedData.color || '#2196F3',
         order: updatedData.order || 999,
+        isActive: updatedData.isActive !== undefined ? updatedData.isActive : true,
         createdAt: updatedData.createdAt?.toDate()?.toISOString() || null,
         updatedAt: updatedData.updatedAt?.toDate()?.toISOString() || null
       }
@@ -37356,6 +37363,7 @@ app.get('/api/milestones/categories', async (req, res) => {
     }
 
     const snapshot = await db.collection('milestoneCategories')
+      .where('isActive', '==', true)
       .orderBy('order', 'asc')
       .orderBy('name', 'asc')
       .get();
