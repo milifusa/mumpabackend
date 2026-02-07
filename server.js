@@ -18990,6 +18990,135 @@ app.get('/api/communities/posts/top', authenticateToken, async (req, res) => {
   }
 });
 
+// Obtener un post/evento específico por ID
+app.get('/api/posts/:postId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que el usuario es miembro de la comunidad
+    const communityDoc = await db.collection('communities').doc(postData.communityId).get();
+    
+    if (!communityDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Comunidad no encontrada'
+      });
+    }
+
+    const communityData = communityDoc.data();
+    if (!communityData.members || !communityData.members.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes ser miembro de la comunidad para ver esta publicación'
+      });
+    }
+
+    // Obtener información del autor
+    let authorName = 'Usuario';
+    let authorPhotoUrl = null;
+    try {
+      const authorDoc = await db.collection('users').doc(postData.authorId).get();
+      if (authorDoc.exists) {
+        const authorData = authorDoc.data();
+        authorName = authorData.displayName || authorData.name || 'Usuario';
+        authorPhotoUrl = authorData.photoUrl || null;
+      }
+    } catch (error) {
+      console.warn('⚠️ [POST] Error obteniendo autor:', error.message);
+    }
+
+    // Construir respuesta base
+    const response = {
+      id: postId,
+      content: postData.content,
+      imageUrl: postData.imageUrl || null,
+      authorId: postData.authorId,
+      authorName: authorName,
+      authorPhotoUrl: authorPhotoUrl,
+      communityId: postData.communityId,
+      communityName: communityData.name,
+      postType: postData.postType || 'normal',
+      attachedLists: postData.attachedLists || [],
+      isPinned: postData.isPinned || false,
+      likes: postData.likes || [],
+      likeCount: postData.likeCount || 0,
+      commentCount: postData.commentCount || 0,
+      isLiked: postData.likes && postData.likes.includes(uid),
+      createdAt: postData.createdAt,
+      updatedAt: postData.updatedAt
+    };
+
+    // Si es un evento, agregar datos del evento
+    if (postData.postType === 'event' && postData.eventData) {
+      response.eventData = {
+        title: postData.eventData.title,
+        description: postData.eventData.description || '',
+        eventDate: postData.eventData.eventDate,
+        eventEndDate: postData.eventData.eventEndDate || null,
+        location: postData.eventData.location || null,
+        status: postData.eventData.status,
+        maxAttendees: postData.eventData.maxAttendees || null,
+        requiresConfirmation: postData.eventData.requiresConfirmation || false,
+        
+        // Información de asistencia
+        attendees: postData.eventData.attendees || [],
+        attendeeCount: postData.eventData.attendeeCount || 0,
+        waitlist: postData.eventData.waitlist || [],
+        waitlistCount: postData.eventData.waitlistCount || 0,
+        
+        // Check-in
+        checkInCode: postData.eventData.checkInCode || null,
+        checkedInAttendees: postData.eventData.checkedInAttendees || [],
+        checkedInCount: postData.eventData.checkedInCount || 0,
+        
+        // Estado del usuario
+        isUserAttending: (postData.eventData.attendees || []).includes(uid),
+        isUserInWaitlist: (postData.eventData.waitlist || []).includes(uid),
+        isUserCheckedIn: (postData.eventData.checkedInAttendees || []).includes(uid),
+        isUserOrganizer: postData.authorId === uid,
+        
+        // Banner
+        isBanner: postData.eventData.isBanner || false
+      };
+    }
+
+    console.log(`✅ [POST] Post ${postId} obtenido por usuario ${uid}`);
+
+    res.json({
+      success: true,
+      data: response
+    });
+
+  } catch (error) {
+    console.error('❌ [POST] Error obteniendo post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo publicación',
+      error: error.message
+    });
+  }
+});
+
 // Endpoint para dar like a una publicación
 app.post('/api/posts/:postId/like', authenticateToken, async (req, res) => {
   try {
