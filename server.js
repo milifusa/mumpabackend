@@ -37643,7 +37643,8 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
 
     res.json({
       success: true,
-      data: {
+      data: milestonesWithProgress,
+      metadata: {
         childAge: {
           months: ageMonths,
           displayAge: `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
@@ -37652,7 +37653,6 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
           min: minAge,
           max: maxAge
         },
-        milestones: milestonesWithProgress,
         summary: {
           total: milestonesWithProgress.length,
           completed: completedCount,
