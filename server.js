@@ -418,6 +418,8 @@ const authenticateToken = async (req, res, next) => {
           role: decoded.role
         };
         console.log('✅ [AUTH] req.user configurado desde JWT:', req.user);
+        
+        // Actualizar deviceInfo si está disponible (admin no necesita)
         next();
         return;
       } catch (jwtError) {
@@ -438,6 +440,10 @@ const authenticateToken = async (req, res, next) => {
             
             req.user = { uid: payload.uid };
             console.log('✅ [AUTH] req.user configurado:', req.user);
+            
+            // Actualizar deviceInfo en background
+            updateDeviceInfoAsync(req);
+            
             next();
             return;
           }
@@ -453,6 +459,10 @@ const authenticateToken = async (req, res, next) => {
       
       req.user = decodedIdToken;
       console.log('✅ [AUTH] req.user configurado:', req.user);
+      
+      // Actualizar deviceInfo en background
+      updateDeviceInfoAsync(req);
+      
       next();
       
     } catch (idTokenError) {
@@ -469,6 +479,41 @@ const authenticateToken = async (req, res, next) => {
       message: 'Token inválido o expirado'
     });
   }
+};
+
+// Función helper para actualizar deviceInfo en background
+const updateDeviceInfoAsync = (req) => {
+  if (!req.user || !req.user.uid || !req.deviceInfo || !db) {
+    return;
+  }
+
+  const hasDeviceInfo = req.deviceInfo.appVersion || req.deviceInfo.platform;
+  if (!hasDeviceInfo) {
+    return;
+  }
+
+  setImmediate(async () => {
+    try {
+      const deviceInfoToSave = {
+        appVersion: req.deviceInfo.appVersion,
+        platform: req.deviceInfo.platform,
+        buildNumber: req.deviceInfo.buildNumber,
+        deviceModel: req.deviceInfo.deviceModel,
+        osVersion: req.deviceInfo.osVersion,
+        userAgent: req.deviceInfo.userAgent,
+        lastUpdated: new Date()
+      };
+
+      await db.collection('users').doc(req.user.uid).update({
+        deviceInfo: deviceInfoToSave,
+        lastDeviceUpdate: new Date()
+      });
+
+      console.log(`📱 [AUTO] Device info actualizado para ${req.user.uid}: ${deviceInfoToSave.platform} v${deviceInfoToSave.appVersion}`);
+    } catch (error) {
+      console.error('⚠️ [AUTO] Error actualizando device info:', error.message);
+    }
+  });
 };
 
 const setupFirebase = () => {
@@ -2700,54 +2745,6 @@ const isAdmin = async (req, res, next) => {
       message: 'Error verificando permisos de administrador'
     });
   }
-};
-
-// Middleware para actualizar automáticamente deviceInfo si está disponible
-const updateDeviceInfo = async (req, res, next) => {
-  // Solo continuar si hay usuario autenticado y deviceInfo
-  if (!req.user || !req.user.uid || !req.deviceInfo) {
-    return next();
-  }
-
-  // Solo actualizar si hay información útil
-  const hasDeviceInfo = req.deviceInfo.appVersion || req.deviceInfo.platform;
-  if (!hasDeviceInfo || !db) {
-    return next();
-  }
-
-  try {
-    const { uid } = req.user;
-    
-    // Actualizar deviceInfo de manera silenciosa (no bloqueante)
-    setImmediate(async () => {
-      try {
-        const deviceInfoToSave = {
-          appVersion: req.deviceInfo.appVersion,
-          platform: req.deviceInfo.platform,
-          buildNumber: req.deviceInfo.buildNumber,
-          deviceModel: req.deviceInfo.deviceModel,
-          osVersion: req.deviceInfo.osVersion,
-          userAgent: req.deviceInfo.userAgent,
-          lastUpdated: new Date()
-        };
-
-        await db.collection('users').doc(uid).update({
-          deviceInfo: deviceInfoToSave,
-          lastDeviceUpdate: new Date()
-        });
-
-        console.log(`📱 [AUTO] Device info actualizado para ${uid}: ${deviceInfoToSave.platform} v${deviceInfoToSave.appVersion}`);
-      } catch (error) {
-        // Log error pero no fallar la request
-        console.error('⚠️ [AUTO] Error actualizando device info:', error.message);
-      }
-    });
-  } catch (error) {
-    // No fallar la request si hay error
-    console.error('⚠️ [AUTO] Error en updateDeviceInfo:', error.message);
-  }
-
-  next();
 };
 
 // ========== ESTADÍSTICAS GENERALES ==========
