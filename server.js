@@ -38410,7 +38410,7 @@ Devuelve SOLO el JSON, sin texto adicional.`;
         }
       ],
       temperature: 0.8,
-      max_tokens: 3000
+      max_tokens: 4500
     });
 
     const responseText = completion.choices[0]?.message?.content;
