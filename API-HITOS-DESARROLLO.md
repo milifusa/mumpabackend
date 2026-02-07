@@ -2,11 +2,32 @@
 
 ## 📋 Descripción
 
-Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo infantil. Los hitos están organizados por rangos de edad (meses) y categorías de desarrollo.
+Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo infantil. Los hitos están organizados por rangos de edad (meses) y categorías de desarrollo personalizables desde el admin.
 
 ---
 
 ## 🗂️ Estructura de Datos
+
+### Colección: `milestoneCategories` (Categorías de Hitos)
+
+```javascript
+{
+  id: "category_123",
+  
+  // Información básica
+  name: "Social y Emocional",
+  description: "Interacción con otros, emociones y desarrollo social",
+  
+  // Configuración visual
+  icon: "👥",                    // Emoji o icono
+  color: "#4CAF50",              // Color hexadecimal
+  order: 1,                       // Orden de visualización
+  
+  // Metadata
+  createdAt: Timestamp,
+  updatedAt: Timestamp
+}
+```
 
 ### Colección: `milestones` (Hitos)
 
@@ -19,20 +40,20 @@ Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo 
   description: "El bebé comienza a sonreír en respuesta a estímulos sociales",
   
   // Organización
-  category: "social",           // social, motor-grueso, motor-fino, lenguaje, cognitivo
+  category: "Social y Emocional",  // Nombre de la categoría (de milestoneCategories)
   ageRangeMonths: {
-    min: 0,                      // Edad mínima en meses
-    max: 3                       // Edad máxima en meses
+    min: 0,                         // Edad mínima en meses
+    max: 3                          // Edad máxima en meses
   },
   
   // Configuración
-  order: 1,                      // Orden dentro de la categoría
-  isActive: true,                // Si está activo
+  order: 1,                         // Orden dentro de la categoría
+  isActive: true,                   // Si está activo
   
   // Recursos (opcional)
   tips: "Háblale y sonríele frecuentemente al bebé",
-  videoUrl: "https://...",       // URL de video explicativo (opcional)
-  imageUrl: "https://...",       // URL de imagen (opcional)
+  videoUrl: "https://...",          // URL de video explicativo (opcional)
+  imageUrl: "https://...",          // URL de imagen (opcional)
   
   // Metadata
   createdAt: Timestamp,
@@ -93,7 +114,177 @@ Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo 
 
 ## 🔐 Endpoints Admin
 
-### 1. Crear Hito
+### 📁 Gestión de Categorías
+
+#### 1. Crear Categoría
+
+```http
+POST /api/admin/milestones/categories
+Authorization: Bearer {admin_token}
+```
+
+**Body:**
+```json
+{
+  "name": "Social y Emocional",
+  "description": "Interacción con otros, emociones y desarrollo social",
+  "icon": "👥",
+  "color": "#4CAF50",
+  "order": 1
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Categoría creada exitosamente",
+  "data": {
+    "id": "category_123",
+    "name": "Social y Emocional",
+    "description": "Interacción con otros, emociones y desarrollo social",
+    "icon": "👥",
+    "color": "#4CAF50",
+    "order": 1,
+    "createdAt": "2026-02-07T10:00:00Z",
+    "updatedAt": "2026-02-07T10:00:00Z"
+  }
+}
+```
+
+---
+
+#### 2. Listar Categorías (Admin)
+
+```http
+GET /api/admin/milestones/categories
+Authorization: Bearer {admin_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "category_1",
+      "name": "Social y Emocional",
+      "description": "Interacción con otros, emociones y desarrollo social",
+      "icon": "👥",
+      "color": "#4CAF50",
+      "order": 1,
+      "createdAt": "2026-02-07T10:00:00Z",
+      "updatedAt": "2026-02-07T10:00:00Z"
+    },
+    {
+      "id": "category_2",
+      "name": "Motor Grueso",
+      "description": "Movimientos grandes del cuerpo",
+      "icon": "🏃",
+      "color": "#2196F3",
+      "order": 2,
+      "createdAt": "2026-02-07T10:00:00Z",
+      "updatedAt": "2026-02-07T10:00:00Z"
+    }
+  ],
+  "total": 2
+}
+```
+
+---
+
+#### 3. Obtener Detalle de Categoría
+
+```http
+GET /api/admin/milestones/categories/:categoryId
+Authorization: Bearer {admin_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "category_123",
+    "name": "Social y Emocional",
+    "description": "Interacción con otros, emociones y desarrollo social",
+    "icon": "👥",
+    "color": "#4CAF50",
+    "order": 1,
+    "createdAt": "2026-02-07T10:00:00Z",
+    "updatedAt": "2026-02-07T10:00:00Z"
+  }
+}
+```
+
+---
+
+#### 4. Actualizar Categoría
+
+```http
+PUT /api/admin/milestones/categories/:categoryId
+Authorization: Bearer {admin_token}
+```
+
+**Body:**
+```json
+{
+  "name": "Social y Emocional (actualizado)",
+  "description": "Nueva descripción",
+  "icon": "😊",
+  "color": "#4CAF50",
+  "order": 1
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Categoría actualizada exitosamente",
+  "data": {
+    "id": "category_123",
+    "name": "Social y Emocional (actualizado)",
+    "description": "Nueva descripción",
+    "icon": "😊",
+    "color": "#4CAF50",
+    "order": 1,
+    "createdAt": "2026-02-07T10:00:00Z",
+    "updatedAt": "2026-02-07T10:30:00Z"
+  }
+}
+```
+
+---
+
+#### 5. Eliminar Categoría
+
+```http
+DELETE /api/admin/milestones/categories/:categoryId
+Authorization: Bearer {admin_token}
+```
+
+**Response (Éxito):**
+```json
+{
+  "success": true,
+  "message": "Categoría eliminada exitosamente"
+}
+```
+
+**Response (Error - tiene hitos asociados):**
+```json
+{
+  "success": false,
+  "message": "No se puede eliminar la categoría porque tiene hitos asociados"
+}
+```
+
+---
+
+### 🎯 Gestión de Hitos
+
+#### 6. Crear Hito
 
 ```http
 POST /api/admin/milestones
@@ -105,7 +296,7 @@ Authorization: Bearer {admin_token}
 {
   "title": "Sonríe a las personas",
   "description": "El bebé comienza a sonreír en respuesta a estímulos sociales",
-  "category": "social",
+  "category": "Social y Emocional",
   "ageRangeMonths": {
     "min": 0,
     "max": 3
@@ -126,7 +317,7 @@ Authorization: Bearer {admin_token}
   "data": {
     "id": "milestone_123",
     "title": "Sonríe a las personas",
-    "category": "social",
+    "category": "Social y Emocional",
     "ageRangeMonths": { "min": 0, "max": 3 },
     "createdAt": "2026-02-05T10:00:00Z"
   }
@@ -135,7 +326,7 @@ Authorization: Bearer {admin_token}
 
 ---
 
-### 2. Listar Todos los Hitos (Admin)
+#### 7. Listar Todos los Hitos (Admin)
 
 ```http
 GET /api/admin/milestones
@@ -184,7 +375,7 @@ GET /api/admin/milestones?category=social&ageMin=0&ageMax=6
 
 ---
 
-### 3. Obtener Hito Específico (Admin)
+### 8. Obtener Hito Específico (Admin)
 
 ```http
 GET /api/admin/milestones/:milestoneId
@@ -216,7 +407,7 @@ Authorization: Bearer {admin_token}
 
 ---
 
-### 4. Actualizar Hito
+### 9. Actualizar Hito
 
 ```http
 PUT /api/admin/milestones/:milestoneId
@@ -238,7 +429,7 @@ Authorization: Bearer {admin_token}
 
 ---
 
-### 5. Eliminar Hito
+### 10. Eliminar Hito
 
 ```http
 DELETE /api/admin/milestones/:milestoneId
@@ -247,7 +438,7 @@ Authorization: Bearer {admin_token}
 
 ---
 
-### 6. Estadísticas de Hitos (Admin)
+### 11. Estadísticas de Hitos (Admin)
 
 ```http
 GET /api/admin/milestones/stats/summary

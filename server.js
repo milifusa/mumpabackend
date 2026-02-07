@@ -36722,83 +36722,116 @@ app.delete('/api/professionals/me/packages/:packageId', authenticateToken, async
 // ============================================================================
 
 // ==========================================
-// ADMIN - Gestión de Hitos
+// ADMIN - Gestión de Categorías de Hitos
 // ==========================================
 
-// Función helper para obtener categorías
-const getMilestoneCategories = () => {
-  return [
-    {
-      id: 'social',
-      name: 'Social y Emocional',
-      description: 'Interacción con otros, emociones y desarrollo social',
-      icon: '👥',
-      color: '#4CAF50',
-      order: 1
-    },
-    {
-      id: 'motor-grueso',
-      name: 'Motor Grueso',
-      description: 'Movimientos grandes del cuerpo (gatear, caminar, correr)',
-      icon: '🏃',
-      color: '#2196F3',
-      order: 2
-    },
-    {
-      id: 'motor-fino',
-      name: 'Motor Fino',
-      description: 'Movimientos pequeños y precisos (agarrar, pinza)',
-      icon: '✋',
-      color: '#FF9800',
-      order: 3
-    },
-    {
-      id: 'lenguaje',
-      name: 'Lenguaje y Comunicación',
-      description: 'Habla, comprensión y comunicación',
-      icon: '💬',
-      color: '#9C27B0',
-      order: 4
-    },
-    {
-      id: 'cognitivo',
-      name: 'Cognitivo',
-      description: 'Pensamiento, aprendizaje y resolución de problemas',
-      icon: '🧠',
-      color: '#F44336',
-      order: 5
-    }
-  ];
-};
-
-// Obtener categorías de hitos (Admin) - GET
-app.get('/api/admin/milestones/categories', authenticateToken, isAdmin, async (req, res) => {
-  try {
-    const categories = getMilestoneCategories();
-
-    res.json({
-      success: true,
-      data: categories
-    });
-
-  } catch (error) {
-    console.error('❌ [MILESTONES] Error obteniendo categorías:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error obteniendo categorías',
-      error: error.message
-    });
-  }
-});
-
-// Obtener categorías de hitos (Admin) - POST (por compatibilidad)
+// Crear categoría (Admin)
 app.post('/api/admin/milestones/categories', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const categories = getMilestoneCategories();
+    const {
+      name,
+      description,
+      icon,
+      color,
+      order = 999
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Validaciones
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre de la categoría es requerido'
+      });
+    }
+
+    // Verificar si ya existe una categoría con ese nombre
+    const existingCategory = await db.collection('milestoneCategories')
+      .where('name', '==', name.trim())
+      .get();
+
+    if (!existingCategory.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya existe una categoría con ese nombre'
+      });
+    }
+
+    const categoryData = {
+      name: name.trim(),
+      description: description?.trim() || '',
+      icon: icon || '📋',
+      color: color || '#2196F3',
+      order: parseInt(order) || 999,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const docRef = await db.collection('milestoneCategories').add(categoryData);
+
+    console.log(`✅ [MILESTONES] Categoría creada: ${docRef.id}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Categoría creada exitosamente',
+      data: {
+        id: docRef.id,
+        ...categoryData,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error creando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Listar categorías (Admin)
+app.get('/api/admin/milestones/categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('milestoneCategories')
+      .orderBy('order', 'asc')
+      .orderBy('name', 'asc')
+      .get();
+
+    const categories = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      categories.push({
+        id: doc.id,
+        name: data.name,
+        description: data.description || '',
+        icon: data.icon || '📋',
+        color: data.color || '#2196F3',
+        order: data.order || 999,
+        createdAt: data.createdAt?.toDate()?.toISOString() || null,
+        updatedAt: data.updatedAt?.toDate()?.toISOString() || null
+      });
+    });
 
     res.json({
       success: true,
-      data: categories
+      data: categories,
+      total: categories.length
     });
 
   } catch (error) {
@@ -36810,6 +36843,197 @@ app.post('/api/admin/milestones/categories', authenticateToken, isAdmin, async (
     });
   }
 });
+
+// Obtener detalle de categoría (Admin)
+app.get('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const doc = await db.collection('milestoneCategories').doc(categoryId).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    const data = doc.data();
+    const category = {
+      id: doc.id,
+      name: data.name,
+      description: data.description || '',
+      icon: data.icon || '📋',
+      color: data.color || '#2196F3',
+      order: data.order || 999,
+      createdAt: data.createdAt?.toDate()?.toISOString() || null,
+      updatedAt: data.updatedAt?.toDate()?.toISOString() || null
+    };
+
+    res.json({
+      success: true,
+      data: category
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categoría',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar categoría (Admin)
+app.put('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const {
+      name,
+      description,
+      icon,
+      color,
+      order
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const doc = await db.collection('milestoneCategories').doc(categoryId).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    // Si se está cambiando el nombre, verificar que no exista otra con ese nombre
+    if (name && name.trim() !== doc.data().name) {
+      const existingCategory = await db.collection('milestoneCategories')
+        .where('name', '==', name.trim())
+        .get();
+
+      if (!existingCategory.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'Ya existe una categoría con ese nombre'
+        });
+      }
+    }
+
+    const updateData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (name !== undefined) updateData.name = name.trim();
+    if (description !== undefined) updateData.description = description.trim();
+    if (icon !== undefined) updateData.icon = icon;
+    if (color !== undefined) updateData.color = color;
+    if (order !== undefined) updateData.order = parseInt(order);
+
+    await db.collection('milestoneCategories').doc(categoryId).update(updateData);
+
+    console.log(`✅ [MILESTONES] Categoría actualizada: ${categoryId}`);
+
+    // Obtener datos actualizados
+    const updatedDoc = await db.collection('milestoneCategories').doc(categoryId).get();
+    const updatedData = updatedDoc.data();
+
+    res.json({
+      success: true,
+      message: 'Categoría actualizada exitosamente',
+      data: {
+        id: categoryId,
+        name: updatedData.name,
+        description: updatedData.description || '',
+        icon: updatedData.icon || '📋',
+        color: updatedData.color || '#2196F3',
+        order: updatedData.order || 999,
+        createdAt: updatedData.createdAt?.toDate()?.toISOString() || null,
+        updatedAt: updatedData.updatedAt?.toDate()?.toISOString() || null
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error actualizando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando categoría',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar categoría (Admin)
+app.delete('/api/admin/milestones/categories/:categoryId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const doc = await db.collection('milestoneCategories').doc(categoryId).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Categoría no encontrada'
+      });
+    }
+
+    // Verificar si hay hitos usando esta categoría
+    const categoryName = doc.data().name;
+    const milestonesUsingCategory = await db.collection('milestones')
+      .where('category', '==', categoryName)
+      .limit(1)
+      .get();
+
+    if (!milestonesUsingCategory.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar la categoría porque tiene hitos asociados'
+      });
+    }
+
+    await db.collection('milestoneCategories').doc(categoryId).delete();
+
+    console.log(`✅ [MILESTONES] Categoría eliminada: ${categoryId}`);
+
+    res.json({
+      success: true,
+      message: 'Categoría eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error eliminando categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando categoría',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// ADMIN - Gestión de Hitos
+// ==========================================
 
 // Crear hito (Admin)
 app.post('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) => {
@@ -37124,52 +37348,35 @@ app.delete('/api/admin/milestones/:milestoneId', authenticateToken, isAdmin, asy
 // Obtener categorías de hitos (público)
 app.get('/api/milestones/categories', async (req, res) => {
   try {
-    const categories = [
-      {
-        id: 'social',
-        name: 'Social y Emocional',
-        description: 'Interacción con otros, emociones y desarrollo social',
-        icon: '👥',
-        color: '#4CAF50',
-        order: 1
-      },
-      {
-        id: 'motor-grueso',
-        name: 'Motor Grueso',
-        description: 'Movimientos grandes del cuerpo (gatear, caminar, correr)',
-        icon: '🏃',
-        color: '#2196F3',
-        order: 2
-      },
-      {
-        id: 'motor-fino',
-        name: 'Motor Fino',
-        description: 'Movimientos pequeños y precisos (agarrar, pinza)',
-        icon: '✋',
-        color: '#FF9800',
-        order: 3
-      },
-      {
-        id: 'lenguaje',
-        name: 'Lenguaje y Comunicación',
-        description: 'Habla, comprensión y comunicación',
-        icon: '💬',
-        color: '#9C27B0',
-        order: 4
-      },
-      {
-        id: 'cognitivo',
-        name: 'Cognitivo',
-        description: 'Pensamiento, aprendizaje y resolución de problemas',
-        icon: '🧠',
-        color: '#F44336',
-        order: 5
-      }
-    ];
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const snapshot = await db.collection('milestoneCategories')
+      .orderBy('order', 'asc')
+      .orderBy('name', 'asc')
+      .get();
+
+    const categories = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      categories.push({
+        id: doc.id,
+        name: data.name,
+        description: data.description || '',
+        icon: data.icon || '📋',
+        color: data.color || '#2196F3',
+        order: data.order || 999
+      });
+    });
 
     res.json({
       success: true,
-      data: categories
+      data: categories,
+      total: categories.length
     });
 
   } catch (error) {
