@@ -37621,6 +37621,9 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     const now = new Date();
     const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
 
+    console.log(`[MILESTONES] Edad del niño: ${ageMonths} meses`);
+    console.log(`[MILESTONES] Fecha nacimiento: ${birthDate}`);
+
     // Obtener hitos
     let query = db.collection('milestones').where('isActive', '==', true);
 
@@ -37629,10 +37632,22 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     }
 
     const milestonesSnapshot = await query.get();
+    console.log(`[MILESTONES] Total hitos activos en BD: ${milestonesSnapshot.size}`);
+    
     let milestones = milestonesSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     }));
+
+    // Log de algunos hitos para ver su estructura
+    if (milestones.length > 0) {
+      console.log(`[MILESTONES] Ejemplo de hito:`, JSON.stringify({
+        id: milestones[0].id,
+        ageMonthsMin: milestones[0].ageMonthsMin,
+        ageMonthsMax: milestones[0].ageMonthsMax,
+        categoryId: milestones[0].categoryId
+      }));
+    }
 
     // Filtrar por rango de edad con buffer
     const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
@@ -37641,7 +37656,11 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     console.log(`[MILESTONES] Filtro edad - ageMonths: ${ageMonths}, buffer: ${ageBuffer}, minAge: ${minAge}, maxAge: ${maxAge}`);
 
     milestones = milestones.filter(m => {
-      return m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
+      const passes = m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
+      if (!passes && milestones.length < 10) {
+        console.log(`[MILESTONES] Hito rechazado: ${m.id}, edad: ${m.ageMonthsMin}-${m.ageMonthsMax}`);
+      }
+      return passes;
     });
 
     console.log(`[MILESTONES] Hitos filtrados por edad: ${milestones.length}`);
