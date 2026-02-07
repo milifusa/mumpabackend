@@ -37167,8 +37167,9 @@ app.post('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =
     const {
       title,
       description,
-      category,
-      ageRangeMonths,
+      categoryId,
+      ageMonthsMin,
+      ageMonthsMax,
       order = 999,
       tips,
       videoUrl,
@@ -37191,36 +37192,35 @@ app.post('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =
       });
     }
 
-    if (!category) {
+    if (!categoryId) {
       return res.status(400).json({
         success: false,
-        message: 'La categoría es requerida'
+        message: 'El ID de categoría es requerido'
       });
     }
 
-    const validCategories = ['social', 'motor-grueso', 'motor-fino', 'lenguaje', 'cognitivo'];
-    if (!validCategories.includes(category)) {
+    // Verificar que la categoría existe
+    const categoryDoc = await db.collection('milestoneCategories').doc(categoryId).get();
+    if (!categoryDoc.exists) {
       return res.status(400).json({
         success: false,
-        message: `Categoría inválida. Debe ser: ${validCategories.join(', ')}`
+        message: 'La categoría especificada no existe'
       });
     }
 
-    if (!ageRangeMonths || typeof ageRangeMonths.min !== 'number' || typeof ageRangeMonths.max !== 'number') {
+    if (ageMonthsMin === undefined || ageMonthsMax === undefined) {
       return res.status(400).json({
         success: false,
-        message: 'El rango de edad es requerido (min y max en meses)'
+        message: 'El rango de edad es requerido (ageMonthsMin y ageMonthsMax)'
       });
     }
 
     const milestoneData = {
       title: title.trim(),
       description: description?.trim() || '',
-      category,
-      ageRangeMonths: {
-        min: parseInt(ageRangeMonths.min),
-        max: parseInt(ageRangeMonths.max)
-      },
+      categoryId,
+      ageMonthsMin: parseInt(ageMonthsMin),
+      ageMonthsMax: parseInt(ageMonthsMax),
       order: parseInt(order),
       tips: tips?.trim() || '',
       videoUrl: videoUrl || null,
@@ -37277,15 +37277,15 @@ app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =>
 
     // Filtros
     if (category) {
-      query = query.where('category', '==', category);
+      query = query.where('categoryId', '==', category);
     }
 
     if (includeInactive !== 'true') {
       query = query.where('isActive', '==', true);
     }
 
-    query = query.orderBy('ageRangeMonths.min', 'asc')
-                 .orderBy('category', 'asc')
+    query = query.orderBy('ageMonthsMin', 'asc')
+                 .orderBy('categoryId', 'asc')
                  .orderBy('order', 'asc');
 
     const snapshot = await query.get();
@@ -37295,8 +37295,9 @@ app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =>
         id: doc.id,
         title: data.title,
         description: data.description || '',
-        category: data.category,
-        ageRangeMonths: data.ageRangeMonths,
+        categoryId: data.categoryId,
+        ageMonthsMin: data.ageMonthsMin,
+        ageMonthsMax: data.ageMonthsMax,
         order: data.order || 999,
         isActive: data.isActive !== undefined ? data.isActive : true,
         tips: data.tips || '',
@@ -37311,8 +37312,8 @@ app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =>
     // Filtrar por rango de edad si se especifica
     if (ageMin !== undefined || ageMax !== undefined) {
       milestones = milestones.filter(m => {
-        const matchesMin = ageMin === undefined || m.ageRangeMonths.max >= parseInt(ageMin);
-        const matchesMax = ageMax === undefined || m.ageRangeMonths.min <= parseInt(ageMax);
+        const matchesMin = ageMin === undefined || m.ageMonthsMax >= parseInt(ageMin);
+        const matchesMax = ageMax === undefined || m.ageMonthsMin <= parseInt(ageMax);
         return matchesMin && matchesMax;
       });
     }
@@ -37586,16 +37587,16 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     const maxAge = ageMonths + parseInt(ageBuffer);
 
     milestones = milestones.filter(m => {
-      return m.ageRangeMonths.max >= minAge && m.ageRangeMonths.min <= maxAge;
+      return m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
     });
 
     // Ordenar
     milestones.sort((a, b) => {
-      if (a.ageRangeMonths.min !== b.ageRangeMonths.min) {
-        return a.ageRangeMonths.min - b.ageRangeMonths.min;
+      if (a.ageMonthsMin !== b.ageMonthsMin) {
+        return a.ageMonthsMin - b.ageMonthsMin;
       }
-      if (a.category !== b.category) {
-        return a.category.localeCompare(b.category);
+      if (a.categoryId !== b.categoryId) {
+        return a.categoryId.localeCompare(b.categoryId);
       }
       return a.order - b.order;
     });
@@ -37711,7 +37712,7 @@ app.get('/api/children/:childId/milestones/by-category', authenticateToken, asyn
     const maxAge = ageMonths + parseInt(ageBuffer);
 
     milestones = milestones.filter(m => {
-      return m.ageRangeMonths.max >= minAge && m.ageRangeMonths.min <= maxAge;
+      return m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
     });
 
     // Obtener progreso
@@ -37991,7 +37992,7 @@ app.get('/api/children/:childId/milestones/progress-report', authenticateToken, 
 
     // Filtrar relevantes para la edad (con buffer amplio)
     milestones = milestones.filter(m => {
-      return m.ageRangeMonths.max >= (ageMonths - 6) && m.ageRangeMonths.min <= (ageMonths + 12);
+      return m.ageMonthsMax >= (ageMonths - 6) && m.ageMonthsMin <= (ageMonths + 12);
     });
 
     // Obtener progreso
@@ -38012,7 +38013,7 @@ app.get('/api/children/:childId/milestones/progress-report', authenticateToken, 
         completedMilestones.push({
           milestoneId: data.milestoneId,
           title: milestone.title,
-          category: milestone.category,
+          categoryId: milestone.categoryId,
           completedAt: data.completedAt,
           ageAtCompletion: Math.floor((data.completedAt.toDate() - birthDate) / (1000 * 60 * 60 * 24 * 30.44))
         });
@@ -38051,14 +38052,14 @@ app.get('/api/children/:childId/milestones/progress-report', authenticateToken, 
     // Próximos hitos (no completados, edad apropiada)
     const upcomingMilestones = milestones
       .filter(m => !progressMap[m.id]?.completed)
-      .filter(m => m.ageRangeMonths.min <= (ageMonths + 3))
-      .sort((a, b) => a.ageRangeMonths.min - b.ageRangeMonths.min)
+      .filter(m => m.ageMonthsMin <= (ageMonths + 3))
+      .sort((a, b) => a.ageMonthsMin - b.ageMonthsMin)
       .slice(0, 5)
       .map(m => ({
         milestoneId: m.id,
         title: m.title,
-        category: m.category,
-        expectedAge: `${m.ageRangeMonths.min}-${m.ageRangeMonths.max} meses`
+        categoryId: m.categoryId,
+        expectedAge: `${m.ageMonthsMin}-${m.ageMonthsMax} meses`
       }));
 
     res.json({
