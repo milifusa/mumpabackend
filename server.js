@@ -13238,12 +13238,20 @@ app.post('/api/faq/moms', authenticateToken, async (req, res) => {
         });
       }
       const childData = childDoc.data();
-      if (childData.parentId !== userId) {
+      
+      // Verificar si el usuario es el padre o tiene acceso compartido
+      const isParent = childData.parentId === userId;
+      const hasSharedAccess = childData.sharedWith && 
+        Array.isArray(childData.sharedWith) && 
+        childData.sharedWith.includes(userId);
+      
+      if (!isParent && !hasSharedAccess) {
         return res.status(403).json({
           success: false,
           message: 'No tienes permisos para acceder a este hijo'
         });
       }
+      
       childName = childData.name || null;
       pregnant = Boolean(childData.isUnborn);
       if (!pregnant) {
@@ -38238,7 +38246,13 @@ app.get('/api/children/:childId/nutrition/recipes', authenticateToken, async (re
 
     const childData = childDoc.data();
 
-    if (childData.parentId !== uid) {
+    // Verificar si el usuario es el padre o tiene acceso compartido
+    const isParent = childData.parentId === uid;
+    const hasSharedAccess = childData.sharedWith && 
+      Array.isArray(childData.sharedWith) && 
+      childData.sharedWith.includes(uid);
+
+    if (!isParent && !hasSharedAccess) {
       return res.status(403).json({
         success: false,
         message: 'No tienes permiso para acceder a este niño'
