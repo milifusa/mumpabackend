@@ -36718,6 +36718,891 @@ app.delete('/api/professionals/me/packages/:packageId', authenticateToken, async
 
 
 // ============================================================================
+// 📊 HITOS DEL DESARROLLO INFANTIL
+// ============================================================================
+
+// ==========================================
+// ADMIN - Gestión de Hitos
+// ==========================================
+
+// Crear hito (Admin)
+app.post('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      category,
+      ageRangeMonths,
+      order = 999,
+      tips,
+      videoUrl,
+      imageUrl,
+      isActive = true
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Validaciones
+    if (!title || title.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'El título debe tener al menos 3 caracteres'
+      });
+    }
+
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría es requerida'
+      });
+    }
+
+    const validCategories = ['social', 'motor-grueso', 'motor-fino', 'lenguaje', 'cognitivo'];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: `Categoría inválida. Debe ser: ${validCategories.join(', ')}`
+      });
+    }
+
+    if (!ageRangeMonths || typeof ageRangeMonths.min !== 'number' || typeof ageRangeMonths.max !== 'number') {
+      return res.status(400).json({
+        success: false,
+        message: 'El rango de edad es requerido (min y max en meses)'
+      });
+    }
+
+    const milestoneData = {
+      title: title.trim(),
+      description: description?.trim() || '',
+      category,
+      ageRangeMonths: {
+        min: parseInt(ageRangeMonths.min),
+        max: parseInt(ageRangeMonths.max)
+      },
+      order: parseInt(order),
+      tips: tips?.trim() || '',
+      videoUrl: videoUrl || null,
+      imageUrl: imageUrl || null,
+      isActive: Boolean(isActive),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      createdBy: req.user.uid
+    };
+
+    const milestoneRef = await db.collection('milestones').add(milestoneData);
+
+    console.log(`✅ [MILESTONES] Hito creado: ${milestoneRef.id}`);
+
+    res.json({
+      success: true,
+      message: 'Hito creado exitosamente',
+      data: {
+        id: milestoneRef.id,
+        ...milestoneData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error creando hito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando hito',
+      error: error.message
+    });
+  }
+});
+
+// Listar hitos (Admin)
+app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      category,
+      ageMin,
+      ageMax,
+      includeInactive = 'false',
+      page = 1,
+      limit = 100
+    } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    let query = db.collection('milestones');
+
+    // Filtros
+    if (category) {
+      query = query.where('category', '==', category);
+    }
+
+    if (includeInactive !== 'true') {
+      query = query.where('isActive', '==', true);
+    }
+
+    query = query.orderBy('ageRangeMonths.min', 'asc')
+                 .orderBy('category', 'asc')
+                 .orderBy('order', 'asc');
+
+    const snapshot = await query.get();
+    let milestones = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar por rango de edad si se especifica
+    if (ageMin !== undefined || ageMax !== undefined) {
+      milestones = milestones.filter(m => {
+        const matchesMin = ageMin === undefined || m.ageRangeMonths.max >= parseInt(ageMin);
+        const matchesMax = ageMax === undefined || m.ageRangeMonths.min <= parseInt(ageMax);
+        return matchesMin && matchesMax;
+      });
+    }
+
+    // Paginación
+    const total = milestones.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedMilestones = milestones.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedMilestones,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo hitos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo hitos',
+      error: error.message
+    });
+  }
+});
+
+// Obtener hito específico (Admin)
+app.get('/api/admin/milestones/:milestoneId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { milestoneId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const milestoneDoc = await db.collection('milestones').doc(milestoneId).get();
+
+    if (!milestoneDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hito no encontrado'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: milestoneDoc.id,
+        ...milestoneDoc.data()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo hito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo hito',
+      error: error.message
+    });
+  }
+});
+
+// Actualizar hito (Admin)
+app.put('/api/admin/milestones/:milestoneId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { milestoneId } = req.params;
+    const updateData = { ...req.body, updatedAt: new Date() };
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const milestoneDoc = await db.collection('milestones').doc(milestoneId).get();
+
+    if (!milestoneDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hito no encontrado'
+      });
+    }
+
+    // Validar categoría si se actualiza
+    if (updateData.category) {
+      const validCategories = ['social', 'motor-grueso', 'motor-fino', 'lenguaje', 'cognitivo'];
+      if (!validCategories.includes(updateData.category)) {
+        return res.status(400).json({
+          success: false,
+          message: `Categoría inválida. Debe ser: ${validCategories.join(', ')}`
+        });
+      }
+    }
+
+    await db.collection('milestones').doc(milestoneId).update(updateData);
+
+    const updatedDoc = await db.collection('milestones').doc(milestoneId).get();
+
+    console.log(`✅ [MILESTONES] Hito actualizado: ${milestoneId}`);
+
+    res.json({
+      success: true,
+      message: 'Hito actualizado exitosamente',
+      data: {
+        id: milestoneId,
+        ...updatedDoc.data()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error actualizando hito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando hito',
+      error: error.message
+    });
+  }
+});
+
+// Eliminar hito (Admin)
+app.delete('/api/admin/milestones/:milestoneId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { milestoneId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const milestoneDoc = await db.collection('milestones').doc(milestoneId).get();
+
+    if (!milestoneDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hito no encontrado'
+      });
+    }
+
+    await db.collection('milestones').doc(milestoneId).delete();
+
+    console.log(`✅ [MILESTONES] Hito eliminado: ${milestoneId}`);
+
+    res.json({
+      success: true,
+      message: 'Hito eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error eliminando hito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando hito',
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// APP - Hitos para Usuarios
+// ==========================================
+
+// Obtener hitos por edad del niño
+app.get('/api/children/:childId/milestones', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { category, ageBuffer = 3 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el niño pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    if (childData.parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para acceder a este niño'
+      });
+    }
+
+    // Calcular edad del niño en meses
+    const birthDate = childData.birthDate.toDate();
+    const now = new Date();
+    const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+
+    // Obtener hitos
+    let query = db.collection('milestones').where('isActive', '==', true);
+
+    if (category) {
+      query = query.where('category', '==', category);
+    }
+
+    const milestonesSnapshot = await query.get();
+    let milestones = milestonesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar por rango de edad con buffer
+    const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
+    const maxAge = ageMonths + parseInt(ageBuffer);
+
+    milestones = milestones.filter(m => {
+      return m.ageRangeMonths.max >= minAge && m.ageRangeMonths.min <= maxAge;
+    });
+
+    // Ordenar
+    milestones.sort((a, b) => {
+      if (a.ageRangeMonths.min !== b.ageRangeMonths.min) {
+        return a.ageRangeMonths.min - b.ageRangeMonths.min;
+      }
+      if (a.category !== b.category) {
+        return a.category.localeCompare(b.category);
+      }
+      return a.order - b.order;
+    });
+
+    // Obtener progreso del niño
+    const progressSnapshot = await db.collection('children').doc(childId)
+      .collection('milestoneProgress')
+      .get();
+
+    const progressMap = {};
+    progressSnapshot.docs.forEach(doc => {
+      const data = doc.data();
+      progressMap[data.milestoneId] = {
+        completed: data.completed,
+        completedAt: data.completedAt,
+        notes: data.notes || null
+      };
+    });
+
+    // Agregar estado de completado a cada hito
+    const milestonesWithProgress = milestones.map(m => ({
+      ...m,
+      completed: progressMap[m.id]?.completed || false,
+      completedAt: progressMap[m.id]?.completedAt || null,
+      notes: progressMap[m.id]?.notes || null
+    }));
+
+    // Calcular estadísticas
+    const completedCount = milestonesWithProgress.filter(m => m.completed).length;
+
+    res.json({
+      success: true,
+      data: {
+        childAge: {
+          months: ageMonths,
+          displayAge: `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+        },
+        ageRange: {
+          min: minAge,
+          max: maxAge
+        },
+        milestones: milestonesWithProgress,
+        summary: {
+          total: milestonesWithProgress.length,
+          completed: completedCount,
+          completionRate: milestonesWithProgress.length > 0 
+            ? Math.round((completedCount / milestonesWithProgress.length) * 100)
+            : 0
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo hitos del niño:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo hitos',
+      error: error.message
+    });
+  }
+});
+
+// Obtener hitos agrupados por categoría
+app.get('/api/children/:childId/milestones/by-category', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { ageBuffer = 3 } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el niño pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    if (childData.parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    // Calcular edad
+    const birthDate = childData.birthDate.toDate();
+    const now = new Date();
+    const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+
+    // Obtener hitos
+    const milestonesSnapshot = await db.collection('milestones')
+      .where('isActive', '==', true)
+      .get();
+
+    let milestones = milestonesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar por edad
+    const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
+    const maxAge = ageMonths + parseInt(ageBuffer);
+
+    milestones = milestones.filter(m => {
+      return m.ageRangeMonths.max >= minAge && m.ageRangeMonths.min <= maxAge;
+    });
+
+    // Obtener progreso
+    const progressSnapshot = await db.collection('children').doc(childId)
+      .collection('milestoneProgress')
+      .get();
+
+    const progressMap = {};
+    progressSnapshot.docs.forEach(doc => {
+      const data = doc.data();
+      progressMap[data.milestoneId] = {
+        completed: data.completed,
+        completedAt: data.completedAt,
+        notes: data.notes || null
+      };
+    });
+
+    // Agrupar por categoría
+    const categoryInfo = {
+      'social': { name: 'Social y Emocional', icon: '👥', color: '#4CAF50' },
+      'motor-grueso': { name: 'Motor Grueso', icon: '🏃', color: '#2196F3' },
+      'motor-fino': { name: 'Motor Fino', icon: '✋', color: '#FF9800' },
+      'lenguaje': { name: 'Lenguaje y Comunicación', icon: '💬', color: '#9C27B0' },
+      'cognitivo': { name: 'Cognitivo', icon: '🧠', color: '#F44336' }
+    };
+
+    const categorized = {};
+    
+    milestones.forEach(m => {
+      if (!categorized[m.category]) {
+        categorized[m.category] = [];
+      }
+      categorized[m.category].push({
+        ...m,
+        completed: progressMap[m.id]?.completed || false,
+        completedAt: progressMap[m.id]?.completedAt || null,
+        notes: progressMap[m.id]?.notes || null
+      });
+    });
+
+    // Crear array de categorías con estadísticas
+    const categories = Object.keys(categorized).map(cat => {
+      const items = categorized[cat];
+      const completedCount = items.filter(i => i.completed).length;
+      
+      return {
+        category: cat,
+        categoryName: categoryInfo[cat]?.name || cat,
+        icon: categoryInfo[cat]?.icon || '📝',
+        color: categoryInfo[cat]?.color || '#757575',
+        milestones: items.sort((a, b) => a.order - b.order),
+        stats: {
+          total: items.length,
+          completed: completedCount,
+          completionRate: items.length > 0 
+            ? Math.round((completedCount / items.length) * 100)
+            : 0
+        }
+      };
+    });
+
+    // Calcular estadísticas generales
+    const totalMilestones = milestones.length;
+    const totalCompleted = Object.values(progressMap).filter(p => p.completed).length;
+
+    res.json({
+      success: true,
+      data: {
+        childAge: {
+          months: ageMonths,
+          displayAge: `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+        },
+        categories,
+        overall: {
+          total: totalMilestones,
+          completed: totalCompleted,
+          completionRate: totalMilestones > 0 
+            ? Math.round((totalCompleted / totalMilestones) * 100)
+            : 0
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo hitos por categoría:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo hitos',
+      error: error.message
+    });
+  }
+});
+
+// Marcar hito como completado
+app.post('/api/children/:childId/milestones/:milestoneId/complete', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, milestoneId } = req.params;
+    const { notes = '' } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar permisos
+    const childDoc = await db.collection('children').doc(childId).get();
+
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    // Verificar que el hito existe
+    const milestoneDoc = await db.collection('milestones').doc(milestoneId).get();
+
+    if (!milestoneDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hito no encontrado'
+      });
+    }
+
+    // Buscar si ya existe un registro de progreso
+    const progressSnapshot = await db.collection('children').doc(childId)
+      .collection('milestoneProgress')
+      .where('milestoneId', '==', milestoneId)
+      .limit(1)
+      .get();
+
+    const progressData = {
+      childId,
+      milestoneId,
+      completed: true,
+      completedAt: new Date(),
+      completedBy: uid,
+      notes: notes.trim(),
+      updatedAt: new Date()
+    };
+
+    if (progressSnapshot.empty) {
+      // Crear nuevo registro
+      progressData.createdAt = new Date();
+      await db.collection('children').doc(childId)
+        .collection('milestoneProgress')
+        .add(progressData);
+    } else {
+      // Actualizar existente
+      const doc = progressSnapshot.docs[0];
+      await db.collection('children').doc(childId)
+        .collection('milestoneProgress')
+        .doc(doc.id)
+        .update(progressData);
+    }
+
+    console.log(`✅ [MILESTONES] Hito ${milestoneId} completado para niño ${childId}`);
+
+    res.json({
+      success: true,
+      message: 'Hito marcado como completado',
+      data: {
+        milestoneId,
+        completed: true,
+        completedAt: progressData.completedAt,
+        notes: progressData.notes
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error marcando hito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marcando hito',
+      error: error.message
+    });
+  }
+});
+
+// Desmarcar hito
+app.delete('/api/children/:childId/milestones/:milestoneId/complete', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, milestoneId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar permisos
+    const childDoc = await db.collection('children').doc(childId).get();
+
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    // Buscar y eliminar el registro de progreso
+    const progressSnapshot = await db.collection('children').doc(childId)
+      .collection('milestoneProgress')
+      .where('milestoneId', '==', milestoneId)
+      .limit(1)
+      .get();
+
+    if (!progressSnapshot.empty) {
+      const doc = progressSnapshot.docs[0];
+      await db.collection('children').doc(childId)
+        .collection('milestoneProgress')
+        .doc(doc.id)
+        .delete();
+    }
+
+    console.log(`✅ [MILESTONES] Hito ${milestoneId} desmarcado para niño ${childId}`);
+
+    res.json({
+      success: true,
+      message: 'Hito desmarcado'
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error desmarcando hito:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error desmarcando hito',
+      error: error.message
+    });
+  }
+});
+
+// Reporte de progreso completo
+app.get('/api/children/:childId/milestones/progress-report', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar permisos
+    const childDoc = await db.collection('children').doc(childId).get();
+
+    if (!childDoc.exists || childDoc.data().parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    // Calcular edad
+    const birthDate = childData.birthDate.toDate();
+    const now = new Date();
+    const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+
+    // Obtener todos los hitos activos
+    const milestonesSnapshot = await db.collection('milestones')
+      .where('isActive', '==', true)
+      .get();
+
+    let milestones = milestonesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Filtrar relevantes para la edad (con buffer amplio)
+    milestones = milestones.filter(m => {
+      return m.ageRangeMonths.max >= (ageMonths - 6) && m.ageRangeMonths.min <= (ageMonths + 12);
+    });
+
+    // Obtener progreso
+    const progressSnapshot = await db.collection('children').doc(childId)
+      .collection('milestoneProgress')
+      .where('completed', '==', true)
+      .get();
+
+    const progressMap = {};
+    const completedMilestones = [];
+
+    progressSnapshot.docs.forEach(doc => {
+      const data = doc.data();
+      progressMap[data.milestoneId] = data;
+      
+      const milestone = milestones.find(m => m.id === data.milestoneId);
+      if (milestone) {
+        completedMilestones.push({
+          milestoneId: data.milestoneId,
+          title: milestone.title,
+          category: milestone.category,
+          completedAt: data.completedAt,
+          ageAtCompletion: Math.floor((data.completedAt.toDate() - birthDate) / (1000 * 60 * 60 * 24 * 30.44))
+        });
+      }
+    });
+
+    // Ordenar por fecha de completado (más reciente primero)
+    completedMilestones.sort((a, b) => b.completedAt.toDate() - a.completedAt.toDate());
+
+    // Agrupar por categoría
+    const categoryInfo = {
+      'social': { name: 'Social y Emocional', icon: '👥', color: '#4CAF50' },
+      'motor-grueso': { name: 'Motor Grueso', icon: '🏃', color: '#2196F3' },
+      'motor-fino': { name: 'Motor Fino', icon: '✋', color: '#FF9800' },
+      'lenguaje': { name: 'Lenguaje y Comunicación', icon: '💬', color: '#9C27B0' },
+      'cognitivo': { name: 'Cognitivo', icon: '🧠', color: '#F44336' }
+    };
+
+    const progressByCategory = Object.keys(categoryInfo).map(cat => {
+      const categoryMilestones = milestones.filter(m => m.category === cat);
+      const completed = categoryMilestones.filter(m => progressMap[m.id]?.completed).length;
+      
+      return {
+        category: cat,
+        categoryName: categoryInfo[cat].name,
+        icon: categoryInfo[cat].icon,
+        color: categoryInfo[cat].color,
+        total: categoryMilestones.length,
+        completed,
+        completionRate: categoryMilestones.length > 0 
+          ? Math.round((completed / categoryMilestones.length) * 100)
+          : 0
+      };
+    }).filter(c => c.total > 0);
+
+    // Próximos hitos (no completados, edad apropiada)
+    const upcomingMilestones = milestones
+      .filter(m => !progressMap[m.id]?.completed)
+      .filter(m => m.ageRangeMonths.min <= (ageMonths + 3))
+      .sort((a, b) => a.ageRangeMonths.min - b.ageRangeMonths.min)
+      .slice(0, 5)
+      .map(m => ({
+        milestoneId: m.id,
+        title: m.title,
+        category: m.category,
+        expectedAge: `${m.ageRangeMonths.min}-${m.ageRangeMonths.max} meses`
+      }));
+
+    res.json({
+      success: true,
+      data: {
+        child: {
+          id: childId,
+          name: childData.name,
+          birthDate: childData.birthDate,
+          ageMonths,
+          ageDisplay: `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+        },
+        overallProgress: {
+          totalMilestones: milestones.length,
+          completed: Object.keys(progressMap).length,
+          completionRate: milestones.length > 0 
+            ? Math.round((Object.keys(progressMap).length / milestones.length) * 100)
+            : 0,
+          lastUpdated: completedMilestones.length > 0 
+            ? completedMilestones[0].completedAt
+            : null
+        },
+        progressByCategory,
+        recentlyCompleted: completedMilestones.slice(0, 5),
+        upcomingMilestones
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error generando reporte:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando reporte',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
