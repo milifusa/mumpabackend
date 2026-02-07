@@ -37284,9 +37284,8 @@ app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =>
       query = query.where('isActive', '==', true);
     }
 
-    query = query.orderBy('ageMonthsMin', 'asc')
-                 .orderBy('categoryId', 'asc')
-                 .orderBy('order', 'asc');
+    // Ordenar solo por ageMonthsMin para evitar índices compuestos complejos
+    query = query.orderBy('ageMonthsMin', 'asc');
 
     const snapshot = await query.get();
     let milestones = snapshot.docs.map(doc => {
@@ -37307,6 +37306,17 @@ app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =>
         updatedAt: data.updatedAt?.toDate()?.toISOString() || null,
         createdBy: data.createdBy || null
       };
+    });
+
+    // Ordenar en memoria por categoryId y order
+    milestones.sort((a, b) => {
+      if (a.ageMonthsMin !== b.ageMonthsMin) {
+        return a.ageMonthsMin - b.ageMonthsMin;
+      }
+      if (a.categoryId !== b.categoryId) {
+        return a.categoryId.localeCompare(b.categoryId);
+      }
+      return a.order - b.order;
     });
 
     // Filtrar por rango de edad si se especifica
