@@ -37031,9 +37031,131 @@ app.delete('/api/admin/milestones/:milestoneId', authenticateToken, isAdmin, asy
   }
 });
 
+// Obtener categorías de hitos
+app.get('/api/admin/milestones/categories', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const categories = [
+      {
+        id: 'social',
+        name: 'Social y Emocional',
+        description: 'Interacción con otros, emociones y desarrollo social',
+        icon: '👥',
+        color: '#4CAF50',
+        order: 1
+      },
+      {
+        id: 'motor-grueso',
+        name: 'Motor Grueso',
+        description: 'Movimientos grandes del cuerpo (gatear, caminar, correr)',
+        icon: '🏃',
+        color: '#2196F3',
+        order: 2
+      },
+      {
+        id: 'motor-fino',
+        name: 'Motor Fino',
+        description: 'Movimientos pequeños y precisos (agarrar, pinza)',
+        icon: '✋',
+        color: '#FF9800',
+        order: 3
+      },
+      {
+        id: 'lenguaje',
+        name: 'Lenguaje y Comunicación',
+        description: 'Habla, comprensión y comunicación',
+        icon: '💬',
+        color: '#9C27B0',
+        order: 4
+      },
+      {
+        id: 'cognitivo',
+        name: 'Cognitivo',
+        description: 'Pensamiento, aprendizaje y resolución de problemas',
+        icon: '🧠',
+        color: '#F44336',
+        order: 5
+      }
+    ];
+
+    res.json({
+      success: true,
+      data: categories
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
+
 // ==========================================
 // APP - Hitos para Usuarios
 // ==========================================
+
+// Obtener categorías de hitos (público)
+app.get('/api/milestones/categories', async (req, res) => {
+  try {
+    const categories = [
+      {
+        id: 'social',
+        name: 'Social y Emocional',
+        description: 'Interacción con otros, emociones y desarrollo social',
+        icon: '👥',
+        color: '#4CAF50',
+        order: 1
+      },
+      {
+        id: 'motor-grueso',
+        name: 'Motor Grueso',
+        description: 'Movimientos grandes del cuerpo (gatear, caminar, correr)',
+        icon: '🏃',
+        color: '#2196F3',
+        order: 2
+      },
+      {
+        id: 'motor-fino',
+        name: 'Motor Fino',
+        description: 'Movimientos pequeños y precisos (agarrar, pinza)',
+        icon: '✋',
+        color: '#FF9800',
+        order: 3
+      },
+      {
+        id: 'lenguaje',
+        name: 'Lenguaje y Comunicación',
+        description: 'Habla, comprensión y comunicación',
+        icon: '💬',
+        color: '#9C27B0',
+        order: 4
+      },
+      {
+        id: 'cognitivo',
+        name: 'Cognitivo',
+        description: 'Pensamiento, aprendizaje y resolución de problemas',
+        icon: '🧠',
+        color: '#F44336',
+        order: 5
+      }
+    ];
+
+    res.json({
+      success: true,
+      data: categories
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error obteniendo categorías:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo categorías',
+      error: error.message
+    });
+  }
+});
 
 // Obtener hitos por edad del niño
 app.get('/api/children/:childId/milestones', authenticateToken, async (req, res) => {
