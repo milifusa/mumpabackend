@@ -582,12 +582,65 @@ Automáticamente deja de aparecer en banners
 
 ## 📈 Métricas y Analytics
 
+### Rastrear Views de Banner
+
+**Endpoint:** `POST /api/banners/:id/view`
+
+**Descripción:** Incrementa el contador de vistas cuando un usuario ve un banner (evento-banner o banner general).
+
+**Request:**
+```http
+POST /api/banners/tyI7V1o87q7b1RQdh7as/view
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Vista registrada"
+}
+```
+
+**Notas:**
+- ✅ Funciona tanto para banners generales como eventos marcados como banner
+- ✅ Incrementa automáticamente el campo `bannerViews` en el evento
+- ✅ No requiere autenticación (público)
+
+---
+
+### Rastrear Clicks de Banner
+
+**Endpoint:** `POST /api/banners/:id/click`
+
+**Descripción:** Incrementa el contador de clicks cuando un usuario hace click en un banner.
+
+**Request:**
+```http
+POST /api/banners/tyI7V1o87q7b1RQdh7as/click
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Click registrado"
+}
+```
+
+**Notas:**
+- ✅ Funciona tanto para banners generales como eventos marcados como banner
+- ✅ Incrementa automáticamente el campo `bannerClicks` en el evento
+- ✅ No requiere autenticación (público)
+
+---
+
 ### Datos que puedes rastrear:
 
 1. **Eventos marcados como banner**: Contar cuántos eventos tienen `isBanner: true`
 2. **Efectividad**: Comparar asistencia antes/después de marcar como banner
 3. **Engagement**: Medir clicks en banners vs posts normales
 4. **Timing**: Ver cuánto tiempo antes del evento se marca como banner
+5. **CTR (Click-Through Rate)**: `bannerClicks / bannerViews * 100`
 
 ---
 

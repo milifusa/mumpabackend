@@ -29533,9 +29533,30 @@ app.post('/api/banners/:id/view', async (req, res) => {
       });
     }
 
-    await db.collection('banners').doc(id).update({
-      views: admin.firestore.FieldValue.increment(1)
-    });
+    // Intentar actualizar en la colección banners
+    const bannerDoc = await db.collection('banners').doc(id).get();
+    
+    if (bannerDoc.exists) {
+      // Es un banner general
+      await db.collection('banners').doc(id).update({
+        views: admin.firestore.FieldValue.increment(1)
+      });
+    } else {
+      // Puede ser un evento marcado como banner
+      const postDoc = await db.collection('posts').doc(id).get();
+      
+      if (postDoc.exists && postDoc.data().postType === 'event' && postDoc.data().eventData?.isBanner) {
+        // Es un evento-banner, actualizar las vistas del evento
+        await db.collection('posts').doc(id).update({
+          'eventData.bannerViews': admin.firestore.FieldValue.increment(1)
+        });
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Banner no encontrado'
+        });
+      }
+    }
 
     res.json({
       success: true,
@@ -29564,9 +29585,30 @@ app.post('/api/banners/:id/click', async (req, res) => {
       });
     }
 
-    await db.collection('banners').doc(id).update({
-      clicks: admin.firestore.FieldValue.increment(1)
-    });
+    // Intentar actualizar en la colección banners
+    const bannerDoc = await db.collection('banners').doc(id).get();
+    
+    if (bannerDoc.exists) {
+      // Es un banner general
+      await db.collection('banners').doc(id).update({
+        clicks: admin.firestore.FieldValue.increment(1)
+      });
+    } else {
+      // Puede ser un evento marcado como banner
+      const postDoc = await db.collection('posts').doc(id).get();
+      
+      if (postDoc.exists && postDoc.data().postType === 'event' && postDoc.data().eventData?.isBanner) {
+        // Es un evento-banner, actualizar los clicks del evento
+        await db.collection('posts').doc(id).update({
+          'eventData.bannerClicks': admin.firestore.FieldValue.increment(1)
+        });
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Banner no encontrado'
+        });
+      }
+    }
 
     res.json({
       success: true,
