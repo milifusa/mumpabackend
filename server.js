@@ -347,12 +347,13 @@ app.use((req, res, next) => {
 // Middleware para capturar información del dispositivo/app
 app.use((req, res, next) => {
   // Extraer información de headers personalizados
+  // Acepta tanto el formato con 'x-' como sin él
   const deviceInfo = {
-    appVersion: req.headers['x-app-version'] || null,
-    platform: req.headers['x-platform'] || null, // 'ios' o 'android'
-    buildNumber: req.headers['x-build-number'] || null,
-    deviceModel: req.headers['x-device-model'] || null,
-    osVersion: req.headers['x-os-version'] || null,
+    appVersion: req.headers['x-app-version'] || req.headers['appversion'] || null,
+    platform: req.headers['x-platform'] || req.headers['platform'] || null, // 'ios' o 'android'
+    buildNumber: req.headers['x-build-number'] || req.headers['buildnumber'] || null,
+    deviceModel: req.headers['x-device-model'] || req.headers['devicemodel'] || null,
+    osVersion: req.headers['x-os-version'] || req.headers['osversion'] || null,
     userAgent: req.headers['user-agent'] || null
   };
 
@@ -2699,6 +2700,54 @@ const isAdmin = async (req, res, next) => {
       message: 'Error verificando permisos de administrador'
     });
   }
+};
+
+// Middleware para actualizar automáticamente deviceInfo si está disponible
+const updateDeviceInfo = async (req, res, next) => {
+  // Solo continuar si hay usuario autenticado y deviceInfo
+  if (!req.user || !req.user.uid || !req.deviceInfo) {
+    return next();
+  }
+
+  // Solo actualizar si hay información útil
+  const hasDeviceInfo = req.deviceInfo.appVersion || req.deviceInfo.platform;
+  if (!hasDeviceInfo || !db) {
+    return next();
+  }
+
+  try {
+    const { uid } = req.user;
+    
+    // Actualizar deviceInfo de manera silenciosa (no bloqueante)
+    setImmediate(async () => {
+      try {
+        const deviceInfoToSave = {
+          appVersion: req.deviceInfo.appVersion,
+          platform: req.deviceInfo.platform,
+          buildNumber: req.deviceInfo.buildNumber,
+          deviceModel: req.deviceInfo.deviceModel,
+          osVersion: req.deviceInfo.osVersion,
+          userAgent: req.deviceInfo.userAgent,
+          lastUpdated: new Date()
+        };
+
+        await db.collection('users').doc(uid).update({
+          deviceInfo: deviceInfoToSave,
+          lastDeviceUpdate: new Date()
+        });
+
+        console.log(`📱 [AUTO] Device info actualizado para ${uid}: ${deviceInfoToSave.platform} v${deviceInfoToSave.appVersion}`);
+      } catch (error) {
+        // Log error pero no fallar la request
+        console.error('⚠️ [AUTO] Error actualizando device info:', error.message);
+      }
+    });
+  } catch (error) {
+    // No fallar la request si hay error
+    console.error('⚠️ [AUTO] Error en updateDeviceInfo:', error.message);
+  }
+
+  next();
 };
 
 // ========== ESTADÍSTICAS GENERALES ==========
