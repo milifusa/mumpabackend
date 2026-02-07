@@ -38207,6 +38207,277 @@ app.get('/api/children/:childId/milestones/progress-report', authenticateToken, 
 });
 
 // ============================================================================
+// NUTRICIÓN - RECETAS PERSONALIZADAS CON IA
+// ============================================================================
+
+// Obtener recetas personalizadas para un niño según su edad
+app.get('/api/children/:childId/nutrition/recipes', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { mealType, regenerate = 'false' } = req.query; // mealType: 'breakfast', 'lunch', 'dinner', 'all'
+
+    console.log(`🍽️ [NUTRITION] Solicitando recetas para niño: ${childId}, mealType: ${mealType || 'all'}`);
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Verificar que el niño pertenece al usuario
+    const childDoc = await db.collection('children').doc(childId).get();
+
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+
+    if (childData.parentId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para acceder a este niño'
+      });
+    }
+
+    // Calcular edad del niño
+    const birthDate = childData.birthDate.toDate();
+    const now = new Date();
+    const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+    const ageYears = Math.floor(ageMonths / 12);
+    const remainingMonths = ageMonths % 12;
+
+    console.log(`👶 [NUTRITION] Edad del niño: ${ageMonths} meses (${ageYears} años, ${remainingMonths} meses)`);
+
+    // Verificar caché (si no se solicita regenerar)
+    const shouldRegenerate = regenerate === 'true';
+    const cacheKey = `nutrition_${childId}_${mealType || 'all'}`;
+    
+    if (!shouldRegenerate) {
+      const cachedRecipes = await db.collection('nutritionCache')
+        .where('childId', '==', childId)
+        .where('mealType', '==', mealType || 'all')
+        .where('ageMonths', '==', ageMonths)
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .get();
+
+      if (!cachedRecipes.empty) {
+        const cachedData = cachedRecipes.docs[0].data();
+        const cacheAge = (now - cachedData.createdAt.toDate()) / (1000 * 60 * 60); // horas
+        
+        // Si el caché tiene menos de 24 horas, usarlo
+        if (cacheAge < 24) {
+          console.log(`✅ [NUTRITION] Usando recetas en caché (${Math.round(cacheAge)}h)`);
+          return res.json({
+            success: true,
+            data: cachedData.recipes,
+            metadata: {
+              childAge: {
+                months: ageMonths,
+                years: ageYears,
+                remainingMonths: remainingMonths,
+                displayAge: ageYears > 0 
+                  ? `${ageYears} ${ageYears === 1 ? 'año' : 'años'}${remainingMonths > 0 ? ` y ${remainingMonths} ${remainingMonths === 1 ? 'mes' : 'meses'}` : ''}`
+                  : `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+              },
+              cached: true,
+              cacheAge: Math.round(cacheAge),
+              generatedAt: cachedData.createdAt
+            }
+          });
+        }
+      }
+    }
+
+    // Verificar que OpenAI esté disponible
+    if (!openai) {
+      console.warn('⚠️ [NUTRITION] OpenAI no configurado');
+      return res.status(503).json({
+        success: false,
+        message: 'Servicio de generación de recetas no disponible',
+        error: 'OpenAI no configurado'
+      });
+    }
+
+    // Determinar qué tipo de comidas generar
+    const mealTypes = mealType && mealType !== 'all' 
+      ? [mealType] 
+      : ['breakfast', 'lunch', 'dinner'];
+
+    // Crear contexto para OpenAI según la edad
+    let ageContext = '';
+    if (ageMonths < 6) {
+      ageContext = 'Bebé menor de 6 meses (solo lactancia materna o fórmula). NO GENERAR RECETAS, solo indicar que está en periodo de lactancia exclusiva.';
+    } else if (ageMonths < 12) {
+      ageContext = `Bebé de ${ageMonths} meses en etapa de alimentación complementaria. Incluir papillas, purés suaves, alimentos machacados. Sin sal, sin azúcar, sin miel. Introducción gradual de alimentos.`;
+    } else if (ageMonths < 24) {
+      ageContext = `Niño de ${ageYears > 0 ? ageYears + ' año' + (remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : '') : ageMonths + ' meses'}. Puede comer alimentos más sólidos, texturas variadas, comida picada. Baja sal, sin azúcar añadido.`;
+    } else if (ageMonths < 36) {
+      ageContext = `Niño de ${ageYears} años${remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : ''}. Puede comer casi como adultos pero en porciones pequeñas. Comida variada, nutritiva, colorida.`;
+    } else {
+      ageContext = `Niño de ${ageYears} años${remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : ''}. Alimentación normal pero saludable. Comidas balanceadas, nutritivas, atractivas para niños.`;
+    }
+
+    const mealTypeNames = {
+      'breakfast': 'desayuno',
+      'lunch': 'almuerzo',
+      'dinner': 'cena'
+    };
+
+    console.log(`🤖 [NUTRITION] Generando recetas con OpenAI...`);
+
+    const prompt = `Eres un nutricionista pediátrico experto. Genera 2 recetas ${mealTypes.length === 1 ? 'de ' + mealTypeNames[mealTypes[0]] : 'para cada tipo de comida (desayuno, almuerzo, cena)'} apropiadas para:
+
+${ageContext}
+
+IMPORTANTE:
+- Recetas nutritivas, balanceadas y apropiadas para la edad
+- Ingredientes fáciles de conseguir
+- Preparación sencilla para padres ocupados
+- Incluir alérgenos comunes a evitar según la edad
+
+Para CADA receta, devuelve un JSON con esta estructura EXACTA:
+{
+  "recipes": [
+    {
+      "mealType": "breakfast" | "lunch" | "dinner",
+      "name": "Nombre atractivo de la receta",
+      "description": "Breve descripción (1-2 líneas)",
+      "ageAppropriate": true,
+      "prepTime": número en minutos,
+      "cookTime": número en minutos,
+      "servings": número de porciones,
+      "difficulty": "fácil" | "media" | "avanzada",
+      "ingredients": [
+        {
+          "item": "ingrediente",
+          "quantity": "cantidad con unidad"
+        }
+      ],
+      "instructions": [
+        "Paso 1 detallado",
+        "Paso 2 detallado",
+        "etc..."
+      ],
+      "nutritionalInfo": {
+        "calories": "aproximado por porción",
+        "protein": "gramos aproximados",
+        "carbs": "gramos aproximados",
+        "fat": "gramos aproximados"
+      },
+      "tips": [
+        "Consejo útil 1",
+        "Consejo útil 2"
+      ],
+      "allergens": ["posibles alérgenos presentes"]
+    }
+  ]
+}
+
+Genera ${mealTypes.length === 1 ? '2' : '6'} recetas en total (${mealTypes.length === 1 ? '2 de ' + mealTypeNames[mealTypes[0]] : '2 de cada tipo de comida'}).
+Devuelve SOLO el JSON, sin texto adicional.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un nutricionista pediátrico experto. Siempre respondes en formato JSON válido.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.8,
+      max_tokens: 3000
+    });
+
+    const responseText = completion.choices[0]?.message?.content;
+
+    if (!responseText) {
+      throw new Error('OpenAI no devolvió respuesta');
+    }
+
+    console.log(`✅ [NUTRITION] Respuesta de OpenAI recibida`);
+
+    // Parse JSON
+    let recipesData;
+    try {
+      // Limpiar la respuesta si tiene markdown
+      const cleanedResponse = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      recipesData = JSON.parse(cleanedResponse);
+    } catch (parseError) {
+      console.error('❌ [NUTRITION] Error parseando JSON:', parseError.message);
+      console.log('Raw response:', responseText.substring(0, 500));
+      throw new Error('Error procesando respuesta de IA');
+    }
+
+    if (!recipesData.recipes || !Array.isArray(recipesData.recipes)) {
+      throw new Error('Formato de respuesta inválido');
+    }
+
+    // Agregar metadata a cada receta
+    const enrichedRecipes = recipesData.recipes.map((recipe, index) => ({
+      id: `recipe_${Date.now()}_${index}`,
+      ...recipe,
+      childId,
+      ageMonths,
+      generatedAt: new Date().toISOString()
+    }));
+
+    console.log(`✅ [NUTRITION] ${enrichedRecipes.length} recetas generadas`);
+
+    // Guardar en caché
+    try {
+      await db.collection('nutritionCache').add({
+        childId,
+        mealType: mealType || 'all',
+        ageMonths,
+        recipes: enrichedRecipes,
+        createdAt: new Date()
+      });
+      console.log(`💾 [NUTRITION] Recetas guardadas en caché`);
+    } catch (cacheError) {
+      console.error('⚠️ [NUTRITION] Error guardando en caché:', cacheError.message);
+      // No fallar si el caché falla
+    }
+
+    res.json({
+      success: true,
+      data: enrichedRecipes,
+      metadata: {
+        childAge: {
+          months: ageMonths,
+          years: ageYears,
+          remainingMonths: remainingMonths,
+          displayAge: ageYears > 0 
+            ? `${ageYears} ${ageYears === 1 ? 'año' : 'años'}${remainingMonths > 0 ? ` y ${remainingMonths} ${remainingMonths === 1 ? 'mes' : 'meses'}` : ''}`
+            : `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+        },
+        cached: false,
+        generatedAt: new Date().toISOString(),
+        totalRecipes: enrichedRecipes.length
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [NUTRITION] Error generando recetas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando recetas',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
