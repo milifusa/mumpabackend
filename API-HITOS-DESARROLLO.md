@@ -2,7 +2,85 @@
 
 ## 📋 Descripción
 
-Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo infantil. Los hitos están organizados por rangos de edad (meses) y categorías de desarrollo personalizables desde el admin.
+Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo infantil de 0 a 18 años. Los hitos están organizados por edad (en meses) y categorías de desarrollo personalizables desde el admin.
+
+**Cobertura de edades:**
+- 0-12 meses: Hitos mensuales detallados
+- 1-18 años: Hitos anuales por etapas de desarrollo
+
+---
+
+## 🚀 Inicio Rápido para Frontend
+
+### 1. Obtener Categorías
+
+Primero, obtén las categorías disponibles (necesitarás los IDs para relacionar hitos):
+
+```typescript
+const response = await fetch('/api/milestones/categories');
+const { data: categories } = await response.json();
+
+// categories = [
+//   { id: "fQaVcHEBHwDYnyLtYsYO", name: "Social", icon: "👥", color: "#4CAF50" },
+//   { id: "IllBvxKzqNSINPVYYwXI", name: "Motriz", icon: "🏃", color: "#2196F3" },
+//   { id: "Z8lzzytnEN99AzEn6Si9", name: "Cognitiva", icon: "🧠", color: "#F44336" },
+//   { id: "ztdwfgdKJfxTOySUeVBr", name: "Comunicación", icon: "💬", color: "#9C27B0" }
+// ]
+```
+
+### 2. Obtener Hitos por Edad del Niño
+
+```typescript
+const childId = "child_abc";
+const response = await fetch(`/api/children/${childId}/milestones?ageBuffer=3`, {
+  headers: { 'Authorization': `Bearer ${token}` }
+});
+const { data: milestones } = await response.json();
+
+// milestones = [
+//   {
+//     id: "milestone_123",
+//     title: "Sonríe a las personas",
+//     categoryId: "fQaVcHEBHwDYnyLtYsYO",
+//     ageMonthsMin: 2,
+//     ageMonthsMax: 2,
+//     completed: false,
+//     ...
+//   }
+// ]
+```
+
+### 3. Marcar Hito como Completado
+
+```typescript
+await fetch(`/api/children/${childId}/milestones/${milestoneId}/complete`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    notes: "Lo logró a los 2 meses y medio"
+  })
+});
+```
+
+### 4. Obtener Reporte de Progreso
+
+```typescript
+const response = await fetch(`/api/children/${childId}/milestones/progress-report`, {
+  headers: { 'Authorization': `Bearer ${token}` }
+});
+const { data: report } = await response.json();
+
+// report = {
+//   byCategory: [
+//     { categoryId: "...", categoryName: "Social", total: 10, completed: 8, percentage: 80 }
+//   ],
+//   completedMilestones: [...],
+//   upcomingMilestones: [...]
+// }
+```
 
 ---
 
@@ -12,16 +90,17 @@ Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo 
 
 ```javascript
 {
-  id: "category_123",
+  id: "Z8lzzytnEN99AzEn6Si9",
   
   // Información básica
-  name: "Social y Emocional",
-  description: "Interacción con otros, emociones y desarrollo social",
+  name: "Cognitiva",
+  description: "Pensamiento, aprendizaje y resolución de problemas",
   
   // Configuración visual
-  icon: "👥",                    // Emoji o icono
-  color: "#4CAF50",              // Color hexadecimal
+  icon: "🧠",                    // Emoji o icono
+  color: "#F44336",              // Color hexadecimal
   order: 1,                       // Orden de visualización
+  isActive: true,                 // Si está activa
   
   // Metadata
   createdAt: Timestamp,
@@ -40,20 +119,18 @@ Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo 
   description: "El bebé comienza a sonreír en respuesta a estímulos sociales",
   
   // Organización
-  category: "Social y Emocional",  // Nombre de la categoría (de milestoneCategories)
-  ageRangeMonths: {
-    min: 0,                         // Edad mínima en meses
-    max: 3                          // Edad máxima en meses
-  },
+  categoryId: "fQaVcHEBHwDYnyLtYsYO",  // ID de la categoría (referencia a milestoneCategories)
+  ageMonthsMin: 2,                       // Edad mínima en meses
+  ageMonthsMax: 2,                       // Edad máxima en meses
   
   // Configuración
-  order: 1,                         // Orden dentro de la categoría
-  isActive: true,                   // Si está activo
+  order: 1,                              // Orden dentro de la categoría
+  isActive: true,                        // Si está activo
   
   // Recursos (opcional)
   tips: "Háblale y sonríele frecuentemente al bebé",
-  videoUrl: "https://...",          // URL de video explicativo (opcional)
-  imageUrl: "https://...",          // URL de imagen (opcional)
+  videoUrl: "https://...",               // URL de video explicativo (opcional)
+  imageUrl: "https://...",               // URL de imagen (opcional)
   
   // Metadata
   createdAt: Timestamp,
@@ -88,13 +165,30 @@ Sistema completo para gestionar y hacer seguimiento de los hitos del desarrollo 
 
 ## 📊 Categorías de Desarrollo
 
+Las categorías son dinámicas y se obtienen desde la base de datos. Las categorías actuales son:
+
 | Categoría | ID | Descripción | Icono |
-|-----------|-------|-------------|-------|
-| Social y Emocional | `social` | Interacción con otros, emociones | 👥 |
-| Motor Grueso | `motor-grueso` | Movimientos grandes (gatear, caminar) | 🏃 |
-| Motor Fino | `motor-fino` | Movimientos pequeños (agarrar, pinza) | ✋ |
-| Lenguaje y Comunicación | `lenguaje` | Habla, comprensión | 💬 |
-| Cognitivo | `cognitivo` | Pensamiento, aprendizaje, resolución | 🧠 |
+|-----------|-----|-------------|-------|
+| Social | `fQaVcHEBHwDYnyLtYsYO` | Interacción social y emociones | 👥 |
+| Motriz | `IllBvxKzqNSINPVYYwXI` | Movimientos corporales | 🏃 |
+| Cognitiva | `Z8lzzytnEN99AzEn6Si9` | Pensamiento y aprendizaje | 🧠 |
+| Comunicación | `ztdwfgdKJfxTOySUeVBr` | Habla y comprensión | 💬 |
+
+**Nota:** Usa el endpoint `GET /api/milestones/categories` para obtener las categorías actualizadas.
+
+---
+
+## 🎯 Rangos de Edad
+
+### Hitos Mensuales (0-12 meses)
+- Cada mes tiene hitos específicos
+- `ageMonthsMin` y `ageMonthsMax` son iguales (ej: mes 3 → min: 3, max: 3)
+
+### Hitos Anuales (1-18 años)
+- Cada año tiene hitos por etapa de desarrollo
+- `ageMonthsMin` es el inicio del año en meses
+- `ageMonthsMax` es el final del año en meses
+- Ejemplo: 2 años → min: 24, max: 35
 
 ---
 
@@ -296,11 +390,9 @@ Authorization: Bearer {admin_token}
 {
   "title": "Sonríe a las personas",
   "description": "El bebé comienza a sonreír en respuesta a estímulos sociales",
-  "category": "Social y Emocional",
-  "ageRangeMonths": {
-    "min": 0,
-    "max": 3
-  },
+  "categoryId": "fQaVcHEBHwDYnyLtYsYO",
+  "ageMonthsMin": 2,
+  "ageMonthsMax": 2,
   "order": 1,
   "tips": "Háblale y sonríele frecuentemente al bebé",
   "videoUrl": "https://...",
@@ -317,9 +409,10 @@ Authorization: Bearer {admin_token}
   "data": {
     "id": "milestone_123",
     "title": "Sonríe a las personas",
-    "category": "Social y Emocional",
-    "ageRangeMonths": { "min": 0, "max": 3 },
-    "createdAt": "2026-02-05T10:00:00Z"
+    "categoryId": "fQaVcHEBHwDYnyLtYsYO",
+    "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
+    "createdAt": "2026-02-07T10:00:00Z"
   }
 }
 ```
@@ -334,7 +427,7 @@ Authorization: Bearer {admin_token}
 ```
 
 **Query Parameters:**
-- `category` - Filtrar por categoría
+- `category` - Filtrar por categoryId
 - `ageMin` - Edad mínima en meses
 - `ageMax` - Edad máxima en meses
 - `includeInactive` - Incluir inactivos (default: false)
@@ -355,8 +448,9 @@ GET /api/admin/milestones?category=social&ageMin=0&ageMax=6
       "id": "milestone_123",
       "title": "Sonríe a las personas",
       "description": "...",
-      "category": "social",
-      "ageRangeMonths": { "min": 0, "max": 3 },
+      "categoryId": "fQaVcHEBHwDYnyLtYsYO",
+      "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
       "order": 1,
       "isActive": true,
       "tips": "...",
@@ -390,8 +484,9 @@ Authorization: Bearer {admin_token}
     "id": "milestone_123",
     "title": "Sonríe a las personas",
     "description": "...",
-    "category": "social",
-    "ageRangeMonths": { "min": 0, "max": 3 },
+    "categoryId": "fQaVcHEBHwDYnyLtYsYO",
+    "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
     "order": 1,
     "isActive": true,
     "tips": "...",
@@ -419,8 +514,9 @@ Authorization: Bearer {admin_token}
 {
   "title": "Nuevo título",
   "description": "Nueva descripción",
-  "category": "social",
-  "ageRangeMonths": { "min": 0, "max": 3 },
+  "categoryId": "fQaVcHEBHwDYnyLtYsYO",
+  "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
   "order": 2,
   "tips": "Nuevos tips",
   "isActive": false
@@ -513,9 +609,10 @@ GET /api/children/child_123/milestones?category=social
         "id": "milestone_123",
         "title": "Sonríe a las personas",
         "description": "...",
-        "category": "social",
+        "categoryId": "fQaVcHEBHwDYnyLtYsYO",
         "categoryName": "Social y Emocional",
-        "ageRangeMonths": { "min": 0, "max": 3 },
+        "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
         "order": 1,
         "tips": "...",
         "videoUrl": "...",
@@ -529,7 +626,7 @@ GET /api/children/child_123/milestones?category=social
       {
         "id": "milestone_124",
         "title": "Levanta la cabeza boca abajo",
-        "category": "motor-grueso",
+        "categoryId": "IllBvxKzqNSINPVYYwXI",
         "completed": false,
         "completedAt": null,
         "notes": null
@@ -564,7 +661,7 @@ Authorization: Bearer {token}
     },
     "categories": [
       {
-        "category": "social",
+        "categoryId": "fQaVcHEBHwDYnyLtYsYO",
         "categoryName": "Social y Emocional",
         "icon": "👥",
         "milestones": [
@@ -581,7 +678,7 @@ Authorization: Bearer {token}
         }
       },
       {
-        "category": "motor-grueso",
+        "categoryId": "IllBvxKzqNSINPVYYwXI",
         "categoryName": "Motor Grueso",
         "icon": "🏃",
         "milestones": [...],
@@ -695,7 +792,7 @@ Authorization: Bearer {token}
     
     "progressByCategory": [
       {
-        "category": "social",
+        "categoryId": "fQaVcHEBHwDYnyLtYsYO",
         "categoryName": "Social y Emocional",
         "icon": "👥",
         "total": 5,
@@ -704,7 +801,7 @@ Authorization: Bearer {token}
         "color": "#4CAF50"
       },
       {
-        "category": "motor-grueso",
+        "categoryId": "IllBvxKzqNSINPVYYwXI",
         "categoryName": "Motor Grueso",
         "icon": "🏃",
         "total": 4,
@@ -713,7 +810,7 @@ Authorization: Bearer {token}
         "color": "#2196F3"
       },
       {
-        "category": "motor-fino",
+        "categoryId": "IllBvxKzqNSINPVYYwXI",
         "categoryName": "Motor Fino",
         "icon": "✋",
         "total": 3,
@@ -722,7 +819,7 @@ Authorization: Bearer {token}
         "color": "#FF9800"
       },
       {
-        "category": "lenguaje",
+        "categoryId": "ztdwfgdKJfxTOySUeVBr",
         "categoryName": "Lenguaje y Comunicación",
         "icon": "💬",
         "total": 6,
@@ -731,7 +828,7 @@ Authorization: Bearer {token}
         "color": "#9C27B0"
       },
       {
-        "category": "cognitivo",
+        "categoryId": "Z8lzzytnEN99AzEn6Si9",
         "categoryName": "Cognitivo",
         "icon": "🧠",
         "total": 7,
@@ -745,7 +842,7 @@ Authorization: Bearer {token}
       {
         "milestoneId": "milestone_123",
         "title": "Sonríe a las personas",
-        "category": "social",
+        "categoryId": "fQaVcHEBHwDYnyLtYsYO",
         "completedAt": "2026-02-05T16:30:00Z",
         "ageAtCompletion": "4 meses"
       }
@@ -755,7 +852,7 @@ Authorization: Bearer {token}
       {
         "milestoneId": "milestone_125",
         "title": "Responde a su nombre",
-        "category": "lenguaje",
+        "categoryId": "ztdwfgdKJfxTOySUeVBr",
         "expectedAge": "6-9 meses"
       }
     ]
@@ -774,8 +871,9 @@ Authorization: Bearer {token}
 POST /api/admin/milestones
 {
   "title": "Sonríe a las personas",
-  "category": "social",
-  "ageRangeMonths": { "min": 0, "max": 3 },
+  "categoryId": "fQaVcHEBHwDYnyLtYsYO",
+  "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
   "order": 1
 }
 
@@ -783,8 +881,9 @@ POST /api/admin/milestones
 POST /api/admin/milestones
 {
   "title": "Levanta la cabeza boca abajo",
-  "category": "motor-grueso",
-  "ageRangeMonths": { "min": 0, "max": 3 },
+  "categoryId": "IllBvxKzqNSINPVYYwXI",
+  "ageMonthsMin": 2,
+    "ageMonthsMax": 2,
   "order": 1
 }
 ```
@@ -1061,7 +1160,7 @@ const MilestonesManagement = () => {
             <tr key={m.id}>
               <td>{m.title}</td>
               <td>{m.category}</td>
-              <td>{m.ageRangeMonths.min}-{m.ageRangeMonths.max} meses</td>
+              <td>{m.ageMonthsMin}-{m.ageMonthsMax} meses</td>
               <td>{m.order}</td>
               <td>{m.completionCount}</td>
               <td>
