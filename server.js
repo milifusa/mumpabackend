@@ -344,6 +344,29 @@ app.use((req, res, next) => {
   next();
 });
 
+// Middleware para capturar información del dispositivo/app
+app.use((req, res, next) => {
+  // Extraer información de headers personalizados
+  const deviceInfo = {
+    appVersion: req.headers['x-app-version'] || null,
+    platform: req.headers['x-platform'] || null, // 'ios' o 'android'
+    buildNumber: req.headers['x-build-number'] || null,
+    deviceModel: req.headers['x-device-model'] || null,
+    osVersion: req.headers['x-os-version'] || null,
+    userAgent: req.headers['user-agent'] || null
+  };
+
+  // Adjuntar al objeto request para uso posterior
+  req.deviceInfo = deviceInfo;
+
+  // Log solo si hay información del dispositivo
+  if (deviceInfo.appVersion || deviceInfo.platform) {
+    console.log(`📱 [DEVICE] ${deviceInfo.platform || 'unknown'} v${deviceInfo.appVersion || 'unknown'} - ${req.path}`);
+  }
+
+  next();
+});
+
 // Configurar Firebase usando el archivo JSON
 let auth = null;
 let db = null;
@@ -3165,6 +3188,255 @@ app.delete('/api/admin/users/:userId', authenticateToken, isAdmin, async (req, r
     });
   }
 });
+
+// ============================================================================
+// DEVICE INFO & APP ANALYTICS
+// ============================================================================
+
+// Endpoint para actualizar información del dispositivo del usuario
+app.post('/api/users/device-info', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { 
+      appVersion, 
+      platform, 
+      buildNumber, 
+      deviceModel, 
+      osVersion 
+    } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // También usar info de headers si no viene en body
+    const deviceInfo = {
+      appVersion: appVersion || req.deviceInfo.appVersion,
+      platform: platform || req.deviceInfo.platform,
+      buildNumber: buildNumber || req.deviceInfo.buildNumber,
+      deviceModel: deviceModel || req.deviceInfo.deviceModel,
+      osVersion: osVersion || req.deviceInfo.osVersion,
+      userAgent: req.deviceInfo.userAgent,
+      lastUpdated: new Date()
+    };
+
+    console.log(`📱 [DEVICE INFO] Actualizando info para usuario ${uid}:`, deviceInfo);
+
+    await db.collection('users').doc(uid).update({
+      deviceInfo,
+      lastDeviceUpdate: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: 'Información del dispositivo actualizada',
+      data: deviceInfo
+    });
+
+  } catch (error) {
+    console.error('❌ [DEVICE INFO] Error actualizando:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando información del dispositivo',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint admin para ver estadísticas de versiones y plataformas
+app.get('/api/admin/analytics/app-versions', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    console.log('📊 [ADMIN] Obteniendo estadísticas de versiones de app...');
+
+    // Obtener todos los usuarios con deviceInfo
+    const usersSnapshot = await db.collection('users')
+      .where('deviceInfo', '!=', null)
+      .get();
+
+    const stats = {
+      total: usersSnapshot.size,
+      byPlatform: {
+        ios: 0,
+        android: 0,
+        unknown: 0
+      },
+      byVersion: {},
+      byOsVersion: {},
+      devices: []
+    };
+
+    usersSnapshot.docs.forEach(doc => {
+      const userData = doc.data();
+      const deviceInfo = userData.deviceInfo || {};
+
+      // Contar por plataforma
+      const platform = deviceInfo.platform || 'unknown';
+      if (stats.byPlatform[platform] !== undefined) {
+        stats.byPlatform[platform]++;
+      } else {
+        stats.byPlatform.unknown++;
+      }
+
+      // Contar por versión de app
+      const appVersion = deviceInfo.appVersion || 'unknown';
+      stats.byVersion[appVersion] = (stats.byVersion[appVersion] || 0) + 1;
+
+      // Contar por versión de OS
+      const osKey = deviceInfo.platform && deviceInfo.osVersion 
+        ? `${deviceInfo.platform}-${deviceInfo.osVersion}`
+        : 'unknown';
+      stats.byOsVersion[osKey] = (stats.byOsVersion[osKey] || 0) + 1;
+
+      // Agregar a lista de dispositivos
+      stats.devices.push({
+        userId: doc.id,
+        email: userData.email || 'Sin email',
+        platform: deviceInfo.platform || 'unknown',
+        appVersion: deviceInfo.appVersion || 'unknown',
+        buildNumber: deviceInfo.buildNumber || 'unknown',
+        deviceModel: deviceInfo.deviceModel || 'unknown',
+        osVersion: deviceInfo.osVersion || 'unknown',
+        lastUpdated: deviceInfo.lastUpdated
+      });
+    });
+
+    // Ordenar versiones por uso
+    const sortedVersions = Object.entries(stats.byVersion)
+      .sort((a, b) => b[1] - a[1])
+      .map(([version, count]) => ({
+        version,
+        count,
+        percentage: ((count / stats.total) * 100).toFixed(2)
+      }));
+
+    // Ordenar OS versions por uso
+    const sortedOsVersions = Object.entries(stats.byOsVersion)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10) // Top 10
+      .map(([os, count]) => ({
+        os,
+        count,
+        percentage: ((count / stats.total) * 100).toFixed(2)
+      }));
+
+    // Ordenar dispositivos por fecha de actualización
+    stats.devices.sort((a, b) => {
+      const dateA = a.lastUpdated?.toDate ? a.lastUpdated.toDate() : new Date(0);
+      const dateB = b.lastUpdated?.toDate ? b.lastUpdated.toDate() : new Date(0);
+      return dateB - dateA;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalUsers: stats.total,
+          platforms: stats.byPlatform,
+          mostUsedVersion: sortedVersions[0]?.version || 'unknown',
+          mostUsedVersionCount: sortedVersions[0]?.count || 0
+        },
+        versions: sortedVersions,
+        osVersions: sortedOsVersions,
+        recentDevices: stats.devices.slice(0, 20) // Solo los 20 más recientes
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint admin para buscar usuarios por versión/plataforma
+app.get('/api/admin/analytics/users-by-app', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { platform, version, minVersion } = req.query;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    console.log('🔍 [ADMIN] Buscando usuarios:', { platform, version, minVersion });
+
+    let query = db.collection('users').where('deviceInfo', '!=', null);
+    
+    const usersSnapshot = await query.get();
+
+    let users = usersSnapshot.docs.map(doc => ({
+      id: doc.id,
+      email: doc.data().email,
+      deviceInfo: doc.data().deviceInfo
+    }));
+
+    // Filtrar por plataforma
+    if (platform) {
+      users = users.filter(u => u.deviceInfo?.platform === platform);
+    }
+
+    // Filtrar por versión exacta
+    if (version) {
+      users = users.filter(u => u.deviceInfo?.appVersion === version);
+    }
+
+    // Filtrar por versión mínima (versiones anteriores)
+    if (minVersion && !version) {
+      users = users.filter(u => {
+        const userVersion = u.deviceInfo?.appVersion;
+        if (!userVersion) return false;
+        return compareVersions(userVersion, minVersion) < 0;
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        total: users.length,
+        users: users.slice(0, 100) // Limitar a 100 usuarios
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error buscando usuarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error buscando usuarios',
+      error: error.message
+    });
+  }
+});
+
+// Función auxiliar para comparar versiones
+function compareVersions(v1, v2) {
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+  
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  
+  return 0;
+}
 
 // ========== GESTIÓN DE COMUNIDADES ==========
 
