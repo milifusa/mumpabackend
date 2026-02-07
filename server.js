@@ -20891,6 +20891,10 @@ app.post('/api/children/:childId/feeding-log', authenticateToken, async (req, re
 // ==========================================
 
 // Obtener hitos
+// NOTA: Este endpoint fue reemplazado por el de hitos de desarrollo (línea ~37587)
+// Este era para hitos de celebración (primera sonrisa, primer paso, etc.)
+// Si necesitas hitos de celebración, usa un endpoint diferente
+/*
 app.get('/api/children/:childId/milestones', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -20938,9 +20942,11 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     });
   }
 });
+*/
 
-// Agregar hito
-app.post('/api/children/:childId/milestones', authenticateToken, async (req, res) => {
+// Agregar hito de celebración (primera sonrisa, primer paso, etc.)
+// NOTA: Este es diferente a los hitos de desarrollo
+app.post('/api/children/:childId/celebration-milestones', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
     const { childId } = req.params;
