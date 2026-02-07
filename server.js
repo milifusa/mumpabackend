@@ -37658,10 +37658,12 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     // Filtrar por rango de edad solo si includeAll no está activo
     const shouldIncludeAll = includeAll === 'true' || includeAll === true;
     
+    let minAge, maxAge;
+    
     if (!shouldIncludeAll) {
       // Filtrar por rango de edad con buffer
-      const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
-      const maxAge = ageMonths + parseInt(ageBuffer);
+      minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
+      maxAge = ageMonths + parseInt(ageBuffer);
 
       console.log(`[MILESTONES] Filtro edad - ageMonths: ${ageMonths}, buffer: ${ageBuffer}, minAge: ${minAge}, maxAge: ${maxAge}`);
 
@@ -37676,6 +37678,9 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
       console.log(`[MILESTONES] Hitos filtrados por edad: ${milestones.length}`);
     } else {
       console.log(`[MILESTONES] Modo includeAll activado, devolviendo todos los hitos: ${milestones.length}`);
+      // Para includeAll, el rango es desde 0 hasta el máximo
+      minAge = 0;
+      maxAge = Math.max(...milestones.map(m => m.ageMonthsMax));
     }
 
     // Ordenar
