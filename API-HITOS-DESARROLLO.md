@@ -580,16 +580,33 @@ Authorization: Bearer {token}
 **Query Parameters:**
 - `category` - Filtrar por categoría (opcional)
 - `ageBuffer` - Meses extra antes/después (default: 3)
+- `includeAll` - Si es `true`, devuelve TODOS los hitos sin filtrar por edad (opcional)
 
 **Ejemplo:**
 ```bash
+# Filtrado por edad (default)
+GET /api/children/child_123/milestones
+
+# Con categoría específica
 GET /api/children/child_123/milestones?category=social
+
+# Traer TODOS los hitos sin filtrar por edad
+GET /api/children/child_123/milestones?includeAll=true
+
+# Todos los hitos de una categoría
+GET /api/children/child_123/milestones?category=social&includeAll=true
 ```
 
 **Comportamiento:**
-- Calcula la edad actual del niño en meses
-- Devuelve hitos del rango de edad ± buffer meses
-- Incluye el estado de completado para cada hito
+- Si `includeAll=false` (default):
+  - Calcula la edad actual del niño en meses
+  - Devuelve hitos del rango de edad ± buffer meses
+  - Ideal para mostrar hitos relevantes a la edad actual
+- Si `includeAll=true`:
+  - Devuelve TODOS los hitos activos (480 hitos)
+  - Ignora el filtro de edad
+  - Útil para ver todos los hitos del desarrollo completo
+- Siempre incluye el estado de completado para cada hito
 
 **Response:**
 ```json

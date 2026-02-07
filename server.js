@@ -37588,7 +37588,7 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
   try {
     const { uid } = req.user;
     const { childId } = req.params;
-    const { category, ageBuffer = 3 } = req.query;
+    const { category, ageBuffer = 3, includeAll = 'false' } = req.query;
 
     if (!db) {
       return res.status(500).json({
@@ -37649,21 +37649,28 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
       }));
     }
 
-    // Filtrar por rango de edad con buffer
-    const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
-    const maxAge = ageMonths + parseInt(ageBuffer);
+    // Filtrar por rango de edad solo si includeAll no está activo
+    const shouldIncludeAll = includeAll === 'true' || includeAll === true;
+    
+    if (!shouldIncludeAll) {
+      // Filtrar por rango de edad con buffer
+      const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
+      const maxAge = ageMonths + parseInt(ageBuffer);
 
-    console.log(`[MILESTONES] Filtro edad - ageMonths: ${ageMonths}, buffer: ${ageBuffer}, minAge: ${minAge}, maxAge: ${maxAge}`);
+      console.log(`[MILESTONES] Filtro edad - ageMonths: ${ageMonths}, buffer: ${ageBuffer}, minAge: ${minAge}, maxAge: ${maxAge}`);
 
-    milestones = milestones.filter(m => {
-      const passes = m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
-      if (!passes && milestones.length < 10) {
-        console.log(`[MILESTONES] Hito rechazado: ${m.id}, edad: ${m.ageMonthsMin}-${m.ageMonthsMax}`);
-      }
-      return passes;
-    });
+      milestones = milestones.filter(m => {
+        const passes = m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
+        if (!passes && milestones.length < 10) {
+          console.log(`[MILESTONES] Hito rechazado: ${m.id}, edad: ${m.ageMonthsMin}-${m.ageMonthsMax}`);
+        }
+        return passes;
+      });
 
-    console.log(`[MILESTONES] Hitos filtrados por edad: ${milestones.length}`);
+      console.log(`[MILESTONES] Hitos filtrados por edad: ${milestones.length}`);
+    } else {
+      console.log(`[MILESTONES] Modo includeAll activado, devolviendo todos los hitos: ${milestones.length}`);
+    }
 
     // Ordenar
     milestones.sort((a, b) => {
