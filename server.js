@@ -28960,6 +28960,7 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       'vacunas',
       'denticion',
       'hitos',
+      'nutricion',
       'menu-lateral'
     ];
     if (section && !validSections.includes(section)) {
@@ -29307,7 +29308,8 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
         'crecimiento',
         'vacunas',
         'denticion',
-        'hitos'
+        'hitos',
+        'nutricion'
       ];
       if (section && !validSections.includes(section)) {
         return res.status(400).json({

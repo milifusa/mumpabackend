@@ -29,7 +29,7 @@ Sistema unificado de banners que combina **banners normales** (promociones, anun
 
 | Parámetro | Tipo | Requerido | Default | Descripción |
 |-----------|------|-----------|---------|-------------|
-| section | string | No | all | Filtrar por sección: 'home', 'communities', 'marketplace' |
+| section | string | No | all | Filtrar por sección: 'home', 'home1', 'home2', 'home3', 'communities', 'marketplace', 'products', 'recomendaciones', 'medicina', 'crecimiento', 'vacunas', 'denticion', 'hitos', 'nutricion', 'menu-lateral' |
 
 **Ejemplo:**
 ```bash
@@ -139,7 +139,7 @@ GET /api/banners?section=communities
 | Campo | Tipo | Requerido | Default | Descripción |
 |-------|------|-----------|---------|-------------|
 | isBanner | boolean | ✅ | - | true para marcar, false para desmarcar |
-| section | string | No | 'home' | Sección donde aparece: 'home', 'communities', 'marketplace' |
+| section | string | No | 'home' | Sección donde aparece: 'home', 'home1', 'home2', 'home3', 'communities', 'marketplace', 'products', 'recomendaciones', 'medicina', 'crecimiento', 'vacunas', 'denticion', 'hitos', 'nutricion', 'menu-lateral' |
 | order | number | No | 1 | Orden de aparición (menor = primero) |
 | duration | number | No | 5 | Duración en carrusel (segundos) |
 | publishNow | boolean | No | true | Si se publica inmediatamente |
@@ -151,8 +151,20 @@ GET /api/banners?section=communities
 | Sección | Descripción | Uso |
 |---------|-------------|-----|
 | `home` | Pantalla principal | Banners generales, eventos destacados |
+| `home1` | Home sección 1 | Banners específicos para primera sección |
+| `home2` | Home sección 2 | Banners específicos para segunda sección |
+| `home3` | Home sección 3 | Banners específicos para tercera sección |
 | `communities` | Sección de comunidades | Eventos de comunidades específicas |
 | `marketplace` | Marketplace | Productos en oferta, eventos de mercado |
+| `products` | Productos | Banners de productos destacados |
+| `recomendaciones` | Recomendaciones | Tips y consejos |
+| `medicina` | Medicina | Información médica |
+| `crecimiento` | Crecimiento | Tips de desarrollo infantil |
+| `vacunas` | Vacunas | Recordatorios y info de vacunación |
+| `denticion` | Dentición | Información sobre dentición |
+| `hitos` | Hitos del desarrollo | Hitos importantes del niño |
+| `nutricion` | Nutrición | Consejos y recetas de alimentación |
+| `menu-lateral` | Menú lateral | Banners para sidebar |
 
 ---
 
@@ -588,7 +600,7 @@ Mostrar si:
 4. ✅ `isBanner` debe ser booleano
 5. ✅ `order` debe ser número positivo
 6. ✅ `duration` debe estar entre 3-30 segundos
-7. ✅ `section` debe ser válida: 'home', 'communities', 'marketplace'
+7. ✅ `section` debe ser válida: 'home', 'home1', 'home2', 'home3', 'communities', 'marketplace', 'products', 'recomendaciones', 'medicina', 'crecimiento', 'vacunas', 'denticion', 'hitos', 'nutricion', 'menu-lateral'
 
 ---
 
