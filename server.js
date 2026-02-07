@@ -37596,9 +37596,13 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     const minAge = Math.max(0, ageMonths - parseInt(ageBuffer));
     const maxAge = ageMonths + parseInt(ageBuffer);
 
+    console.log(`[MILESTONES] Filtro edad - ageMonths: ${ageMonths}, buffer: ${ageBuffer}, minAge: ${minAge}, maxAge: ${maxAge}`);
+
     milestones = milestones.filter(m => {
       return m.ageMonthsMax >= minAge && m.ageMonthsMin <= maxAge;
     });
+
+    console.log(`[MILESTONES] Hitos filtrados por edad: ${milestones.length}`);
 
     // Ordenar
     milestones.sort((a, b) => {
