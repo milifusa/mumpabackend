@@ -37583,7 +37583,7 @@ app.get('/api/children/:childId/milestones', authenticateToken, async (req, res)
     let query = db.collection('milestones').where('isActive', '==', true);
 
     if (category) {
-      query = query.where('category', '==', category);
+      query = query.where('categoryId', '==', category);
     }
 
     const milestonesSnapshot = await query.get();
@@ -37740,22 +37740,34 @@ app.get('/api/children/:childId/milestones/by-category', authenticateToken, asyn
       };
     });
 
-    // Agrupar por categoría
-    const categoryInfo = {
-      'social': { name: 'Social y Emocional', icon: '👥', color: '#4CAF50' },
-      'motor-grueso': { name: 'Motor Grueso', icon: '🏃', color: '#2196F3' },
-      'motor-fino': { name: 'Motor Fino', icon: '✋', color: '#FF9800' },
-      'lenguaje': { name: 'Lenguaje y Comunicación', icon: '💬', color: '#9C27B0' },
-      'cognitivo': { name: 'Cognitivo', icon: '🧠', color: '#F44336' }
-    };
+    // Obtener categorías de la BD
+    const categoriesSnapshot = await db.collection('milestoneCategories')
+      .where('isActive', '==', true)
+      .orderBy('order', 'asc')
+      .get();
 
+    const categoryInfo = {};
+    categoriesSnapshot.forEach(doc => {
+      const data = doc.data();
+      categoryInfo[doc.id] = {
+        id: doc.id,
+        name: data.name,
+        icon: data.icon || '📝',
+        color: data.color || '#757575'
+      };
+    });
+
+    // Agrupar por categoría
     const categorized = {};
     
     milestones.forEach(m => {
-      if (!categorized[m.category]) {
-        categorized[m.category] = [];
+      const catId = m.categoryId;
+      if (!catId) return; // Ignorar hitos sin categoría
+      
+      if (!categorized[catId]) {
+        categorized[catId] = [];
       }
-      categorized[m.category].push({
+      categorized[catId].push({
         ...m,
         completed: progressMap[m.id]?.completed || false,
         completedAt: progressMap[m.id]?.completedAt || null,
@@ -37764,15 +37776,16 @@ app.get('/api/children/:childId/milestones/by-category', authenticateToken, asyn
     });
 
     // Crear array de categorías con estadísticas
-    const categories = Object.keys(categorized).map(cat => {
-      const items = categorized[cat];
+    const categories = Object.keys(categorized).map(catId => {
+      const items = categorized[catId];
       const completedCount = items.filter(i => i.completed).length;
+      const catInfo = categoryInfo[catId] || { name: 'Sin categoría', icon: '📝', color: '#757575' };
       
       return {
-        category: cat,
-        categoryName: categoryInfo[cat]?.name || cat,
-        icon: categoryInfo[cat]?.icon || '📝',
-        color: categoryInfo[cat]?.color || '#757575',
+        categoryId: catId,
+        categoryName: catInfo.name,
+        icon: catInfo.icon,
+        color: catInfo.color,
         milestones: items.sort((a, b) => a.order - b.order),
         stats: {
           total: items.length,
