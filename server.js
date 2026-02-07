@@ -37289,10 +37289,24 @@ app.get('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) =>
                  .orderBy('order', 'asc');
 
     const snapshot = await query.get();
-    let milestones = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    let milestones = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        title: data.title,
+        description: data.description || '',
+        category: data.category,
+        ageRangeMonths: data.ageRangeMonths,
+        order: data.order || 999,
+        isActive: data.isActive !== undefined ? data.isActive : true,
+        tips: data.tips || '',
+        videoUrl: data.videoUrl || null,
+        imageUrl: data.imageUrl || null,
+        createdAt: data.createdAt?.toDate()?.toISOString() || null,
+        updatedAt: data.updatedAt?.toDate()?.toISOString() || null,
+        createdBy: data.createdBy || null
+      };
+    });
 
     // Filtrar por rango de edad si se especifica
     if (ageMin !== undefined || ageMax !== undefined) {
