@@ -37042,6 +37042,125 @@ app.delete('/api/admin/milestones/categories/:categoryId', authenticateToken, is
 // ADMIN - Gestión de Hitos
 // ==========================================
 
+// Carga masiva de hitos (Admin) - Endpoint temporal
+app.post('/api/admin/milestones/bulk', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { milestones_0_12_months } = req.body;
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    if (!milestones_0_12_months || !Array.isArray(milestones_0_12_months)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Datos de hitos inválidos'
+      });
+    }
+
+    // Mapeo de categorías del JSON a nombres de categorías en BD
+    const categoryMapping = {
+      'social': 'Social y Emocional',
+      'cognitivo': 'Cognitivo',
+      'motriz': 'Motor Grueso',
+      'comunicacion': 'Lenguaje y Comunicación'
+    };
+
+    const createdMilestones = [];
+    const errors = [];
+
+    // Procesar cada mes
+    for (const monthData of milestones_0_12_months) {
+      const { month, social, cognitivo, motriz, comunicacion } = monthData;
+      
+      const allCategories = {
+        social,
+        cognitivo,
+        motriz,
+        comunicacion
+      };
+
+      // Por cada categoría en el mes
+      for (const [categoryKey, items] of Object.entries(allCategories)) {
+        if (!items || !Array.isArray(items)) continue;
+
+        const categoryName = categoryMapping[categoryKey];
+        if (!categoryName) {
+          console.warn(`⚠️ Categoría no mapeada: ${categoryKey}`);
+          continue;
+        }
+
+        // Por cada hito en la categoría
+        for (let i = 0; i < items.length; i++) {
+          const title = items[i];
+          
+          try {
+            const milestoneData = {
+              title: title.trim(),
+              description: `Hito del desarrollo para el mes ${month}`,
+              category: categoryName,
+              ageRangeMonths: {
+                min: month,
+                max: month
+              },
+              order: i + 1,
+              isActive: true,
+              tips: '',
+              videoUrl: null,
+              imageUrl: null,
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              createdBy: req.user.uid
+            };
+
+            const docRef = await db.collection('milestones').add(milestoneData);
+            
+            createdMilestones.push({
+              id: docRef.id,
+              month,
+              category: categoryName,
+              title
+            });
+
+            console.log(`✅ Hito creado: ${title} (Mes ${month}, ${categoryName})`);
+
+          } catch (error) {
+            console.error(`❌ Error creando hito "${title}":`, error);
+            errors.push({
+              title,
+              month,
+              category: categoryName,
+              error: error.message
+            });
+          }
+        }
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Carga masiva completada. ${createdMilestones.length} hitos creados`,
+      data: {
+        created: createdMilestones.length,
+        errors: errors.length,
+        createdMilestones: createdMilestones.slice(0, 10), // Primeros 10 para no saturar respuesta
+        errorDetails: errors
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error en carga masiva:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en carga masiva',
+      error: error.message
+    });
+  }
+});
+
 // Crear hito (Admin)
 app.post('/api/admin/milestones', authenticateToken, isAdmin, async (req, res) => {
   try {
