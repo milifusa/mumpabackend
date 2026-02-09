@@ -12244,13 +12244,12 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       updatedAt: new Date()
     });
 
-    // 📧 Enviar email si es el primer hijo
-    if (actualChildrenCount === 1) {
-      try {
-        const { sendFirstChildEmail } = require('./services/emailService');
-        const userDoc = await userRef.get();
-        const userData = userDoc.data();
-        
+    // 📧 Enviar email según el número de hijos
+    try {
+      const userDoc = await userRef.get();
+      const userData = userDoc.data();
+      
+      if (userData && userData.email) {
         // Calcular edad del hijo para el email
         let childAge = '';
         if (!isUnborn && birthDate) {
@@ -12274,19 +12273,45 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
           childAge = `${ageInMonths} ${ageInMonths === 1 ? 'mes' : 'meses'}`;
         }
         
-        if (userData && userData.email) {
+        if (actualChildrenCount === 1) {
+          // 📧 Primer hijo
           console.log(`📧 [EMAIL] Enviando email de primer hijo a ${userData.email}`);
+          const { sendFirstChildEmail } = require('./services/emailService');
           sendFirstChildEmail(
             userData.displayName || userData.name || 'Mamá',
             userData.email,
             name.trim(),
             childAge
           ).catch(err => console.error('❌ [EMAIL] Error enviando email de primer hijo:', err));
+          
+        } else if (actualChildrenCount > 1) {
+          // 📧 Hijo adicional (2do, 3ro, etc)
+          console.log(`📧 [EMAIL] Enviando email de hijo adicional a ${userData.email}`);
+          const { sendAdditionalChildEmail } = require('./services/emailService');
+          sendAdditionalChildEmail(
+            userData.displayName || userData.name || 'Mamá',
+            userData.email,
+            name.trim(),
+            childAge,
+            actualChildrenCount
+          ).catch(err => console.error('❌ [EMAIL] Error enviando email de hijo adicional:', err));
         }
-      } catch (emailError) {
-        console.error('❌ [EMAIL] Error al enviar email de primer hijo:', emailError);
-        // No fallar la request si el email falla
+        
+        // 📧 Si es un bebé por nacer (embarazo), enviar email de felicitación
+        if (isUnborn && dueDate) {
+          console.log(`📧 [EMAIL] Enviando email de embarazo a ${userData.email}`);
+          const { sendPregnancyEmail } = require('./services/emailService');
+          sendPregnancyEmail(
+            userData.displayName || userData.name || 'Mamá',
+            userData.email,
+            name.trim(),
+            dueDate
+          ).catch(err => console.error('❌ [EMAIL] Error enviando email de embarazo:', err));
+        }
       }
+    } catch (emailError) {
+      console.error('❌ [EMAIL] Error al enviar emails:', emailError);
+      // No fallar la request si el email falla
     }
 
     res.json({

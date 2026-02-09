@@ -179,6 +179,82 @@ const firstChildAddedEmail = (userName, userEmail, childName, childAge) => {
   };
 };
 
+/**
+ * Email al agregar un hijo adicional (2do, 3ro, etc)
+ */
+const additionalChildAddedEmail = (userName, userEmail, childName, childAge, childNumber) => {
+  const content = `
+    <h1>¡Bienvenido ${childName} a la familia Munpa! 🎉</h1>
+    <p>Hola ${userName},</p>
+    <p>Nos alegra que agregues a ${childName} a tu perfil. ¡Ahora tienes ${childNumber} perfiles en Munpa!</p>
+    <p>Para ${childName} (${childAge}) también hemos preparado:</p>
+    <ul>
+      <li>🎯 Hitos de desarrollo personalizados</li>
+      <li>🍎 Recetas adaptadas a su edad</li>
+      <li>💉 Calendario de vacunas</li>
+      <li>📊 Seguimiento de crecimiento</li>
+    </ul>
+    <p>💡 <strong>Tip:</strong> Puedes cambiar entre los perfiles de tus hijos fácilmente desde el menú principal.</p>
+    <a href="${APP_URL}/children" class="button">Ver todos mis hijos</a>
+    <p>¡Seguimos acompañándote en esta hermosa aventura!</p>
+    <p>Con cariño,<br>El equipo de Munpa 💜</p>
+  `;
+  
+  return {
+    to: userEmail,
+    from: FROM_EMAIL,
+    subject: `¡${childName} se unió a Munpa! 🎉`,
+    html: emailTemplate(content, `Ahora tienes ${childNumber} perfiles en Munpa`),
+  };
+};
+
+/**
+ * Email de felicitación por embarazo
+ */
+const pregnancyAnnouncementEmail = (userName, userEmail, babyName, dueDate) => {
+  const due = new Date(dueDate);
+  const dueDateStr = due.toLocaleDateString('es-EC', { 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric' 
+  });
+  
+  // Calcular semanas de embarazo aproximadas
+  const now = new Date();
+  const daysUntilDue = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
+  const weeksPregnant = Math.max(0, 40 - Math.floor(daysUntilDue / 7));
+  
+  const content = `
+    <h1>¡Felicidades por tu embarazo! 🤰💜</h1>
+    <p>Querida ${userName},</p>
+    <p>¡Qué emocionante! Nos alegra muchísimo ser parte de este hermoso viaje contigo y ${babyName || 'tu bebé'}.</p>
+    <div style="background: linear-gradient(135deg, #fef3c715 0%, #fad0c415 100%); padding: 25px; border-radius: 12px; margin: 25px 0; border-left: 4px solid #f59e0b; text-align: center;">
+      <div style="font-size: 48px; margin-bottom: 10px;">👶</div>
+      <h3 style="color: #f59e0b; margin: 10px 0;">Fecha estimada de parto</h3>
+      <p style="font-size: 20px; font-weight: bold; color: #667eea; margin: 10px 0;">${dueDateStr}</p>
+      ${weeksPregnant > 0 ? `<p style="color: #666; margin: 5px 0;">~${weeksPregnant} semanas de embarazo</p>` : ''}
+    </div>
+    <p>Hemos preparado para ti:</p>
+    <ul>
+      <li>📅 Contador de semanas de embarazo</li>
+      <li>📚 Información semana a semana</li>
+      <li>💊 Recordatorios de controles prenatales</li>
+      <li>🤰 Tips de alimentación y cuidados</li>
+      <li>👥 Comunidades de futuras mamás</li>
+    </ul>
+    <a href="${APP_URL}/pregnancy" class="button">Ver mi embarazo</a>
+    <p>¡Te acompañaremos en cada etapa de este maravilloso camino!</p>
+    <p>Con mucho cariño,<br>El equipo de Munpa 💜</p>
+  `;
+  
+  return {
+    to: userEmail,
+    from: FROM_EMAIL,
+    subject: `¡Felicidades por tu embarazo! 🤰💜`,
+    html: emailTemplate(content, `Te acompañamos en tu embarazo`),
+  };
+};
+
 // ============================================================================
 // 2. EMAILS DE EVENTOS
 // ============================================================================
@@ -589,6 +665,22 @@ const sendWeeklyDigest = async (userName, userEmail, digestData) => {
   return await sendEmail(emailData);
 };
 
+/**
+ * Enviar email de hijo adicional
+ */
+const sendAdditionalChildEmail = async (userName, userEmail, childName, childAge, childNumber) => {
+  const emailData = additionalChildAddedEmail(userName, userEmail, childName, childAge, childNumber);
+  return await sendEmail(emailData);
+};
+
+/**
+ * Enviar email de embarazo
+ */
+const sendPregnancyEmail = async (userName, userEmail, babyName, dueDate) => {
+  const emailData = pregnancyAnnouncementEmail(userName, userEmail, babyName, dueDate);
+  return await sendEmail(emailData);
+};
+
 // ============================================================================
 // EXPORTS
 // ============================================================================
@@ -597,6 +689,8 @@ module.exports = {
   // Funciones de envío
   sendWelcomeEmail,
   sendFirstChildEmail,
+  sendAdditionalChildEmail,
+  sendPregnancyEmail,
   sendEventConfirmation,
   sendEventReminder,
   sendEventCancelled,
