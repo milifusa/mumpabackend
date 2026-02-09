@@ -150,6 +150,8 @@ const scheduleMedicationReminders = async ({
         title: `💊 Momento de ${medicationName}`,
         body: `Es hora de ${medicationName}: ${dose} ${doseUnit} para ${childName} a las ${timeLabel}.`,
         scheduledFor,
+        sent: false,
+        sentAt: null,
         data: {
           type: 'medication_reminder',
           childId,

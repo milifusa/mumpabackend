@@ -2824,6 +2824,565 @@ app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+// ========== ESTADÍSTICAS AVANZADAS ==========
+
+// Engagement y retención de usuarios
+app.get('/api/admin/analytics/engagement', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('📈 [ADMIN] Obteniendo estadísticas de engagement...');
+
+    const now = new Date();
+    const oneDayAgo = new Date(now - 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
+    // Obtener usuarios
+    const usersSnapshot = await db.collection('users').get();
+    const users = usersSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // DAU (Daily Active Users)
+    const dau = users.filter(u => 
+      u.lastLoginAt && u.lastLoginAt.toDate() > oneDayAgo
+    ).length;
+
+    // WAU (Weekly Active Users)
+    const wau = users.filter(u => 
+      u.lastLoginAt && u.lastLoginAt.toDate() > sevenDaysAgo
+    ).length;
+
+    // MAU (Monthly Active Users)
+    const mau = users.filter(u => 
+      u.lastLoginAt && u.lastLoginAt.toDate() > thirtyDaysAgo
+    ).length;
+
+    // Calcular retención (usuarios que volvieron después de 7 días)
+    const usersWithSecondSession = users.filter(u => {
+      if (!u.createdAt || !u.lastLoginAt) return false;
+      const created = u.createdAt.toDate();
+      const lastLogin = u.lastLoginAt.toDate();
+      const daysSinceCreated = (now - created) / (24 * 60 * 60 * 1000);
+      const daysSinceLastLogin = (now - lastLogin) / (24 * 60 * 60 * 1000);
+      return daysSinceCreated > 7 && daysSinceLastLogin < 30;
+    }).length;
+
+    const retentionRate = users.length > 0 
+      ? ((usersWithSecondSession / users.length) * 100).toFixed(2)
+      : 0;
+
+    // Calcular churn (usuarios inactivos > 30 días)
+    const inactiveUsers = users.filter(u => 
+      !u.lastLoginAt || u.lastLoginAt.toDate() < thirtyDaysAgo
+    ).length;
+    const churnRate = users.length > 0 
+      ? ((inactiveUsers / users.length) * 100).toFixed(2)
+      : 0;
+
+    // Posts y engagement
+    const postsSnapshot = await db.collection('posts').get();
+    const posts = postsSnapshot.docs.map(doc => doc.data());
+    
+    const totalLikes = posts.reduce((sum, p) => sum + (p.likes?.length || 0), 0);
+    const totalComments = posts.reduce((sum, p) => sum + (p.commentsCount || 0), 0);
+    const totalShares = posts.reduce((sum, p) => sum + (p.shares?.length || 0), 0);
+
+    const avgEngagementPerPost = posts.length > 0
+      ? ((totalLikes + totalComments + totalShares) / posts.length).toFixed(2)
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        activeUsers: {
+          dau,
+          wau,
+          mau,
+          dauMauRatio: mau > 0 ? ((dau / mau) * 100).toFixed(2) : 0
+        },
+        retention: {
+          rate: `${retentionRate}%`,
+          usersReturned: usersWithSecondSession
+        },
+        churn: {
+          rate: `${churnRate}%`,
+          inactiveUsers
+        },
+        contentEngagement: {
+          totalPosts: posts.length,
+          totalLikes,
+          totalComments,
+          totalShares,
+          avgEngagementPerPost
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo engagement:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo engagement',
+      error: error.message
+    });
+  }
+});
+
+// Crecimiento histórico de usuarios
+app.get('/api/admin/analytics/growth', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('📈 [ADMIN] Obteniendo estadísticas de crecimiento...');
+    
+    const { period = 'month' } = req.query; // day, week, month
+
+    const usersSnapshot = await db.collection('users').get();
+    const users = usersSnapshot.docs.map(doc => ({
+      id: doc.id,
+      createdAt: doc.data().createdAt?.toDate()
+    })).filter(u => u.createdAt);
+
+    // Agrupar por período
+    const groupedData = {};
+    users.forEach(user => {
+      let key;
+      if (period === 'day') {
+        key = user.createdAt.toISOString().split('T')[0];
+      } else if (period === 'week') {
+        const weekStart = new Date(user.createdAt);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        key = weekStart.toISOString().split('T')[0];
+      } else {
+        key = `${user.createdAt.getFullYear()}-${String(user.createdAt.getMonth() + 1).padStart(2, '0')}`;
+      }
+      groupedData[key] = (groupedData[key] || 0) + 1;
+    });
+
+    // Convertir a array ordenado
+    const growthData = Object.entries(groupedData)
+      .map(([date, count]) => ({ date, newUsers: count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    // Calcular totales acumulados
+    let accumulated = 0;
+    const withAccumulated = growthData.map(item => {
+      accumulated += item.newUsers;
+      return { ...item, totalUsers: accumulated };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period,
+        growth: withAccumulated,
+        summary: {
+          totalUsers: users.length,
+          periodsWithData: withAccumulated.length,
+          avgNewUsersPerPeriod: (users.length / withAccumulated.length).toFixed(2),
+          mostActiveDate: withAccumulated.reduce((max, item) => 
+            item.newUsers > max.newUsers ? item : max
+          , withAccumulated[0])
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo crecimiento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo crecimiento',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas de contenido (posts más populares)
+app.get('/api/admin/analytics/content', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('📝 [ADMIN] Obteniendo estadísticas de contenido...');
+    
+    const { limit = 20, orderBy = 'likes' } = req.query;
+
+    const postsSnapshot = await db.collection('posts').get();
+    const posts = postsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()
+    }));
+
+    // Calcular engagement score para cada post
+    const postsWithEngagement = posts.map(post => {
+      const likesCount = post.likes?.length || 0;
+      const commentsCount = post.commentsCount || 0;
+      const sharesCount = post.shares?.length || 0;
+      const views = post.views || 0;
+      
+      // Score ponderado
+      const engagementScore = (likesCount * 1) + (commentsCount * 2) + (sharesCount * 3);
+      const engagementRate = views > 0 ? ((likesCount + commentsCount + sharesCount) / views * 100).toFixed(2) : 0;
+
+      return {
+        id: post.id,
+        content: post.content?.substring(0, 100) || '',
+        authorId: post.authorId,
+        communityId: post.communityId,
+        postType: post.postType || 'normal',
+        likes: likesCount,
+        comments: commentsCount,
+        shares: sharesCount,
+        views,
+        engagementScore,
+        engagementRate: `${engagementRate}%`,
+        createdAt: post.createdAt
+      };
+    });
+
+    // Ordenar según criterio
+    let sortedPosts;
+    if (orderBy === 'likes') {
+      sortedPosts = postsWithEngagement.sort((a, b) => b.likes - a.likes);
+    } else if (orderBy === 'comments') {
+      sortedPosts = postsWithEngagement.sort((a, b) => b.comments - a.comments);
+    } else if (orderBy === 'engagement') {
+      sortedPosts = postsWithEngagement.sort((a, b) => b.engagementScore - a.engagementScore);
+    } else {
+      sortedPosts = postsWithEngagement.sort((a, b) => b.views - a.views);
+    }
+
+    const topPosts = sortedPosts.slice(0, parseInt(limit));
+
+    // Estadísticas por tipo de post
+    const byType = {};
+    posts.forEach(post => {
+      const type = post.postType || 'normal';
+      byType[type] = (byType[type] || 0) + 1;
+    });
+
+    // Comunidades más activas
+    const byCommunity = {};
+    posts.forEach(post => {
+      if (post.communityId) {
+        byCommunity[post.communityId] = (byCommunity[post.communityId] || 0) + 1;
+      }
+    });
+    const topCommunities = Object.entries(byCommunity)
+      .map(([id, count]) => ({ communityId: id, postCount: count }))
+      .sort((a, b) => b.postCount - a.postCount)
+      .slice(0, 10);
+
+    res.json({
+      success: true,
+      data: {
+        topPosts,
+        summary: {
+          totalPosts: posts.length,
+          avgLikes: (posts.reduce((sum, p) => sum + (p.likes?.length || 0), 0) / posts.length).toFixed(2),
+          avgComments: (posts.reduce((sum, p) => sum + (p.commentsCount || 0), 0) / posts.length).toFixed(2),
+          byType,
+          topCommunities
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo contenido:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo contenido',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas de banners
+app.get('/api/admin/analytics/banners', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('🎨 [ADMIN] Obteniendo estadísticas de banners...');
+
+    const bannersSnapshot = await db.collection('banners').get();
+    const banners = bannersSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate(),
+      startDate: doc.data().startDate?.toDate(),
+      endDate: doc.data().endDate?.toDate()
+    }));
+
+    // Banners activos
+    const now = new Date();
+    const activeBanners = banners.filter(b => 
+      b.isActive && 
+      (!b.startDate || b.startDate <= now) &&
+      (!b.endDate || b.endDate >= now)
+    );
+
+    // CTR (Click Through Rate)
+    const totalViews = banners.reduce((sum, b) => sum + (b.views || 0), 0);
+    const totalClicks = banners.reduce((sum, b) => sum + (b.clicks || 0), 0);
+    const overallCTR = totalViews > 0 ? ((totalClicks / totalViews) * 100).toFixed(2) : 0;
+
+    // Por sección
+    const bySection = {};
+    banners.forEach(banner => {
+      const section = banner.section || 'general';
+      if (!bySection[section]) {
+        bySection[section] = {
+          total: 0,
+          active: 0,
+          views: 0,
+          clicks: 0,
+          ctr: 0
+        };
+      }
+      bySection[section].total++;
+      if (banner.isActive) bySection[section].active++;
+      bySection[section].views += banner.views || 0;
+      bySection[section].clicks += banner.clicks || 0;
+    });
+
+    // Calcular CTR por sección
+    Object.keys(bySection).forEach(section => {
+      const data = bySection[section];
+      data.ctr = data.views > 0 ? ((data.clicks / data.views) * 100).toFixed(2) : 0;
+    });
+
+    // Top banners por engagement
+    const topBanners = banners
+      .map(b => ({
+        id: b.id,
+        title: b.title,
+        section: b.section,
+        views: b.views || 0,
+        clicks: b.clicks || 0,
+        ctr: b.views > 0 ? ((b.clicks / b.views) * 100).toFixed(2) : 0,
+        isActive: b.isActive
+      }))
+      .sort((a, b) => b.clicks - a.clicks)
+      .slice(0, 10);
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          total: banners.length,
+          active: activeBanners.length,
+          inactive: banners.length - activeBanners.length,
+          totalViews,
+          totalClicks,
+          overallCTR: `${overallCTR}%`
+        },
+        bySection,
+        topBanners
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo banners stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas de banners',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas de hitos de desarrollo
+app.get('/api/admin/analytics/milestones', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('🎯 [ADMIN] Obteniendo estadísticas de hitos...');
+
+    // Obtener todas las categorías
+    const categoriesSnapshot = await db.collection('milestoneCategories').get();
+    const categories = categoriesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Obtener todos los hitos
+    const milestonesSnapshot = await db.collection('milestones').get();
+    const milestones = milestonesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Obtener todos los niños
+    const childrenSnapshot = await db.collection('children').get();
+    const children = childrenSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    // Contar completados por cada niño
+    let totalCompleted = 0;
+    const completionByCategory = {};
+
+    for (const child of children) {
+      const completedSnapshot = await db
+        .collection('children')
+        .doc(child.id)
+        .collection('milestonesCompleted')
+        .get();
+      
+      totalCompleted += completedSnapshot.size;
+
+      // Agrupar por categoría
+      for (const doc of completedSnapshot.docs) {
+        const data = doc.data();
+        if (data.categoryId) {
+          completionByCategory[data.categoryId] = (completionByCategory[data.categoryId] || 0) + 1;
+        }
+      }
+    }
+
+    // Calcular progreso por categoría
+    const categoryStats = categories.map(cat => {
+      const milestonesInCategory = milestones.filter(m => m.categoryId === cat.id).length;
+      const completed = completionByCategory[cat.id] || 0;
+      const avgCompletion = milestonesInCategory > 0 && children.length > 0
+        ? ((completed / (milestonesInCategory * children.length)) * 100).toFixed(2)
+        : 0;
+
+      return {
+        categoryId: cat.id,
+        categoryName: cat.name,
+        totalMilestones: milestonesInCategory,
+        completedCount: completed,
+        avgCompletionRate: `${avgCompletion}%`
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalMilestones: milestones.length,
+          totalCategories: categories.length,
+          totalChildren: children.length,
+          totalCompletions: totalCompleted,
+          avgCompletionPerChild: children.length > 0 
+            ? (totalCompleted / children.length).toFixed(2) 
+            : 0
+        },
+        byCategory: categoryStats.sort((a, b) => b.completedCount - a.completedCount)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo milestones stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas de hitos',
+      error: error.message
+    });
+  }
+});
+
+// Estadísticas de FAQ y consultas con OpenAI
+app.get('/api/admin/analytics/faq', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('💬 [ADMIN] Obteniendo estadísticas de FAQ...');
+
+    const faqSnapshot = await db.collection('faq_history').orderBy('createdAt', 'desc').limit(1000).get();
+    const faqs = faqSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()
+    }));
+
+    // Total de consultas
+    const totalQueries = faqs.length;
+
+    // Por tipo de pregunta (detectar palabras clave)
+    const queryTypes = {
+      salud: 0,
+      alimentacion: 0,
+      sueno: 0,
+      desarrollo: 0,
+      comportamiento: 0,
+      otro: 0
+    };
+
+    faqs.forEach(faq => {
+      const question = (faq.question || '').toLowerCase();
+      if (question.includes('salud') || question.includes('enferm') || question.includes('doctor')) {
+        queryTypes.salud++;
+      } else if (question.includes('comida') || question.includes('alimenta') || question.includes('comer')) {
+        queryTypes.alimentacion++;
+      } else if (question.includes('dormir') || question.includes('sueño') || question.includes('noche')) {
+        queryTypes.sueno++;
+      } else if (question.includes('desarrollo') || question.includes('crecer') || question.includes('aprende')) {
+        queryTypes.desarrollo++;
+      } else if (question.includes('comporta') || question.includes('llora') || question.includes('rabieta')) {
+        queryTypes.comportamiento++;
+      } else {
+        queryTypes.otro++;
+      }
+    });
+
+    // Por día de la semana
+    const byDayOfWeek = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+    faqs.forEach(faq => {
+      if (faq.createdAt) {
+        const day = faq.createdAt.getDay();
+        byDayOfWeek[day]++;
+      }
+    });
+
+    // Usuarios más activos
+    const userCounts = {};
+    faqs.forEach(faq => {
+      if (faq.userId) {
+        userCounts[faq.userId] = (userCounts[faq.userId] || 0) + 1;
+      }
+    });
+    const topUsers = Object.entries(userCounts)
+      .map(([userId, count]) => ({ userId, queryCount: count }))
+      .sort((a, b) => b.queryCount - a.queryCount)
+      .slice(0, 10);
+
+    // Últimas 10 consultas
+    const recentQueries = faqs.slice(0, 10).map(faq => ({
+      id: faq.id,
+      question: faq.question?.substring(0, 100),
+      userId: faq.userId,
+      createdAt: faq.createdAt
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalQueries,
+          uniqueUsers: Object.keys(userCounts).length,
+          avgQueriesPerUser: Object.keys(userCounts).length > 0
+            ? (totalQueries / Object.keys(userCounts).length).toFixed(2)
+            : 0
+        },
+        queryTypes,
+        byDayOfWeek: {
+          domingo: byDayOfWeek[0],
+          lunes: byDayOfWeek[1],
+          martes: byDayOfWeek[2],
+          miercoles: byDayOfWeek[3],
+          jueves: byDayOfWeek[4],
+          viernes: byDayOfWeek[5],
+          sabado: byDayOfWeek[6]
+        },
+        topUsers,
+        recentQueries
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo FAQ stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas de FAQ',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE USUARIOS ==========
 
 // Obtener todos los usuarios (con paginación)
@@ -18389,25 +18948,16 @@ app.get('/api/banners', authenticateToken, async (req, res) => {
         if (isInDateRange) {
           allBanners.push({
             id: doc.id,
-            type: 'banner', // ⬅️ NUEVO: tipo de banner
-            isEvent: false, // ⬅️ NUEVO: indica que NO es un evento
+            ...banner, // ⬅️ INCLUIR TODOS LOS CAMPOS DEL BANNER
+            type: 'banner', // Tipo de banner
+            isEvent: false, // Indica que NO es un evento
             
-            title: banner.title,
-            description: banner.description || '',
-            imageUrl: banner.imageUrl,
-            link: banner.link || null,
-            
+            // Asegurar que estos campos existan (por compatibilidad)
             order: banner.order || 999,
             duration: banner.duration || 5,
             section: banner.section || 'home',
-            
-            startDate: banner.startDate || null,
-            endDate: banner.endDate || null,
-            
             views: banner.views || 0,
-            clicks: banner.clicks || 0,
-            
-            createdAt: banner.createdAt
+            clicks: banner.clicks || 0
           });
         }
       }
@@ -18635,6 +19185,75 @@ app.delete('/api/posts/:postId/waitlist', authenticateToken, async (req, res) =>
     res.status(500).json({
       success: false,
       message: 'Error saliendo de lista de espera',
+      error: error.message
+    });
+  }
+});
+
+// ============== ELIMINAR POST/EVENTO (Usuario debe ser el autor) ==============
+app.delete('/api/posts/:postId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { postId } = req.params;
+
+    console.log(`🗑️ [POST] Usuario ${uid} intenta eliminar post ${postId}`);
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    // Obtener el post
+    const postDoc = await db.collection('posts').doc(postId).get();
+
+    if (!postDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Publicación no encontrada'
+      });
+    }
+
+    const postData = postDoc.data();
+
+    // Verificar que el usuario es el autor del post
+    if (postData.authorId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para eliminar esta publicación'
+      });
+    }
+
+    // Eliminar el post
+    await db.collection('posts').doc(postId).delete();
+
+    console.log(`✅ [POST] Post ${postId} eliminado exitosamente por ${uid}`);
+
+    // Decrementar el contador de posts de la comunidad (si tiene communityId)
+    if (postData.communityId) {
+      try {
+        await db.collection('communities').doc(postData.communityId).update({
+          postCount: admin.firestore.FieldValue.increment(-1),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`✅ [POST] Contador de posts de comunidad ${postData.communityId} actualizado`);
+      } catch (communityError) {
+        console.error('⚠️ [POST] Error actualizando contador de comunidad:', communityError.message);
+        // No fallar la petición si esto falla
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Publicación eliminada exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [POST] Error eliminando post:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando publicación',
       error: error.message
     });
   }
@@ -33956,6 +34575,254 @@ app.get('/api/sleep/notifications/process-scheduled', (req, res) => {
   sleepNotificationsController.processScheduledNotifications(req, res);
 });
 
+// ============== CRON: PROCESAR NOTIFICACIONES DE MEDICAMENTOS ==============
+app.get('/api/cron/process-medication-notifications', async (req, res) => {
+  try {
+    // Verificar que viene del cron de Vercel
+    const authHeader = req.headers.authorization;
+    const expectedSecret = process.env.CRON_SECRET;
+    
+    if (!expectedSecret) {
+      console.error('❌ [CRON] CRON_SECRET no está configurado en las variables de entorno');
+      return res.status(500).json({ 
+        success: false, 
+        message: 'CRON_SECRET not configured' 
+      });
+    }
+    
+    if (authHeader !== `Bearer ${expectedSecret}`) {
+      console.log('⚠️ [CRON] Intento de acceso no autorizado');
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Unauthorized' 
+      });
+    }
+
+    console.log('🔔 [CRON] Iniciando procesamiento de notificaciones de medicamentos...');
+    
+    const now = new Date();
+    const twentyMinutesFromNow = new Date(now.getTime() + 20 * 60 * 1000);
+    
+    // Buscar notificaciones que deben enviarse en los próximos 20 minutos
+    // y que no han sido enviadas
+    const pendingSnapshot = await db
+      .collection('scheduled_med_notifications')
+      .where('scheduledFor', '>=', now)
+      .where('scheduledFor', '<=', twentyMinutesFromNow)
+      .where('sent', '==', false)
+      .limit(100)
+      .get();
+
+    console.log(`📦 [CRON] Encontradas ${pendingSnapshot.size} notificaciones pendientes`);
+
+    let sentCount = 0;
+    let scheduledCount = 0;
+    let errorCount = 0;
+    let noTokensCount = 0;
+
+    // Helper para programar follow-up
+    const scheduleMedicationFollowup = async (notif, originalDocId) => {
+      if (!notif || notif.type !== 'medication_reminder') return;
+      const followUpMinutes = Number.isFinite(notif.followUpMinutes) ? notif.followUpMinutes : 120;
+      if (!followUpMinutes || followUpMinutes <= 0) return;
+
+      const scheduledForDate = notif.scheduledFor?.toDate
+        ? notif.scheduledFor.toDate()
+        : new Date(notif.scheduledFor);
+      if (Number.isNaN(scheduledForDate.getTime())) return;
+
+      const followupAt = new Date(scheduledForDate.getTime() + followUpMinutes * 60 * 1000);
+      if (followupAt <= now) return;
+
+      const title = '⏰ Recuerda el medicamento';
+      const body = `Recuerda darle ${notif.medicationName}: ${notif.dose} ${notif.doseUnit} a ${notif.childName}.`;
+
+      try {
+        const followupRef = db.collection('scheduled_med_notifications').doc();
+        await followupRef.set({
+          userId: notif.userId,
+          childId: notif.childId,
+          childName: notif.childName,
+          medicationId: notif.medicationId,
+          medicationName: notif.medicationName,
+          dose: notif.dose,
+          doseUnit: notif.doseUnit,
+          type: 'medication_followup',
+          title,
+          body,
+          scheduledFor: followupAt,
+          sent: false,
+          isFollowup: true,
+          originalReminder: originalDocId,
+          data: {
+            ...(notif.data || {}),
+            type: 'medication_followup',
+            isFollowup: true,
+            originalReminder: originalDocId,
+            reminderId: followupRef.id
+          },
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`⏰ [CRON] Follow-up programado para ${followupAt.toISOString()}`);
+      } catch (error) {
+        console.error('❌ [CRON] Error programando follow-up:', error);
+      }
+    };
+
+    for (const doc of pendingSnapshot.docs) {
+      try {
+        const notif = doc.data();
+        const scheduledTime = notif.scheduledFor.toDate();
+        const minutesUntil = (scheduledTime - now) / 1000 / 60;
+
+        // Si falta menos de 2 minutos, enviar ahora
+        if (minutesUntil < 2) {
+          console.log(`📤 [CRON] Enviando notificación (falta ${minutesUntil.toFixed(1)} min): ${notif.title}`);
+          
+          // Obtener tokens FCM del usuario
+          const userDoc = await db.collection('users').doc(notif.userId).get();
+          if (!userDoc.exists) {
+            console.log(`⚠️ [CRON] Usuario no encontrado: ${notif.userId}`);
+            await doc.ref.update({ 
+              sent: true, 
+              failed: true, 
+              failReason: 'User not found',
+              sentAt: now
+            });
+            errorCount++;
+            continue;
+          }
+
+          const userData = userDoc.data();
+          const tokens = userData.fcmTokens || [];
+
+          if (tokens.length === 0) {
+            console.log(`⚠️ [CRON] Usuario sin tokens FCM: ${notif.userId}`);
+            await doc.ref.update({ 
+              sent: true, 
+              failed: true, 
+              failReason: 'No FCM tokens',
+              sentAt: now
+            });
+            noTokensCount++;
+            continue;
+          }
+
+          // Enviar notificación push
+          try {
+            const messaging = admin.messaging();
+            const promises = tokens.map(token =>
+              messaging.send({
+                token,
+                notification: {
+                  title: notif.title,
+                  body: notif.body
+                },
+                data: Object.entries(notif.data || {}).reduce((acc, [key, val]) => {
+                  acc[key] = String(val);
+                  return acc;
+                }, {}),
+                android: {
+                  priority: 'high',
+                  notification: {
+                    sound: 'default',
+                    channelId: 'medication_reminders',
+                    priority: 'high'
+                  }
+                },
+                apns: {
+                  headers: { 'apns-priority': '10' },
+                  payload: {
+                    aps: {
+                      sound: 'default',
+                      badge: 1,
+                      'content-available': 1
+                    }
+                  }
+                }
+              }).catch(err => {
+                console.error(`❌ [CRON] Error enviando a token ${token.substring(0, 20)}...`, err.message);
+                return null;
+              })
+            );
+
+            await Promise.all(promises);
+
+            // Guardar en historial de notificaciones
+            await db.collection('notifications').add({
+              userId: notif.userId,
+              childId: notif.childId,
+              type: notif.type,
+              title: notif.title,
+              body: notif.body,
+              data: notif.data,
+              read: false,
+              sentAt: admin.firestore.FieldValue.serverTimestamp(),
+              createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            // Marcar como enviado
+            await doc.ref.update({ 
+              sent: true, 
+              sentAt: now,
+              sentToTokens: tokens.length
+            });
+            
+            sentCount++;
+            console.log(`✅ [CRON] Notificación enviada a ${tokens.length} dispositivo(s)`);
+
+            // Programar follow-up si aplica
+            if (notif.type === 'medication_reminder' && notif.followUpMinutes) {
+              await scheduleMedicationFollowup(notif, doc.id);
+            }
+
+          } catch (sendError) {
+            console.error('❌ [CRON] Error enviando push:', sendError);
+            await doc.ref.update({ 
+              sent: true, 
+              failed: true, 
+              failReason: sendError.message,
+              sentAt: now
+            });
+            errorCount++;
+          }
+
+        } else {
+          // Todavía falta tiempo, se procesará en el próximo ciclo
+          scheduledCount++;
+          console.log(`⏳ [CRON] Programada para dentro de ${minutesUntil.toFixed(1)} min: ${notif.title}`);
+        }
+
+      } catch (docError) {
+        console.error(`❌ [CRON] Error procesando documento ${doc.id}:`, docError);
+        errorCount++;
+      }
+    }
+
+    const summary = {
+      success: true,
+      sent: sentCount,
+      scheduled: scheduledCount,
+      errors: errorCount,
+      noTokens: noTokensCount,
+      total: pendingSnapshot.size,
+      timestamp: now.toISOString()
+    };
+
+    console.log(`✅ [CRON] Resumen: ${sentCount} enviados, ${scheduledCount} programados, ${errorCount} errores, ${noTokensCount} sin tokens`);
+
+    res.json(summary);
+
+  } catch (error) {
+    console.error('❌ [CRON] Error general procesando medicamentos:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // ============================================================================
 // 💊 SISTEMA DE MEDICAMENTOS Y RECORDATORIOS
 // ============================================================================
@@ -38806,6 +39673,388 @@ Devuelve SOLO el JSON, sin texto adicional.`;
       message: 'Error generando recetas',
       error: error.message
     });
+  }
+});
+
+// ============================================================================
+// ENDPOINT TEMPORAL: Contar campos de usuarios (displayName vs name)
+// ============================================================================
+app.get('/api/admin/analytics/user-fields-count', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('📊 [ADMIN] Contando campos de usuarios...');
+    
+    const usersSnapshot = await db.collection('users').get();
+    const totalUsers = usersSnapshot.size;
+    
+    let usersWithDisplayName = 0;
+    let usersWithName = 0;
+    let usersWithBoth = 0;
+    let usersWithNeither = 0;
+    let usersOnlyDisplayName = 0;
+    let usersOnlyName = 0;
+    
+    usersSnapshot.forEach(doc => {
+      const userData = doc.data();
+      const hasDisplayName = userData.displayName && userData.displayName.trim() !== '';
+      const hasName = userData.name && userData.name.trim() !== '';
+      
+      if (hasDisplayName) usersWithDisplayName++;
+      if (hasName) usersWithName++;
+      
+      if (hasDisplayName && hasName) {
+        usersWithBoth++;
+      } else if (hasDisplayName && !hasName) {
+        usersOnlyDisplayName++;
+      } else if (!hasDisplayName && hasName) {
+        usersOnlyName++;
+      } else {
+        usersWithNeither++;
+      }
+    });
+    
+    console.log(`✅ [ADMIN] Análisis completo: ${totalUsers} usuarios`);
+    
+    res.json({
+      success: true,
+      data: {
+        totalUsers,
+        usersWithDisplayName,
+        usersWithName,
+        usersWithBoth,
+        usersOnlyDisplayName,
+        usersOnlyName,
+        usersWithNeither,
+        percentages: {
+          withDisplayName: ((usersWithDisplayName/totalUsers)*100).toFixed(1),
+          withName: ((usersWithName/totalUsers)*100).toFixed(1),
+          withBoth: ((usersWithBoth/totalUsers)*100).toFixed(1),
+          onlyDisplayName: ((usersOnlyDisplayName/totalUsers)*100).toFixed(1),
+          onlyName: ((usersOnlyName/totalUsers)*100).toFixed(1),
+          withNeither: ((usersWithNeither/totalUsers)*100).toFixed(1)
+        }
+      },
+      generatedAt: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error contando campos de usuarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas de usuarios',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// ENDPOINT TEMPORAL: Contar campos de usuarios (displayName vs name)
+// ============================================================================
+app.get('/api/admin/analytics/user-fields-count', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('📊 [ADMIN] Contando campos de usuarios...');
+    
+    const usersSnapshot = await db.collection('users').get();
+    const totalUsers = usersSnapshot.size;
+    
+    let usersWithDisplayName = 0;
+    let usersWithName = 0;
+    let usersWithBoth = 0;
+    let usersWithNeither = 0;
+    let usersOnlyDisplayName = 0;
+    let usersOnlyName = 0;
+    
+    usersSnapshot.forEach(doc => {
+      const userData = doc.data();
+      const hasDisplayName = userData.displayName && userData.displayName.trim() !== '';
+      const hasName = userData.name && userData.name.trim() !== '';
+      
+      if (hasDisplayName) usersWithDisplayName++;
+      if (hasName) usersWithName++;
+      
+      if (hasDisplayName && hasName) {
+        usersWithBoth++;
+      } else if (hasDisplayName && !hasName) {
+        usersOnlyDisplayName++;
+      } else if (!hasDisplayName && hasName) {
+        usersOnlyName++;
+      } else {
+        usersWithNeither++;
+      }
+    });
+    
+    console.log(`✅ [ADMIN] Análisis completo: ${totalUsers} usuarios`);
+    
+    res.json({
+      success: true,
+      data: {
+        totalUsers,
+        usersWithDisplayName,
+        usersWithName,
+        usersWithBoth,
+        usersOnlyDisplayName,
+        usersOnlyName,
+        usersWithNeither,
+        percentages: {
+          withDisplayName: ((usersWithDisplayName/totalUsers)*100).toFixed(1),
+          withName: ((usersWithName/totalUsers)*100).toFixed(1),
+          withBoth: ((usersWithBoth/totalUsers)*100).toFixed(1),
+          onlyDisplayName: ((usersOnlyDisplayName/totalUsers)*100).toFixed(1),
+          onlyName: ((usersOnlyName/totalUsers)*100).toFixed(1),
+          withNeither: ((usersWithNeither/totalUsers)*100).toFixed(1)
+        }
+      },
+      generatedAt: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error contando campos de usuarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas de usuarios',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// ENDPOINTS DE PRUEBA - EMAILS (Solo para desarrollo/testing)
+// ============================================================================
+
+/**
+ * Endpoint de prueba para email de bienvenida
+ * POST /api/test/send-welcome-email
+ */
+app.post('/api/test/send-welcome-email', async (req, res) => {
+  try {
+    const { userName, userEmail } = req.body;
+    
+    if (!userName || !userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'userName y userEmail son requeridos'
+      });
+    }
+    
+    const { sendWelcomeEmail } = require('./services/emailService');
+    const result = await sendWelcomeEmail(userName, userEmail);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Email enviado exitosamente' : 'Error enviando email',
+      emailId: result.id,
+      error: result.error
+    });
+    
+  } catch (error) {
+    console.error('❌ [TEST] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Endpoint de prueba para email de cumpleaños
+ * POST /api/test/send-birthday-email
+ */
+app.post('/api/test/send-birthday-email', async (req, res) => {
+  try {
+    const { userName, userEmail, childName, age } = req.body;
+    
+    if (!userName || !userEmail || !childName || !age) {
+      return res.status(400).json({
+        success: false,
+        message: 'userName, userEmail, childName y age son requeridos'
+      });
+    }
+    
+    const { sendBirthdayEmail } = require('./services/emailService');
+    const result = await sendBirthdayEmail(userName, userEmail, childName, age);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Email enviado exitosamente' : 'Error enviando email',
+      emailId: result.id,
+      error: result.error
+    });
+    
+  } catch (error) {
+    console.error('❌ [TEST] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================================================
+// CRON JOBS - EMAILS AUTOMATIZADOS
+// ============================================================================
+
+/**
+ * Cron Job: Procesar cumpleaños
+ * Se ejecuta diariamente a las 8am
+ * Envía emails de cumpleaños y recordatorios
+ */
+app.get('/api/cron/process-birthdays', async (req, res) => {
+  try {
+    console.log('🎂 [CRON] Procesando cumpleaños...');
+    
+    // Importar servicio de emails
+    const { sendBirthdayEmail, sendBirthdayReminder } = require('./services/emailService');
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    // Obtener todos los hijos
+    const childrenSnapshot = await db.collection('children').get();
+    
+    let birthdaysToday = 0;
+    let birthdaysTomorrow = 0;
+    let emailsSent = 0;
+    
+    for (const childDoc of childrenSnapshot.docs) {
+      const child = childDoc.data();
+      
+      if (!child.birthdate) continue;
+      
+      const birthdate = new Date(child.birthdate);
+      
+      // Mismo día y mes que hoy (cumpleaños)
+      if (birthdate.getDate() === today.getDate() && 
+          birthdate.getMonth() === today.getMonth()) {
+        
+        birthdaysToday++;
+        
+        // Obtener datos del padre
+        const parentDoc = await db.collection('users').doc(child.parentId).get();
+        const parent = parentDoc.data();
+        
+        if (parent && parent.email) {
+          const age = today.getFullYear() - birthdate.getFullYear();
+          
+          console.log(`🎂 Enviando cumpleaños de ${child.name} (${age} años) a ${parent.email}`);
+          
+          await sendBirthdayEmail(
+            parent.displayName || parent.name || 'Mamá',
+            parent.email,
+            child.name,
+            age
+          );
+          
+          emailsSent++;
+        }
+      }
+      
+      // Mismo día y mes que mañana (recordatorio)
+      if (birthdate.getDate() === tomorrow.getDate() && 
+          birthdate.getMonth() === tomorrow.getMonth()) {
+        
+        birthdaysTomorrow++;
+        
+        const parentDoc = await db.collection('users').doc(child.parentId).get();
+        const parent = parentDoc.data();
+        
+        if (parent && parent.email) {
+          const age = tomorrow.getFullYear() - birthdate.getFullYear();
+          
+          console.log(`🎈 Enviando recordatorio de cumpleaños de ${child.name} a ${parent.email}`);
+          
+          await sendBirthdayReminder(
+            parent.displayName || parent.name || 'Mamá',
+            parent.email,
+            child.name,
+            age
+          );
+          
+          emailsSent++;
+        }
+      }
+    }
+    
+    console.log(`✅ [CRON] Cumpleaños hoy: ${birthdaysToday}, Mañana: ${birthdaysTomorrow}, Emails: ${emailsSent}`);
+    
+    res.json({
+      success: true,
+      birthdaysToday,
+      birthdaysTomorrow,
+      emailsSent
+    });
+    
+  } catch (error) {
+    console.error('❌ [CRON] Error procesando cumpleaños:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Cron Job: Recordatorios de eventos
+ * Se ejecuta diariamente a las 9am
+ * Envía recordatorios 24h antes de los eventos
+ */
+app.get('/api/cron/process-event-reminders', async (req, res) => {
+  try {
+    console.log('⏰ [CRON] Procesando recordatorios de eventos...');
+    
+    const { sendEventReminder } = require('./services/emailService');
+    
+    const now = new Date();
+    const in24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const in25Hours = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+    
+    // Buscar eventos que ocurren en las próximas 24-25 horas
+    const postsSnapshot = await db.collection('posts')
+      .where('postType', '==', 'event')
+      .get();
+    
+    let remindersSent = 0;
+    let eventsProcessed = 0;
+    
+    for (const postDoc of postsSnapshot.docs) {
+      const post = postDoc.data();
+      
+      if (!post.eventData || post.eventData.status !== 'upcoming') continue;
+      if (!post.eventData.eventDate || !post.eventData.attendees) continue;
+      
+      const eventDate = new Date(post.eventData.eventDate._seconds * 1000);
+      
+      // Verificar si el evento es en las próximas 24 horas
+      if (eventDate > in24Hours && eventDate <= in25Hours) {
+        eventsProcessed++;
+        
+        // Enviar recordatorio a cada asistente
+        for (const attendee of post.eventData.attendees) {
+          if (!attendee.userEmail) continue;
+          
+          console.log(`⏰ Enviando recordatorio de ${post.eventData.title} a ${attendee.userEmail}`);
+          
+          await sendEventReminder(
+            attendee.userName || 'Mamá',
+            attendee.userEmail,
+            {
+              id: postDoc.id,
+              title: post.eventData.title,
+              description: post.content,
+              eventDate: post.eventData.eventDate,
+              location: post.eventData.location,
+              checkInCode: post.eventData.checkInCode
+            }
+          );
+          
+          remindersSent++;
+        }
+      }
+    }
+    
+    console.log(`✅ [CRON] Eventos procesados: ${eventsProcessed}, Recordatorios enviados: ${remindersSent}`);
+    
+    res.json({
+      success: true,
+      eventsProcessed,
+      remindersSent
+    });
+    
+  } catch (error) {
+    console.error('❌ [CRON] Error procesando recordatorios:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
