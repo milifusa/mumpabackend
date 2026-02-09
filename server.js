@@ -12244,6 +12244,51 @@ app.post('/api/auth/children', authenticateToken, async (req, res) => {
       updatedAt: new Date()
     });
 
+    // 📧 Enviar email si es el primer hijo
+    if (actualChildrenCount === 1) {
+      try {
+        const { sendFirstChildEmail } = require('./services/emailService');
+        const userDoc = await userRef.get();
+        const userData = userDoc.data();
+        
+        // Calcular edad del hijo para el email
+        let childAge = '';
+        if (!isUnborn && birthDate) {
+          const birth = new Date(birthDate);
+          const now = new Date();
+          const months = Math.floor((now - birth) / (1000 * 60 * 60 * 24 * 30.44));
+          const years = Math.floor(months / 12);
+          const remainingMonths = months % 12;
+          
+          if (years > 0) {
+            childAge = `${years} ${years === 1 ? 'año' : 'años'}`;
+            if (remainingMonths > 0) {
+              childAge += ` y ${remainingMonths} ${remainingMonths === 1 ? 'mes' : 'meses'}`;
+            }
+          } else {
+            childAge = `${months} ${months === 1 ? 'mes' : 'meses'}`;
+          }
+        } else if (isUnborn) {
+          childAge = 'por nacer';
+        } else if (ageInMonths !== undefined) {
+          childAge = `${ageInMonths} ${ageInMonths === 1 ? 'mes' : 'meses'}`;
+        }
+        
+        if (userData && userData.email) {
+          console.log(`📧 [EMAIL] Enviando email de primer hijo a ${userData.email}`);
+          sendFirstChildEmail(
+            userData.displayName || userData.name || 'Mamá',
+            userData.email,
+            name.trim(),
+            childAge
+          ).catch(err => console.error('❌ [EMAIL] Error enviando email de primer hijo:', err));
+        }
+      } catch (emailError) {
+        console.error('❌ [EMAIL] Error al enviar email de primer hijo:', emailError);
+        // No fallar la request si el email falla
+      }
+    }
+
     res.json({
       success: true,
       message: 'Hijo agregado exitosamente',
@@ -18298,6 +18343,32 @@ app.post('/api/posts/:postId/attend', authenticateToken, async (req, res) => {
     });
 
     console.log(`✅ [EVENT] Usuario ${uid} confirmó asistencia al evento ${postId}`);
+
+    // 📧 Enviar email de confirmación al asistente
+    try {
+      const { sendEventConfirmation } = require('./services/emailService');
+      const attendeeDoc = await db.collection('users').doc(uid).get();
+      const attendeeData = attendeeDoc.exists ? attendeeDoc.data() : {};
+      
+      if (attendeeData && attendeeData.email) {
+        console.log(`📧 [EMAIL] Enviando confirmación de evento a ${attendeeData.email}`);
+        sendEventConfirmation(
+          attendeeData.displayName || attendeeData.name || 'Mamá',
+          attendeeData.email,
+          {
+            id: postId,
+            title: eventData.title,
+            description: postData.content,
+            eventDate: eventData.eventDate,
+            location: eventData.location || { name: 'Por definir', address: '' },
+            checkInCode: eventData.checkInCode || null
+          }
+        ).catch(err => console.error('❌ [EMAIL] Error enviando confirmación:', err));
+      }
+    } catch (emailError) {
+      console.error('❌ [EMAIL] Error al enviar confirmación de evento:', emailError);
+      // No fallar la request si el email falla
+    }
 
     // Enviar notificación al organizador
     try {
@@ -27689,6 +27760,7 @@ app.patch('/api/admin/events/:eventId/cancel', authenticateToken, isAdmin, async
 
     // Notificar a todos los asistentes y lista de espera
     try {
+      const { sendEventCancelled } = require('./services/emailService');
       const attendees = eventPost.eventData.attendees || [];
       const waitlist = eventPost.eventData.waitlist || [];
       const allUsers = [...attendees, ...waitlist];
@@ -27699,6 +27771,23 @@ app.patch('/api/admin/events/:eventId/cancel', authenticateToken, isAdmin, async
             const userDoc = await db.collection('users').doc(userId).get();
             if (userDoc.exists) {
               const userData = userDoc.data();
+              
+              // 📧 Enviar email de cancelación
+              if (userData.email) {
+                sendEventCancelled(
+                  userData.displayName || userData.name || 'Mamá',
+                  userData.email,
+                  {
+                    id: eventId,
+                    title: eventPost.eventData.title,
+                    description: eventPost.content || eventPost.eventData.description,
+                    eventDate: eventPost.eventData.eventDate,
+                    location: eventPost.eventData.location || { name: 'Por definir', address: '' }
+                  },
+                  reason || 'Cancelado por administrador'
+                ).catch(err => console.error('❌ [EMAIL] Error enviando cancelación:', err));
+              }
+              
               return { userId, tokens: userData.fcmTokens || [] };
             }
           } catch (error) {
