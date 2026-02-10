@@ -40646,6 +40646,45 @@ app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) 
 });
 
 /**
+ * DEBUG: Ver todos los profesionales sin filtros
+ * GET /api/admin/specialists/debug
+ */
+app.get('/api/admin/specialists/debug', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.collection('professionals')
+      .orderBy('createdAt', 'desc')
+      .limit(10)
+      .get();
+    
+    const professionals = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      professionals.push({
+        id: doc.id,
+        name: data.name,
+        canAcceptConsultations: data.canAcceptConsultations,
+        consultationPricing: data.consultationPricing ? 'EXISTS' : 'NO',
+        linkedUserId: data.linkedUserId || 'NO',
+        accountType: data.accountType || 'NO',
+        hasOldStructure: data.personalInfo ? 'YES (OLD)' : 'NO'
+      });
+    });
+    
+    res.json({
+      success: true,
+      total: snapshot.size,
+      data: professionals
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
  * Listar profesionales que dan consultas (Admin)
  * GET /api/admin/specialists
  */
