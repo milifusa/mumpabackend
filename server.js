@@ -40646,6 +40646,39 @@ app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) 
 });
 
 /**
+ * TEMPORAL: Actualizar campo directo en profesional
+ * PATCH /api/admin/specialists/:id/quick-update
+ */
+app.patch('/api/admin/specialists/:id/quick-update', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+    
+    await db.collection('professionals').doc(id).update({
+      ...updateData,
+      updatedAt: new Date()
+    });
+    
+    const updatedDoc = await db.collection('professionals').doc(id).get();
+    
+    res.json({
+      success: true,
+      message: 'Actualizado',
+      data: {
+        id,
+        ...updatedDoc.data()
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
  * TEMPORAL: Actualizar professionalProfile de usuario específico
  * POST /api/admin/users/:userId/update-professional-link
  */
