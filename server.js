@@ -40646,6 +40646,118 @@ app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) 
 });
 
 /**
+ * TEMPORAL: Actualizar profesionales existentes para consultas
+ * POST /api/admin/specialists/migrate
+ */
+app.post('/api/admin/specialists/migrate', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('🔄 Iniciando migración de profesionales...');
+    
+    const snapshot = await db.collection('professionals').get();
+    
+    let updated = 0;
+    let skipped = 0;
+    const results = [];
+    
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const id = doc.id;
+      
+      // Si ya tiene canAcceptConsultations, saltar
+      if (data.canAcceptConsultations !== undefined) {
+        skipped++;
+        results.push({
+          id,
+          name: data.name,
+          action: 'skipped',
+          reason: 'Ya tiene canAcceptConsultations'
+        });
+        continue;
+      }
+      
+      // Determinar accountType basado en specialties
+      let accountType = 'specialist';
+      const specialties = data.specialties || [];
+      
+      if (specialties.some(s => s.toLowerCase().includes('nutrición') || s.toLowerCase().includes('nutricionista'))) {
+        accountType = 'nutritionist';
+      } else if (specialties.some(s => s.toLowerCase().includes('lactancia') || s.toLowerCase().includes('doula') || s.toLowerCase().includes('sueño'))) {
+        accountType = 'coach';
+      } else if (specialties.some(s => s.toLowerCase().includes('psicólog'))) {
+        accountType = 'psychologist';
+      }
+      
+      // Actualizar
+      await db.collection('professionals').doc(id).update({
+        canAcceptConsultations: true,
+        accountType: accountType,
+        professionalInfo: {
+          licenseNumber: null,
+          university: null,
+          yearsExperience: 5,
+          certifications: []
+        },
+        availability: {
+          schedule: {},
+          timezone: 'America/Guayaquil',
+          maxConsultationsPerDay: 10
+        },
+        consultationPricing: {
+          chatConsultation: 25,
+          videoConsultation: 40,
+          currency: 'USD',
+          acceptsFreeConsultations: false
+        },
+        consultationStats: {
+          totalConsultations: 0,
+          averageRating: 0,
+          responseTime: 0,
+          completionRate: 100
+        },
+        permissions: {
+          canAcceptConsultations: true,
+          canPrescribe: accountType === 'specialist',
+          canDiagnose: ['specialist', 'psychologist'].includes(accountType),
+          canSellProducts: ['nutritionist', 'coach'].includes(accountType),
+          canCreateMealPlans: accountType === 'nutritionist',
+          canWriteArticles: true
+        },
+        updatedAt: new Date()
+      });
+      
+      updated++;
+      results.push({
+        id,
+        name: data.name,
+        action: 'updated',
+        accountType
+      });
+    }
+    
+    console.log(`✅ Migración completada: ${updated} actualizados, ${skipped} saltados`);
+    
+    res.json({
+      success: true,
+      message: 'Migración completada',
+      summary: {
+        total: snapshot.size,
+        updated,
+        skipped
+      },
+      results
+    });
+    
+  } catch (error) {
+    console.error('❌ Error en migración:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error en migración',
+      error: error.message
+    });
+  }
+});
+
+/**
  * DEBUG: Ver todos los profesionales sin filtros
  * GET /api/admin/specialists/debug
  */
