@@ -44707,6 +44707,60 @@ app.delete('/api/admin/consultations/:consultationId', authenticateToken, isAdmi
 // ============================================================================
 
 /**
+ * TEMPORAL: Buscar documento por ID en múltiples colecciones
+ * GET /api/temp/find-document/:id
+ */
+app.get('/api/temp/find-document/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const collections = [
+      'professionals',
+      'serviceRequests', 
+      'professionalRequests',
+      'service_requests',
+      'marketplaceRequests',
+      'marketplace_services',
+      'services',
+      'business_requests'
+    ];
+    
+    const results = {};
+    
+    for (const collectionName of collections) {
+      try {
+        const doc = await db.collection(collectionName).doc(id).get();
+        
+        if (doc.exists) {
+          results[collectionName] = {
+            found: true,
+            data: {
+              id: doc.id,
+              ...doc.data()
+            }
+          };
+        } else {
+          results[collectionName] = { found: false };
+        }
+      } catch (error) {
+        results[collectionName] = {
+          found: false,
+          error: error.message
+        };
+      }
+    }
+    
+    res.json({
+      success: true,
+      searchId: id,
+      results
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * TEMPORAL: Verificar solicitudes de servicio
  * GET /api/temp/check-service-requests
  */
