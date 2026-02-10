@@ -40956,9 +40956,16 @@ async function findBestAutoApplyCoupon(userId, type, specialistId) {
   try {
     const now = new Date();
     
+    console.log(`🔍 [COUPON] Buscando cupón auto-aplicable para usuario ${userId}`);
+    console.log(`   • Tipo: ${type}`);
+    console.log(`   • Especialista: ${specialistId}`);
+    
     // Obtener usuario para verificar condiciones
     const userDoc = await db.collection('users').doc(userId).get();
-    if (!userDoc.exists) return null;
+    if (!userDoc.exists) {
+      console.log(`   ❌ Usuario no encontrado`);
+      return null;
+    }
     
     const userData = userDoc.data();
     
@@ -40972,6 +40979,9 @@ async function findBestAutoApplyCoupon(userId, type, specialistId) {
       doc => doc.data().status === 'completed'
     );
     
+    console.log(`   • Consultas totales: ${userConsultations}`);
+    console.log(`   • Tiene consulta completada: ${hasCompletedConsultation}`);
+    
     // Verificar si tiene hijos
     const childrenSnapshot = await db.collection('users')
       .doc(userId)
@@ -40979,59 +40989,106 @@ async function findBestAutoApplyCoupon(userId, type, specialistId) {
       .get();
     const hasChildren = !childrenSnapshot.empty;
     
+    console.log(`   • Tiene hijos: ${hasChildren} (${childrenSnapshot.size})`);
+    
     // Obtener cupones auto-aplicables activos
     const couponsSnapshot = await db.collection('discountCoupons')
       .where('autoApply', '==', true)
       .where('isActive', '==', true)
       .get();
     
+    console.log(`   • Cupones auto-aplicables encontrados: ${couponsSnapshot.size}`);
+    
     const eligibleCoupons = [];
     
     couponsSnapshot.forEach(doc => {
       const coupon = { id: doc.id, ...doc.data() };
       
+      console.log(`   📌 Evaluando cupón: ${coupon.code}`);
+      
       // Validar fechas
-      if (coupon.validFrom && coupon.validFrom.toDate() > now) return;
-      if (coupon.validUntil && coupon.validUntil.toDate() < now) return;
+      if (coupon.validFrom && coupon.validFrom.toDate() > now) {
+        console.log(`      ❌ Aún no está vigente (inicia: ${coupon.validFrom.toDate()})`);
+        return;
+      }
+      if (coupon.validUntil && coupon.validUntil.toDate() < now) {
+        console.log(`      ❌ Ya expiró (expiró: ${coupon.validUntil.toDate()})`);
+        return;
+      }
       
       // Validar usos máximos
-      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) return;
+      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
+        console.log(`      ❌ Alcanzó el máximo de usos (${coupon.usedCount}/${coupon.maxUses})`);
+        return;
+      }
       
       // Validar tipo de consulta
-      if (coupon.applicableTo !== 'all' && coupon.applicableTo !== type) return;
+      if (coupon.applicableTo !== 'all' && coupon.applicableTo !== type) {
+        console.log(`      ❌ No aplica a este tipo (requiere: ${coupon.applicableTo}, actual: ${type})`);
+        return;
+      }
       
       // Validar especialista
-      if (coupon.specialistId && coupon.specialistId !== specialistId) return;
+      if (coupon.specialistId && coupon.specialistId !== specialistId) {
+        console.log(`      ❌ No aplica a este especialista`);
+        return;
+      }
       
       // Validar condiciones de auto-aplicación
       const conditions = coupon.autoApplyConditions || {};
       
+      console.log(`      ✓ Validando condiciones...`);
+      
       // Primera consulta
-      if (conditions.firstConsultation && hasCompletedConsultation) return;
+      if (conditions.firstConsultation && hasCompletedConsultation) {
+        console.log(`      ❌ Requiere primera consulta pero usuario ya tiene consulta completada`);
+        return;
+      }
       
       // Nuevo usuario (sin consultas completadas)
-      if (conditions.newUser && hasCompletedConsultation) return;
+      if (conditions.newUser && hasCompletedConsultation) {
+        console.log(`      ❌ Requiere usuario nuevo pero ya tiene consulta completada`);
+        return;
+      }
       
       // Mínimo de consultas
-      if (conditions.minConsultations && userConsultations < conditions.minConsultations) return;
+      if (conditions.minConsultations && userConsultations < conditions.minConsultations) {
+        console.log(`      ❌ Requiere mínimo ${conditions.minConsultations} consultas pero tiene ${userConsultations}`);
+        return;
+      }
       
       // Máximo de consultas
-      if (conditions.maxConsultations && userConsultations > conditions.maxConsultations) return;
+      if (conditions.maxConsultations !== null && conditions.maxConsultations !== undefined && userConsultations > conditions.maxConsultations) {
+        console.log(`      ❌ Requiere máximo ${conditions.maxConsultations} consultas pero tiene ${userConsultations}`);
+        return;
+      }
       
       // Debe tener hijos registrados
-      if (conditions.userHasChildren && !hasChildren) return;
+      if (conditions.userHasChildren && !hasChildren) {
+        console.log(`      ❌ Requiere tener hijos registrados pero no tiene`);
+        return;
+      }
       
       // Días específicos
       if (conditions.specificDays && conditions.specificDays.length > 0) {
         const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const today = dayNames[now.getDay()];
-        if (!conditions.specificDays.includes(today)) return;
+        if (!conditions.specificDays.includes(today)) {
+          console.log(`      ❌ Requiere día específico (${conditions.specificDays.join(', ')}) pero hoy es ${today}`);
+          return;
+        }
       }
       
+      console.log(`      ✅ Cupón ELEGIBLE! (priority: ${coupon.priority || 0})`);
       eligibleCoupons.push(coupon);
     });
     
-    if (eligibleCoupons.length === 0) return null;
+    if (eligibleCoupons.length === 0) {
+      console.log(`   ❌ No hay cupones elegibles`);
+      return null;
+    }
+    
+    console.log(`   ✅ ${eligibleCoupons.length} cupón(es) elegible(s)`);
     
     // Ordenar por prioridad (mayor primero) y luego por descuento
     eligibleCoupons.sort((a, b) => {
@@ -41046,6 +41103,8 @@ async function findBestAutoApplyCoupon(userId, type, specialistId) {
       // Comparar valores
       return b.value - a.value;
     });
+    
+    console.log(`   🎁 Cupón seleccionado: ${eligibleCoupons[0].code} (${eligibleCoupons[0].type}, value: ${eligibleCoupons[0].value})`);
     
     return eligibleCoupons[0];
     
