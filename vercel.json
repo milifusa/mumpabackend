@@ -14,10 +14,6 @@
   ],
   "crons": [
     {
-      "path": "/api/notifications/daily-reminders",
-      "schedule": "0 9 * * *"
-    },
-    {
       "path": "/api/cron/process-medication-notifications",
       "schedule": "*/10 * * * *"
     },
