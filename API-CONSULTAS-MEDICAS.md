@@ -220,9 +220,19 @@ Content-Type: application/json
   "type": "percentage",
   "value": 10,
   "maxUses": 100,
-  "validFrom": "2026-01-01",
-  "validUntil": "2026-12-31",
-  "applicableTo": "all"
+  "validFrom": "2026-01-01T00:00:00Z",
+  "validUntil": "2026-12-31T23:59:59Z",
+  "applicableTo": "all",
+  "autoApply": false,
+  "autoApplyConditions": {
+    "firstConsultation": false,
+    "newUser": false,
+    "minConsultations": null,
+    "maxConsultations": null,
+    "userHasChildren": false,
+    "specificDays": null,
+    "priority": 0
+  }
 }
 ```
 
@@ -236,6 +246,64 @@ Content-Type: application/json
 - `chat`: Solo chat
 - `video`: Solo video
 - `specific_specialist`: Solo para un especialista específico
+
+**✨ AUTO-APLICACIÓN:**
+
+El cupón puede aplicarse automáticamente sin que el usuario lo ingrese:
+
+```json
+{
+  "code": "PRIMERA",
+  "type": "free",
+  "value": 0,
+  "autoApply": true,
+  "autoApplyConditions": {
+    "firstConsultation": true,       // Solo primera consulta
+    "newUser": false,                // Solo usuarios nuevos
+    "minConsultations": null,        // Mínimo de consultas
+    "maxConsultations": 0,           // Máximo de consultas
+    "userHasChildren": true,         // Debe tener hijos registrados
+    "specificDays": null,            // ["monday", "friday"] o null
+    "priority": 10                   // Mayor prioridad = se aplica primero
+  }
+}
+```
+
+**Ejemplo: Primera Consulta Gratis (Auto-aplicable)**
+```json
+{
+  "code": "PRIMERA",
+  "type": "free",
+  "value": 0,
+  "maxUses": 1000,
+  "validFrom": "2026-02-01",
+  "validUntil": "2026-12-31",
+  "applicableTo": "all",
+  "autoApply": true,
+  "autoApplyConditions": {
+    "firstConsultation": true,
+    "userHasChildren": true,
+    "priority": 10
+  }
+}
+```
+
+**Ejemplo: 20% Descuento Fin de Semana (Auto-aplicable)**
+```json
+{
+  "code": "WEEKEND20",
+  "type": "percentage",
+  "value": 20,
+  "validFrom": "2026-02-01",
+  "validUntil": "2026-12-31",
+  "applicableTo": "all",
+  "autoApply": true,
+  "autoApplyConditions": {
+    "specificDays": ["friday", "saturday", "sunday"],
+    "priority": 5
+  }
+}
+```
 
 ### 3.2 Listar Cupones (Admin)
 ```bash
@@ -283,7 +351,7 @@ Content-Type: application/json
 {
   "type": "video",
   "specialistId": "specialist_1",
-  "couponCode": "FIRST10"
+  "couponCode": "FIRST10"      // Opcional, si no se envía busca cupones auto-aplicables
 }
 ```
 
@@ -299,9 +367,48 @@ Content-Type: application/json
     "coupon": {
       "code": "FIRST10",
       "type": "percentage",
-      "value": 10
+      "value": 10,
+      "autoApplied": false    // true si se aplicó automáticamente
     },
     "isFree": false
+  }
+}
+```
+
+**✨ AUTO-APLICACIÓN:**
+
+Si NO envías `couponCode`, el sistema automáticamente buscará el mejor cupón disponible basándose en:
+- Primera consulta del usuario
+- Número de consultas previas
+- Día de la semana
+- Si tiene hijos registrados
+- Prioridad del cupón
+
+**Ejemplo sin cupón (auto-aplicación):**
+```bash
+POST /api/consultations/calculate-price
+{
+  "type": "video",
+  "specialistId": "specialist_123"
+  // No se envía couponCode
+}
+```
+
+**Response con cupón auto-aplicado:**
+```json
+{
+  "success": true,
+  "data": {
+    "basePrice": 40,
+    "discount": 40,
+    "finalPrice": 0,
+    "coupon": {
+      "code": "PRIMERA",
+      "type": "free",
+      "value": 0,
+      "autoApplied": true     // ✅ Se aplicó automáticamente
+    },
+    "isFree": true
   }
 }
 ```

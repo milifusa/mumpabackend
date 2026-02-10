@@ -40950,12 +40950,129 @@ app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) =>
 // ============================================================================
 
 /**
+ * Helper: Buscar el mejor cupón auto-aplicable para un usuario
+ */
+async function findBestAutoApplyCoupon(userId, type, specialistId) {
+  try {
+    const now = new Date();
+    
+    // Obtener usuario para verificar condiciones
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) return null;
+    
+    const userData = userDoc.data();
+    
+    // Obtener historial de consultas del usuario
+    const consultationsSnapshot = await db.collection('consultations')
+      .where('parentId', '==', userId)
+      .get();
+    
+    const userConsultations = consultationsSnapshot.size;
+    const hasCompletedConsultation = consultationsSnapshot.docs.some(
+      doc => doc.data().status === 'completed'
+    );
+    
+    // Verificar si tiene hijos
+    const childrenSnapshot = await db.collection('users')
+      .doc(userId)
+      .collection('children')
+      .get();
+    const hasChildren = !childrenSnapshot.empty;
+    
+    // Obtener cupones auto-aplicables activos
+    const couponsSnapshot = await db.collection('discountCoupons')
+      .where('autoApply', '==', true)
+      .where('isActive', '==', true)
+      .get();
+    
+    const eligibleCoupons = [];
+    
+    couponsSnapshot.forEach(doc => {
+      const coupon = { id: doc.id, ...doc.data() };
+      
+      // Validar fechas
+      if (coupon.validFrom && coupon.validFrom.toDate() > now) return;
+      if (coupon.validUntil && coupon.validUntil.toDate() < now) return;
+      
+      // Validar usos máximos
+      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) return;
+      
+      // Validar tipo de consulta
+      if (coupon.applicableTo !== 'all' && coupon.applicableTo !== type) return;
+      
+      // Validar especialista
+      if (coupon.specialistId && coupon.specialistId !== specialistId) return;
+      
+      // Validar condiciones de auto-aplicación
+      const conditions = coupon.autoApplyConditions || {};
+      
+      // Primera consulta
+      if (conditions.firstConsultation && hasCompletedConsultation) return;
+      
+      // Nuevo usuario (sin consultas completadas)
+      if (conditions.newUser && hasCompletedConsultation) return;
+      
+      // Mínimo de consultas
+      if (conditions.minConsultations && userConsultations < conditions.minConsultations) return;
+      
+      // Máximo de consultas
+      if (conditions.maxConsultations && userConsultations > conditions.maxConsultations) return;
+      
+      // Debe tener hijos registrados
+      if (conditions.userHasChildren && !hasChildren) return;
+      
+      // Días específicos
+      if (conditions.specificDays && conditions.specificDays.length > 0) {
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const today = dayNames[now.getDay()];
+        if (!conditions.specificDays.includes(today)) return;
+      }
+      
+      eligibleCoupons.push(coupon);
+    });
+    
+    if (eligibleCoupons.length === 0) return null;
+    
+    // Ordenar por prioridad (mayor primero) y luego por descuento
+    eligibleCoupons.sort((a, b) => {
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      // Si son del mismo tipo free, son iguales
+      if (a.type === 'free' && b.type === 'free') return 0;
+      if (a.type === 'free') return -1;
+      if (b.type === 'free') return 1;
+      
+      // Comparar valores
+      return b.value - a.value;
+    });
+    
+    return eligibleCoupons[0];
+    
+  } catch (error) {
+    console.error('❌ Error buscando cupón auto-aplicable:', error);
+    return null;
+  }
+}
+
+/**
  * Crear cupón de descuento (Admin)
  * POST /api/admin/coupons
  */
 app.post('/api/admin/coupons', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { code, type, value, maxUses, validFrom, validUntil, applicableTo, specialistId } = req.body;
+    const { 
+      code, 
+      type, 
+      value, 
+      maxUses, 
+      validFrom, 
+      validUntil, 
+      applicableTo, 
+      specialistId,
+      autoApply,
+      autoApplyConditions
+    } = req.body;
     
     if (!code || !type || value === undefined) {
       return res.status(400).json({
@@ -40996,6 +41113,16 @@ app.post('/api/admin/coupons', authenticateToken, isAdmin, async (req, res) => {
       validUntil: validUntil ? new Date(validUntil) : null,
       applicableTo: applicableTo || 'all',
       specialistId: specialistId || null,
+      autoApply: autoApply || false,
+      autoApplyConditions: autoApplyConditions || {
+        firstConsultation: false,
+        newUser: false,
+        minConsultations: null,
+        maxConsultations: null,
+        userHasChildren: false,
+        specificDays: null // ["monday", "tuesday", ...]
+      },
+      priority: autoApply ? (autoApplyConditions?.priority || 0) : 0,
       isActive: true,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -41003,7 +41130,7 @@ app.post('/api/admin/coupons', authenticateToken, isAdmin, async (req, res) => {
     
     const couponRef = await db.collection('discountCoupons').add(couponData);
     
-    console.log(`✅ [ADMIN] Cupón creado: ${code}`);
+    console.log(`✅ [ADMIN] Cupón creado: ${code} ${autoApply ? '(Auto-aplicable)' : ''}`);
     
     res.json({
       success: true,
@@ -41225,6 +41352,7 @@ app.get('/api/coupons/verify/:code', authenticateToken, async (req, res) => {
 app.post('/api/consultations/calculate-price', authenticateToken, async (req, res) => {
   try {
     const { type, specialistId, couponCode } = req.body;
+    const userId = req.user.uid;
     
     if (!type || !specialistId) {
       return res.status(400).json({
@@ -41250,8 +41378,9 @@ app.post('/api/consultations/calculate-price', authenticateToken, async (req, re
     
     let discount = 0;
     let couponData = null;
+    let appliedCoupon = null;
     
-    // Aplicar cupón si existe
+    // 1. Primero intentar con el cupón ingresado manualmente (si existe)
     if (couponCode) {
       const couponSnapshot = await db.collection('discountCoupons')
         .where('code', '==', couponCode.toUpperCase())
@@ -41272,21 +41401,32 @@ app.post('/api/consultations/calculate-price', authenticateToken, async (req, re
           (!coupon.specialistId || coupon.specialistId === specialistId);
         
         if (isValid) {
-          if (coupon.type === 'percentage') {
-            discount = basePrice * (coupon.value / 100);
-          } else if (coupon.type === 'fixed') {
-            discount = coupon.value;
-          } else if (coupon.type === 'free') {
-            discount = basePrice;
-          }
-          
-          couponData = {
-            code: coupon.code,
-            type: coupon.type,
-            value: coupon.value
-          };
+          appliedCoupon = coupon;
         }
       }
+    }
+    
+    // 2. Si no hay cupón manual, buscar cupones auto-aplicables
+    if (!appliedCoupon) {
+      appliedCoupon = await findBestAutoApplyCoupon(userId, type, specialistId);
+    }
+    
+    // Calcular descuento si hay cupón aplicable
+    if (appliedCoupon) {
+      if (appliedCoupon.type === 'percentage') {
+        discount = basePrice * (appliedCoupon.value / 100);
+      } else if (appliedCoupon.type === 'fixed') {
+        discount = appliedCoupon.value;
+      } else if (appliedCoupon.type === 'free') {
+        discount = basePrice;
+      }
+      
+      couponData = {
+        code: appliedCoupon.code,
+        type: appliedCoupon.type,
+        value: appliedCoupon.value,
+        autoApplied: !couponCode && appliedCoupon.autoApply
+      };
     }
     
     const finalPrice = Math.max(0, basePrice - discount);
@@ -41401,9 +41541,14 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
     
     let discount = 0;
     let finalCouponCode = null;
+    let finalCouponId = null;
     let isFree = false;
+    let autoApplied = false;
     
-    // Aplicar cupón si existe
+    // 1. Primero intentar con el cupón ingresado manualmente (si existe)
+    let appliedCoupon = null;
+    let appliedCouponDocId = null;
+    
     if (couponCode) {
       const couponSnapshot = await db.collection('discountCoupons')
         .where('code', '==', couponCode.toUpperCase())
@@ -41425,23 +41570,41 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
           (!coupon.specialistId || coupon.specialistId === specialistId);
         
         if (isValid) {
-          if (coupon.type === 'percentage') {
-            discount = basePrice * (coupon.value / 100);
-          } else if (coupon.type === 'fixed') {
-            discount = coupon.value;
-          } else if (coupon.type === 'free') {
-            discount = basePrice;
-            isFree = true;
-          }
-          
-          finalCouponCode = coupon.code;
-          
-          // Incrementar contador de usos
-          await db.collection('discountCoupons').doc(couponDoc.id).update({
-            usedCount: admin.firestore.FieldValue.increment(1)
-          });
+          appliedCoupon = coupon;
+          appliedCouponDocId = couponDoc.id;
         }
       }
+    }
+    
+    // 2. Si no hay cupón manual, buscar cupones auto-aplicables
+    if (!appliedCoupon) {
+      const autoCoupon = await findBestAutoApplyCoupon(userId, type, specialistId);
+      if (autoCoupon) {
+        appliedCoupon = autoCoupon;
+        appliedCouponDocId = autoCoupon.id;
+        autoApplied = true;
+      }
+    }
+    
+    // Calcular descuento y actualizar contador si hay cupón aplicable
+    if (appliedCoupon) {
+      if (appliedCoupon.type === 'percentage') {
+        discount = basePrice * (appliedCoupon.value / 100);
+      } else if (appliedCoupon.type === 'fixed') {
+        discount = appliedCoupon.value;
+      } else if (appliedCoupon.type === 'free') {
+        discount = basePrice;
+        isFree = true;
+      }
+      
+      finalCouponCode = appliedCoupon.code;
+      
+      // Incrementar contador de usos
+      await db.collection('discountCoupons').doc(appliedCouponDocId).update({
+        usedCount: admin.firestore.FieldValue.increment(1)
+      });
+      
+      console.log(`✅ Cupón aplicado: ${finalCouponCode} ${autoApplied ? '(automático)' : '(manual)'}`);
     }
     
     const finalPrice = Math.max(0, basePrice - discount);
