@@ -40536,17 +40536,18 @@ app.get('/api/symptoms', authenticateToken, async (req, res) => {
 // ============================================================================
 
 /**
- * Crear especialista (Admin)
+ * Crear profesional para consultas (Admin)
  * POST /api/admin/specialists
+ * Estructura unificada compatible con professionals existentes
  */
 app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { personalInfo, professional, pricing, availability } = req.body;
+    const { personalInfo, professional, pricing, availability, accountType } = req.body;
     
-    if (!personalInfo?.displayName || !personalInfo?.email) {
+    if (!personalInfo?.displayName) {
       return res.status(400).json({
         success: false,
-        message: 'Nombre y email son requeridos'
+        message: 'Nombre es requerido'
       });
     }
     
@@ -40557,99 +40558,129 @@ app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) 
       });
     }
     
-    const specialistData = {
-      personalInfo: {
-        displayName: personalInfo.displayName.trim(),
-        email: personalInfo.email.trim().toLowerCase(),
-        photoUrl: personalInfo.photoUrl || null,
-        phone: personalInfo.phone || null,
-        bio: personalInfo.bio || null
-      },
-      professional: {
-        specialties: professional.specialties || [],
+    // Estructura unificada: compatible con professionals existentes + campos de consultas
+    const professionalData = {
+      // Campos del formato existente de professionals
+      name: personalInfo.displayName.trim(),
+      headline: personalInfo.headline || '',
+      bio: personalInfo.bio || '',
+      photoUrl: personalInfo.photoUrl || null,
+      contactEmail: personalInfo.email?.trim().toLowerCase() || '',
+      contactPhone: personalInfo.phone || '',
+      website: personalInfo.website || '',
+      location: personalInfo.location || '',
+      specialties: professional.specialties || [],
+      tags: professional.specialties || [], // Usar specialties como tags también
+      
+      // Nuevos campos para consultas médicas
+      accountType: accountType || 'specialist', // specialist, nutritionist, coach, psychologist
+      canAcceptConsultations: true,
+      
+      // Información profesional adicional
+      professionalInfo: {
         licenseNumber: professional.licenseNumber || null,
         university: professional.university || null,
         yearsExperience: professional.yearsExperience || 0,
         certifications: professional.certifications || []
       },
+      
+      // Disponibilidad
       availability: {
         schedule: availability?.schedule || {},
         timezone: availability?.timezone || 'America/Guayaquil',
         maxConsultationsPerDay: availability?.maxConsultationsPerDay || 10
       },
-      pricing: {
+      
+      // Precios de consultas
+      consultationPricing: {
         chatConsultation: pricing?.chatConsultation || 25,
         videoConsultation: pricing?.videoConsultation || 40,
         currency: pricing?.currency || 'USD',
         acceptsFreeConsultations: pricing?.acceptsFreeConsultations || false
       },
-      stats: {
+      
+      // Estadísticas
+      consultationStats: {
         totalConsultations: 0,
         averageRating: 0,
         responseTime: 0,
         completionRate: 100
       },
+      
+      // Permisos según tipo de cuenta
+      permissions: {
+        canAcceptConsultations: true,
+        canPrescribe: accountType === 'specialist',
+        canDiagnose: ['specialist', 'psychologist'].includes(accountType),
+        canSellProducts: ['nutritionist', 'coach'].includes(accountType),
+        canCreateMealPlans: accountType === 'nutritionist',
+        canWriteArticles: true
+      },
+      
       status: 'active',
       createdAt: new Date(),
       updatedAt: new Date()
     };
     
-    const specialistRef = await db.collection('specialists').add(specialistData);
+    const professionalRef = await db.collection('professionals').add(professionalData);
     
-    console.log(`✅ [ADMIN] Especialista creado: ${specialistRef.id} - ${personalInfo.displayName}`);
+    console.log(`✅ [ADMIN] Profesional creado: ${professionalRef.id} - ${personalInfo.displayName} (${accountType})`);
     
     res.json({
       success: true,
-      message: 'Especialista creado exitosamente',
+      message: 'Profesional creado exitosamente',
       data: {
-        id: specialistRef.id,
-        ...specialistData
+        id: professionalRef.id,
+        ...professionalData
       }
     });
     
   } catch (error) {
-    console.error('❌ [ADMIN] Error creando especialista:', error);
+    console.error('❌ [ADMIN] Error creando profesional:', error);
     res.status(500).json({
       success: false,
-      message: 'Error creando especialista',
+      message: 'Error creando profesional',
       error: error.message
     });
   }
 });
 
 /**
- * Listar especialistas (Admin)
+ * Listar profesionales que dan consultas (Admin)
  * GET /api/admin/specialists
  */
 app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { specialty, status, page = 1, limit = 20, search } = req.query;
+    const { specialty, status, page = 1, limit = 20, search, accountType } = req.query;
     
-    let query = db.collection('specialists');
+    let query = db.collection('professionals')
+      .where('canAcceptConsultations', '==', true); // Solo los que dan consultas
     
     // Filtros
     if (status) {
       query = query.where('status', '==', status);
     }
     
-    query = query.orderBy('createdAt', 'desc');
+    if (accountType) {
+      query = query.where('accountType', '==', accountType);
+    }
     
-    const snapshot = await query.get();
+    const snapshot = await query.orderBy('createdAt', 'desc').get();
     
     let specialists = [];
     snapshot.forEach(doc => {
       const data = doc.data();
       
       // Filtro por especialidad (en memoria)
-      if (specialty && !data.professional.specialties.includes(specialty)) {
+      if (specialty && !data.specialties?.includes(specialty)) {
         return;
       }
       
       // Filtro de búsqueda
       if (search) {
         const searchLower = search.toLowerCase();
-        const matchesName = data.personalInfo.displayName.toLowerCase().includes(searchLower);
-        const matchesSpecialty = data.professional.specialties.some(s => 
+        const matchesName = data.name?.toLowerCase().includes(searchLower);
+        const matchesSpecialty = data.specialties?.some(s => 
           s.toLowerCase().includes(searchLower)
         );
         if (!matchesName && !matchesSpecialty) {
@@ -40672,7 +40703,7 @@ app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) =
     const endIndex = startIndex + limitNum;
     const paginatedSpecialists = specialists.slice(startIndex, endIndex);
     
-    console.log(`✅ [ADMIN] Especialistas listados: ${specialists.length} total`);
+    console.log(`✅ [ADMIN] Profesionales con consultas listados: ${specialists.length} total`);
     
     res.json({
       success: true,
@@ -40686,10 +40717,10 @@ app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) =
     });
     
   } catch (error) {
-    console.error('❌ [ADMIN] Error listando especialistas:', error);
+    console.error('❌ [ADMIN] Error listando profesionales:', error);
     res.status(500).json({
       success: false,
-      message: 'Error listando especialistas',
+      message: 'Error listando profesionales',
       error: error.message
     });
   }
@@ -40703,7 +40734,7 @@ app.get('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, asyn
   try {
     const { specialistId } = req.params;
     
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -40754,7 +40785,7 @@ app.put('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, asyn
     const { specialistId } = req.params;
     const { personalInfo, professional, pricing, availability, status } = req.body;
     
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -40773,9 +40804,9 @@ app.put('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, asyn
     if (availability) updateData.availability = availability;
     if (status) updateData.status = status;
     
-    await db.collection('specialists').doc(specialistId).update(updateData);
+    await db.collection('professionals').doc(specialistId).update(updateData);
     
-    const updatedDoc = await db.collection('specialists').doc(specialistId).get();
+    const updatedDoc = await db.collection('professionals').doc(specialistId).get();
     const data = updatedDoc.data();
     
     console.log(`✅ [ADMIN] Especialista actualizado: ${specialistId}`);
@@ -40809,7 +40840,7 @@ app.delete('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, a
   try {
     const { specialistId } = req.params;
     
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -40819,7 +40850,7 @@ app.delete('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, a
     }
     
     // Solo desactivar, no eliminar
-    await db.collection('specialists').doc(specialistId).update({
+    await db.collection('professionals').doc(specialistId).update({
       status: 'inactive',
       updatedAt: new Date()
     });
@@ -40851,7 +40882,7 @@ app.get('/api/specialists', authenticateToken, async (req, res) => {
   try {
     const { specialty, available = 'true' } = req.query;
     
-    let query = db.collection('specialists')
+    let query = db.collection('professionals')
       .where('status', '==', 'active')
       .orderBy('stats.averageRating', 'desc');
     
@@ -40862,16 +40893,16 @@ app.get('/api/specialists', authenticateToken, async (req, res) => {
       const data = doc.data();
       
       // Filtro por especialidad
-      if (specialty && !data.professional.specialties.includes(specialty)) {
+      if (specialty && !data.specialties.includes(specialty)) {
         return;
       }
       
       specialists.push({
         id: doc.id,
-        displayName: data.personalInfo.displayName,
-        photoUrl: data.personalInfo.photoUrl,
-        bio: data.personalInfo.bio,
-        specialties: data.professional.specialties,
+        displayName: data.name,
+        photoUrl: data.photoUrl,
+        bio: data.bio,
+        specialties: data.specialties,
         yearsExperience: data.professional.yearsExperience,
         pricing: data.pricing,
         stats: data.stats
@@ -40904,7 +40935,7 @@ app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) =>
   try {
     const { specialistId } = req.params;
     
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -40926,10 +40957,10 @@ app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) =>
       success: true,
       data: {
         id: specialistDoc.id,
-        displayName: data.personalInfo.displayName,
-        photoUrl: data.personalInfo.photoUrl,
-        bio: data.personalInfo.bio,
-        specialties: data.professional.specialties,
+        displayName: data.name,
+        photoUrl: data.photoUrl,
+        bio: data.bio,
+        specialties: data.specialties,
         yearsExperience: data.professional.yearsExperience,
         certifications: data.professional.certifications,
         pricing: data.pricing,
@@ -40968,7 +40999,7 @@ app.post('/api/admin/specialists/:specialistId/link-user', authenticateToken, is
     }
     
     // Verificar que el especialista existe
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -41015,7 +41046,7 @@ app.post('/api/admin/specialists/:specialistId/link-user', authenticateToken, is
     }
     
     // Actualizar especialista con linkedUserId
-    await db.collection('specialists').doc(specialistId).update({
+    await db.collection('professionals').doc(specialistId).update({
       linkedUserId: userId,
       accountType: 'specialist',
       permissions: {
@@ -41047,7 +41078,7 @@ app.post('/api/admin/specialists/:specialistId/link-user', authenticateToken, is
         userEmail: userData.email,
         userName: userData.displayName,
         specialistId,
-        specialistName: specialistData.personalInfo.displayName,
+        specialistName: specialistData.name,
         linkedAt: new Date()
       }
     });
@@ -41070,7 +41101,7 @@ app.delete('/api/admin/specialists/:specialistId/link-user', authenticateToken, 
   try {
     const { specialistId } = req.params;
     
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -41091,7 +41122,7 @@ app.delete('/api/admin/specialists/:specialistId/link-user', authenticateToken, 
     const linkedUserId = specialistData.linkedUserId;
     
     // Remover linkedUserId del especialista
-    await db.collection('specialists').doc(specialistId).update({
+    await db.collection('professionals').doc(specialistId).update({
       linkedUserId: admin.firestore.FieldValue.delete(),
       accountType: admin.firestore.FieldValue.delete(),
       permissions: admin.firestore.FieldValue.delete(),
@@ -41157,7 +41188,7 @@ app.get('/api/profile/professional', authenticateToken, async (req, res) => {
     const profile = userData.professionalProfile;
     
     // Obtener datos completos del especialista
-    const specialistDoc = await db.collection('specialists').doc(profile.specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(profile.specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.json({
@@ -41180,11 +41211,11 @@ app.get('/api/profile/professional', authenticateToken, async (req, res) => {
         status: specialistData.status,
         verifiedAt: profile.verifiedAt?.toDate?.() || profile.verifiedAt,
         specialist: {
-          displayName: specialistData.personalInfo.displayName,
-          photoUrl: specialistData.personalInfo.photoUrl,
-          specialties: specialistData.professional.specialties,
-          stats: specialistData.stats,
-          pricing: specialistData.pricing
+          displayName: specialistData.name,
+          photoUrl: specialistData.photoUrl,
+          specialties: specialistData.specialties,
+          stats: specialistData.consultationStats,
+          pricing: specialistData.consultationPricing
         }
       }
     });
@@ -41447,52 +41478,75 @@ app.post('/api/admin/professional-requests/:requestId/approve', authenticateToke
       });
     }
     
-    // Crear perfil de especialista
-    const specialistData = {
-      personalInfo: {
-        displayName: requestData.personalInfo.displayName,
-        email: requestData.userEmail,
-        photoUrl: requestData.userPhotoUrl,
-        phone: requestData.personalInfo.phone,
-        bio: requestData.personalInfo.bio
+    // Crear perfil profesional unificado
+    const professionalData = {
+      // Estructura compatible con professionals existentes
+      name: requestData.personalInfo.displayName,
+      headline: `${requestData.professional.specialties[0]} especializado`,
+      bio: requestData.personalInfo.bio || '',
+      photoUrl: requestData.userPhotoUrl || null,
+      contactEmail: requestData.userEmail,
+      contactPhone: requestData.personalInfo.phone || '',
+      website: '',
+      location: '',
+      specialties: requestData.professional.specialties || [],
+      tags: requestData.professional.specialties || [],
+      
+      // Campos para consultas médicas
+      accountType: requestData.accountType,
+      canAcceptConsultations: true,
+      
+      professionalInfo: {
+        licenseNumber: requestData.professional.licenseNumber || null,
+        university: requestData.professional.university || null,
+        yearsExperience: requestData.professional.yearsExperience || 0,
+        certifications: requestData.professional.certifications || []
       },
-      professional: requestData.professional,
+      
       availability: {
         schedule: {},
         timezone: 'America/Guayaquil',
         maxConsultationsPerDay: 10
       },
-      pricing: {
+      
+      consultationPricing: {
         chatConsultation: pricing?.chatConsultation || 25,
         videoConsultation: pricing?.videoConsultation || 40,
         currency: pricing?.currency || 'USD',
         acceptsFreeConsultations: pricing?.acceptsFreeConsultations || false
       },
-      stats: {
+      
+      consultationStats: {
         totalConsultations: 0,
         averageRating: 0,
         responseTime: 0,
         completionRate: 100
       },
+      
       linkedUserId: requestData.userId,
-      accountType: requestData.accountType,
+      userId: requestData.userId,  // Para compatibilidad
+      
       permissions: {
         canAcceptConsultations: true,
-        canSellProducts: false,
-        canCreateEvents: false
+        canPrescribe: requestData.accountType === 'specialist',
+        canDiagnose: ['specialist', 'psychologist'].includes(requestData.accountType),
+        canSellProducts: ['nutritionist', 'coach'].includes(requestData.accountType),
+        canCreateMealPlans: requestData.accountType === 'nutritionist',
+        canWriteArticles: true
       },
+      
       status: 'active',
       createdAt: new Date(),
       updatedAt: new Date()
     };
     
-    const specialistRef = await db.collection('specialists').add(specialistData);
+    const professionalRef = await db.collection('professionals').add(professionalData);
     
     // Actualizar usuario con professionalProfile
     await db.collection('users').doc(requestData.userId).update({
       professionalProfile: {
         isActive: true,
-        specialistId: specialistRef.id,
+        specialistId: professionalRef.id,
         accountType: requestData.accountType,
         verifiedAt: new Date()
       },
@@ -41504,11 +41558,11 @@ app.post('/api/admin/professional-requests/:requestId/approve', authenticateToke
       status: 'approved',
       reviewedAt: new Date(),
       reviewedBy: req.user.email || req.user.uid,
-      specialistId: specialistRef.id,
+      specialistId: professionalRef.id,
       updatedAt: new Date()
     });
     
-    console.log(`✅ [ADMIN] Solicitud aprobada: ${requestId} -> Especialista ${specialistRef.id}`);
+    console.log(`✅ [ADMIN] Solicitud aprobada: ${requestId} -> Profesional ${professionalRef.id}`);
     
     // TODO: Enviar email de aprobación al usuario
     // TODO: Enviar notificación push
@@ -41518,7 +41572,7 @@ app.post('/api/admin/professional-requests/:requestId/approve', authenticateToke
       message: 'Solicitud aprobada exitosamente. El usuario ahora es un profesional verificado.',
       data: {
         requestId,
-        specialistId: specialistRef.id,
+        specialistId: professionalRef.id,
         userId: requestData.userId,
         userEmail: requestData.userEmail
       }
@@ -42180,12 +42234,12 @@ app.post('/api/specialist/consultations/:consultationId/complete', authenticateT
     await db.collection('consultations').doc(consultationId).update(updateData);
     
     // Actualizar stats del especialista
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     if (specialistDoc.exists) {
       const specialistData = specialistDoc.data();
       const totalConsultations = (specialistData.stats?.totalConsultations || 0) + 1;
       
-      await db.collection('specialists').doc(specialistId).update({
+      await db.collection('professionals').doc(specialistId).update({
         'stats.totalConsultations': totalConsultations,
         updatedAt: new Date()
       });
@@ -42387,7 +42441,7 @@ app.put('/api/specialist/availability', authenticateToken, async (req, res) => {
       updateData['availability.maxConsultationsPerDay'] = parseInt(maxConsultationsPerDay);
     }
     
-    await db.collection('specialists').doc(specialistId).update(updateData);
+    await db.collection('professionals').doc(specialistId).update(updateData);
     
     console.log(`✅ [SPECIALIST] Disponibilidad actualizada: ${specialistId}`);
     
@@ -42443,7 +42497,7 @@ app.put('/api/specialist/pricing', authenticateToken, async (req, res) => {
       updateData['pricing.videoConsultation'] = parseFloat(videoConsultation);
     }
     
-    await db.collection('specialists').doc(specialistId).update(updateData);
+    await db.collection('professionals').doc(specialistId).update(updateData);
     
     console.log(`✅ [SPECIALIST] Precios actualizados: ${specialistId}`);
     
@@ -42942,7 +42996,7 @@ app.post('/api/consultations/calculate-price', authenticateToken, async (req, re
     }
     
     // Obtener precio del especialista
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists) {
       return res.status(404).json({
@@ -43097,7 +43151,7 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
     
     if (!specialistId) {
       // Buscar especialista activo con mejor rating
-      const specialistsSnapshot = await db.collection('specialists')
+      const specialistsSnapshot = await db.collection('professionals')
         .where('status', '==', 'active')
         .orderBy('stats.averageRating', 'desc')
         .limit(1)
@@ -43113,7 +43167,7 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
       specialistId = specialistsSnapshot.docs[0].id;
     }
     
-    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     
     if (!specialistDoc.exists || specialistDoc.data().status !== 'active') {
       return res.status(404).json({
@@ -43410,7 +43464,7 @@ app.get('/api/consultations/:consultationId', authenticateToken, async (req, res
     }
     
     // Obtener información del especialista
-    const specialistDoc = await db.collection('specialists').doc(consultation.specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(consultation.specialistId).get();
     const specialist = specialistDoc.exists ? specialistDoc.data() : null;
     
     // Obtener detalles de los síntomas
@@ -43905,17 +43959,17 @@ app.get('/api/admin/consultations/stats', authenticateToken, isAdmin, async (req
       stats.byUrgency[data.request.urgency] = (stats.byUrgency[data.request.urgency] || 0) + 1;
       
       // Revenue
-      if (data.pricing.isFree) {
+      if (data.consultationPricing.isFree) {
         stats.revenue.free += 1;
       } else if (data.payment.status === 'completed') {
-        stats.revenue.completed += data.pricing.finalPrice;
+        stats.revenue.completed += data.consultationPricing.finalPrice;
       } else {
-        stats.revenue.pending += data.pricing.finalPrice;
+        stats.revenue.pending += data.consultationPricing.finalPrice;
       }
-      stats.revenue.total += data.pricing.finalPrice || 0;
+      stats.revenue.total += data.consultationPricing.finalPrice || 0;
       
       // Cupones
-      if (data.pricing.couponCode) {
+      if (data.consultationPricing.couponCode) {
         stats.couponsUsed++;
       }
       
@@ -44012,11 +44066,11 @@ app.get('/api/admin/consultations/revenue', authenticateToken, isAdmin, async (r
         };
       }
       
-      revenueByPeriod[periodKey].revenue += data.pricing.finalPrice;
+      revenueByPeriod[periodKey].revenue += data.consultationPricing.finalPrice;
       revenueByPeriod[periodKey].consultations += 1;
       revenueByPeriod[periodKey].byType[data.type] += 1;
       
-      totalRevenue += data.pricing.finalPrice;
+      totalRevenue += data.consultationPricing.finalPrice;
       totalConsultations += 1;
     });
     
@@ -44182,7 +44236,7 @@ app.get('/api/admin/consultations/:consultationId', authenticateToken, isAdmin, 
     const consultation = consultationDoc.data();
     
     // Obtener información del especialista
-    const specialistDoc = await db.collection('specialists').doc(consultation.specialistId).get();
+    const specialistDoc = await db.collection('professionals').doc(consultation.specialistId).get();
     const specialist = specialistDoc.exists ? specialistDoc.data() : null;
     
     // Obtener información del padre/usuario
