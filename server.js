@@ -41743,6 +41743,28 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
     
     console.log(`✅ [CONSULTATION] Nueva consulta creada: ${consultationRef.id} - ${type} - $${finalPrice}`);
     
+    // Obtener detalles de los síntomas para el response
+    const symptomDetails = [];
+    if (symptoms && symptoms.length > 0) {
+      for (const symptomId of symptoms) {
+        try {
+          const symptomDoc = await db.collection('symptoms').doc(symptomId).get();
+          if (symptomDoc.exists) {
+            const symptomData = symptomDoc.data();
+            symptomDetails.push({
+              id: symptomDoc.id,
+              name: symptomData.name,
+              description: symptomData.description,
+              category: symptomData.category,
+              severity: symptomData.severity
+            });
+          }
+        } catch (err) {
+          console.warn(`⚠️ Error obteniendo síntoma ${symptomId}:`, err.message);
+        }
+      }
+    }
+    
     // Notificar al especialista (solo si está pagada o es gratis)
     if (isFree) {
       // TODO: Enviar notificación push al especialista
@@ -41755,6 +41777,10 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
       data: {
         consultationId: consultationRef.id,
         ...consultationData,
+        request: {
+          ...consultationData.request,
+          symptomDetails  // Agregar detalles de los síntomas
+        },
         paymentRequired: !isFree
       }
     });
@@ -41866,11 +41892,37 @@ app.get('/api/consultations/:consultationId', authenticateToken, async (req, res
     const specialistDoc = await db.collection('specialists').doc(consultation.specialistId).get();
     const specialist = specialistDoc.exists ? specialistDoc.data() : null;
     
+    // Obtener detalles de los síntomas
+    const symptomDetails = [];
+    if (consultation.request?.symptoms && consultation.request.symptoms.length > 0) {
+      for (const symptomId of consultation.request.symptoms) {
+        try {
+          const symptomDoc = await db.collection('symptoms').doc(symptomId).get();
+          if (symptomDoc.exists) {
+            const symptomData = symptomDoc.data();
+            symptomDetails.push({
+              id: symptomDoc.id,
+              name: symptomData.name,
+              description: symptomData.description,
+              category: symptomData.category,
+              severity: symptomData.severity
+            });
+          }
+        } catch (err) {
+          console.warn(`⚠️ Error obteniendo síntoma ${symptomId}:`, err.message);
+        }
+      }
+    }
+    
     res.json({
       success: true,
       data: {
         id: consultationDoc.id,
         ...consultation,
+        request: {
+          ...consultation.request,
+          symptomDetails  // Agregar detalles de los síntomas
+        },
         specialist: specialist ? {
           id: consultation.specialistId,
           displayName: specialist.personalInfo.displayName,
