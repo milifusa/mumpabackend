@@ -40653,23 +40653,30 @@ app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) =
   try {
     const { specialty, status, page = 1, limit = 20, search, accountType } = req.query;
     
-    let query = db.collection('professionals')
-      .where('canAcceptConsultations', '==', true); // Solo los que dan consultas
-    
-    // Filtros
-    if (status) {
-      query = query.where('status', '==', status);
-    }
-    
-    if (accountType) {
-      query = query.where('accountType', '==', accountType);
-    }
-    
-    const snapshot = await query.orderBy('createdAt', 'desc').get();
+    // Obtener TODOS los profesionales y filtrar en memoria
+    // (Evita problema de índices en Firestore)
+    const snapshot = await db.collection('professionals')
+      .orderBy('createdAt', 'desc')
+      .get();
     
     let specialists = [];
     snapshot.forEach(doc => {
       const data = doc.data();
+      
+      // Filtro: Solo los que dan consultas
+      if (data.canAcceptConsultations !== true) {
+        return;
+      }
+      
+      // Filtro por estado
+      if (status && data.status !== status) {
+        return;
+      }
+      
+      // Filtro por tipo de cuenta
+      if (accountType && data.accountType !== accountType) {
+        return;
+      }
       
       // Filtro por especialidad (en memoria)
       if (specialty && !data.specialties?.includes(specialty)) {
