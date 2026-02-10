@@ -657,6 +657,257 @@ Authorization: Bearer {token}
 
 ---
 
+## 6️⃣ ADMIN - GESTIÓN DE CONSULTAS
+
+### 6.1 Listar Todas las Consultas (Admin)
+```bash
+GET /api/admin/consultations?status=pending&type=video&page=1&limit=20&search=fiebre
+Authorization: Bearer {admin_token}
+```
+
+**Query Parameters:**
+- `status`: awaiting_payment, pending, accepted, in_progress, completed, cancelled
+- `type`: chat, video
+- `specialistId`: Filtrar por especialista
+- `parentId`: Filtrar por usuario/padre
+- `childId`: Filtrar por hijo
+- `search`: Buscar en descripción, nombre del niño o especialista
+- `page`, `limit`: Paginación
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "consultation_1",
+      "childName": "Sofía",
+      "childAge": "2 años",
+      "specialistName": "Dr. Juan Pérez",
+      "type": "video",
+      "status": "pending",
+      "request": {
+        "description": "Mi bebé tiene fiebre...",
+        "urgency": "high"
+      },
+      "pricing": {
+        "finalPrice": 36,
+        "isFree": false
+      },
+      "payment": {
+        "status": "completed"
+      },
+      "createdAt": "2026-02-08T10:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 150,
+    "totalPages": 8
+  },
+  "stats": {
+    "total": 150,
+    "byStatus": {
+      "pending": 10,
+      "in_progress": 5,
+      "completed": 120,
+      "cancelled": 15
+    },
+    "byType": {
+      "chat": 90,
+      "video": 60
+    },
+    "totalRevenue": 5400
+  }
+}
+```
+
+### 6.2 Obtener Detalles de Consulta (Admin)
+```bash
+GET /api/admin/consultations/:consultationId
+Authorization: Bearer {admin_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "consultation_1",
+    "childName": "Sofía",
+    "specialist": {
+      "id": "specialist_1",
+      "displayName": "Dr. Juan Pérez",
+      "email": "juan@hospital.com",
+      "phone": "+593987654321",
+      "specialties": ["Pediatra"]
+    },
+    "parent": {
+      "id": "user_123",
+      "displayName": "María López",
+      "email": "maria@gmail.com"
+    },
+    "request": {
+      "description": "Mi bebé tiene fiebre desde ayer...",
+      "photos": ["https://..."],
+      "symptoms": ["symptom_1"],
+      "urgency": "high"
+    },
+    "pricing": {
+      "basePrice": 40,
+      "discount": 4,
+      "finalPrice": 36
+    },
+    "payment": {
+      "method": "stripe",
+      "transactionId": "txn_123",
+      "status": "completed"
+    },
+    "messages": [
+      {
+        "id": "msg_1",
+        "senderType": "parent",
+        "message": "Hola doctor...",
+        "createdAt": "2026-02-08T10:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+### 6.3 Actualizar Estado de Consulta (Admin)
+```bash
+PATCH /api/admin/consultations/:consultationId
+Authorization: Bearer {admin_token}
+Content-Type: application/json
+
+{
+  "status": "completed",
+  "notes": "Consulta completada exitosamente"
+}
+```
+
+**Estados válidos:**
+- `awaiting_payment`: Esperando pago
+- `pending`: Pendiente de asignación
+- `accepted`: Aceptada por especialista
+- `in_progress`: En progreso
+- `completed`: Completada
+- `cancelled`: Cancelada
+
+### 6.4 Cancelar Consulta (Admin)
+```bash
+DELETE /api/admin/consultations/:consultationId
+Authorization: Bearer {admin_token}
+Content-Type: application/json
+
+{
+  "reason": "Especialista no disponible"
+}
+```
+
+### 6.5 Estadísticas de Consultas (Admin)
+```bash
+GET /api/admin/consultations/stats?startDate=2026-01-01&endDate=2026-12-31&specialistId=xxx
+Authorization: Bearer {admin_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "total": 150,
+    "byStatus": {
+      "awaiting_payment": 5,
+      "pending": 10,
+      "accepted": 8,
+      "in_progress": 7,
+      "completed": 110,
+      "cancelled": 10
+    },
+    "byType": {
+      "chat": 90,
+      "video": 60
+    },
+    "byUrgency": {
+      "low": 20,
+      "normal": 100,
+      "high": 30
+    },
+    "revenue": {
+      "total": 5400,
+      "pending": 200,
+      "completed": 5200,
+      "free": 10
+    },
+    "averagePrice": 36,
+    "couponsUsed": 45,
+    "consultationsWithPhotos": 80,
+    "averageResponseTime": 25,
+    "completionRate": 73,
+    "topSpecialists": [
+      {
+        "specialistId": "specialist_1",
+        "consultations": 60
+      },
+      {
+        "specialistId": "specialist_2",
+        "consultations": 45
+      }
+    ]
+  }
+}
+```
+
+### 6.6 Ingresos por Periodo (Admin)
+```bash
+GET /api/admin/consultations/revenue?period=month&year=2026&month=2
+Authorization: Bearer {admin_token}
+```
+
+**Period options:**
+- `day`: Ingresos por día
+- `month`: Ingresos por mes (default)
+- `year`: Ingresos por año
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "byPeriod": [
+      {
+        "period": "2026-01",
+        "revenue": 2500,
+        "consultations": 70,
+        "byType": {
+          "chat": 40,
+          "video": 30
+        }
+      },
+      {
+        "period": "2026-02",
+        "revenue": 2900,
+        "consultations": 80,
+        "byType": {
+          "chat": 50,
+          "video": 30
+        }
+      }
+    ],
+    "totals": {
+      "revenue": 5400,
+      "consultations": 150,
+      "averageRevenue": 36
+    }
+  }
+}
+```
+
+---
+
 ## 🎯 Próximos Endpoints
 
 ### Panel del Especialista:
