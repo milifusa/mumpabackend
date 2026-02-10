@@ -43284,9 +43284,20 @@ app.post('/api/consultations/calculate-price', authenticateToken, async (req, re
     }
     
     const specialist = specialistDoc.data();
+    
+    // Obtener pricing (compatible con ambas estructuras)
+    const pricing = specialist.consultationPricing || specialist.pricing || {};
+    
     const basePrice = type === 'chat' 
-      ? specialist.pricing.chatConsultation 
-      : specialist.pricing.videoConsultation;
+      ? pricing.chatConsultation 
+      : pricing.videoConsultation;
+    
+    if (!basePrice) {
+      return res.status(400).json({
+        success: false,
+        message: 'El especialista no tiene precios configurados para este tipo de consulta'
+      });
+    }
     
     let discount = 0;
     let couponData = null;
@@ -43349,7 +43360,7 @@ app.post('/api/consultations/calculate-price', authenticateToken, async (req, re
         basePrice,
         discount: Math.round(discount * 100) / 100,
         finalPrice: Math.round(finalPrice * 100) / 100,
-        currency: specialist.pricing.currency,
+        currency: pricing.currency || 'USD',
         coupon: couponData,
         isFree: finalPrice === 0
       }
@@ -43456,10 +43467,20 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
     
     const specialist = specialistDoc.data();
     
+    // Obtener pricing (compatible con ambas estructuras)
+    const pricing = specialist.consultationPricing || specialist.pricing || {};
+    
     // Calcular precio
     const basePrice = type === 'chat' 
-      ? specialist.pricing.chatConsultation 
-      : specialist.pricing.videoConsultation;
+      ? pricing.chatConsultation 
+      : pricing.videoConsultation;
+    
+    if (!basePrice) {
+      return res.status(400).json({
+        success: false,
+        message: 'El especialista no tiene precios configurados para este tipo de consulta'
+      });
+    }
     
     let discount = 0;
     let finalCouponCode = null;
@@ -43538,7 +43559,7 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
       childName: childData.name,
       childAge: childData.age || null,
       specialistId,
-      specialistName: specialist.personalInfo.displayName,
+      specialistName: specialist.name,
       type,
       status: isFree ? 'pending' : 'awaiting_payment',
       request: {
@@ -43778,9 +43799,9 @@ app.get('/api/consultations/:consultationId', authenticateToken, async (req, res
         },
         specialist: specialist ? {
           id: consultation.specialistId,
-          displayName: specialist.personalInfo.displayName,
-          photoUrl: specialist.personalInfo.photoUrl,
-          specialties: specialist.professional.specialties
+          displayName: specialist.name,
+          photoUrl: specialist.photoUrl,
+          specialties: specialist.specialties
         } : null,
         createdAt: consultation.createdAt?.toDate?.() || consultation.createdAt,
         updatedAt: consultation.updatedAt?.toDate?.() || consultation.updatedAt
@@ -44546,11 +44567,11 @@ app.get('/api/admin/consultations/:consultationId', authenticateToken, isAdmin, 
         ...consultation,
         specialist: specialist ? {
           id: consultation.specialistId,
-          displayName: specialist.personalInfo.displayName,
-          email: specialist.personalInfo.email,
-          photoUrl: specialist.personalInfo.photoUrl,
-          specialties: specialist.professional.specialties,
-          phone: specialist.personalInfo.phone
+          displayName: specialist.name,
+          email: specialist.contactEmail,
+          photoUrl: specialist.photoUrl,
+          specialties: specialist.specialties,
+          phone: specialist.contactPhone
         } : null,
         parent: parent ? {
           id: consultation.parentId,
