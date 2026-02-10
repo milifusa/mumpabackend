@@ -41200,6 +41200,410 @@ app.get('/api/profile/professional', authenticateToken, async (req, res) => {
 });
 
 // ============================================================================
+// SISTEMA DE PERFILES PROFESIONALES - SOLICITUDES
+// ============================================================================
+
+/**
+ * Solicitar ser profesional (App)
+ * POST /api/profile/request-professional
+ */
+app.post('/api/profile/request-professional', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { accountType, personalInfo, professional, documents } = req.body;
+    
+    // Validaciones
+    if (!accountType || !['specialist', 'nutritionist', 'coach', 'psychologist'].includes(accountType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de cuenta inválido. Debe ser: specialist, nutritionist, coach o psychologist'
+      });
+    }
+    
+    if (!personalInfo?.displayName || !personalInfo?.phone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre y teléfono son requeridos'
+      });
+    }
+    
+    if (!professional?.specialties || professional.specialties.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe especificar al menos una especialidad'
+      });
+    }
+    
+    if (!documents || documents.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe adjuntar al menos un documento (título, cédula o licencia)'
+      });
+    }
+    
+    // Verificar que el usuario existe
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    const userData = userDoc.data();
+    
+    // Verificar que no tenga ya un perfil profesional activo
+    if (userData.professionalProfile?.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya tienes un perfil profesional activo'
+      });
+    }
+    
+    // Verificar que no tenga una solicitud pendiente
+    const existingRequestSnapshot = await db.collection('professionalRequests')
+      .where('userId', '==', userId)
+      .where('status', '==', 'pending')
+      .limit(1)
+      .get();
+    
+    if (!existingRequestSnapshot.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ya tienes una solicitud pendiente de aprobación'
+      });
+    }
+    
+    // Crear solicitud
+    const requestData = {
+      userId,
+      userEmail: userData.email,
+      userName: userData.displayName,
+      userPhotoUrl: userData.photoURL || null,
+      accountType,
+      personalInfo: {
+        displayName: personalInfo.displayName.trim(),
+        phone: personalInfo.phone.trim(),
+        bio: personalInfo.bio?.trim() || null
+      },
+      professional: {
+        specialties: professional.specialties,
+        licenseNumber: professional.licenseNumber?.trim() || null,
+        university: professional.university?.trim() || null,
+        yearsExperience: professional.yearsExperience || 0,
+        certifications: professional.certifications || []
+      },
+      documents, // Array de URLs de documentos subidos
+      status: 'pending', // pending, approved, rejected
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const requestRef = await db.collection('professionalRequests').add(requestData);
+    
+    console.log(`✅ [PROFESSIONAL-REQUEST] Solicitud creada: ${requestRef.id} - ${userData.email}`);
+    
+    // TODO: Enviar notificación a admins
+    
+    res.json({
+      success: true,
+      message: 'Solicitud enviada exitosamente. Te notificaremos cuando sea revisada.',
+      data: {
+        requestId: requestRef.id,
+        status: 'pending',
+        createdAt: requestData.createdAt
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [PROFESSIONAL-REQUEST] Error creando solicitud:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando solicitud',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Listar solicitudes de perfiles profesionales (Admin)
+ * GET /api/admin/professional-requests
+ */
+app.get('/api/admin/professional-requests', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { status, accountType, page = 1, limit = 20, search } = req.query;
+    
+    let query = db.collection('professionalRequests');
+    
+    // Filtros
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+    
+    if (accountType) {
+      query = query.where('accountType', '==', accountType);
+    }
+    
+    query = query.orderBy('createdAt', 'desc');
+    
+    const snapshot = await query.get();
+    
+    let requests = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Filtro de búsqueda
+      if (search) {
+        const searchLower = search.toLowerCase();
+        const matchesName = data.personalInfo?.displayName?.toLowerCase().includes(searchLower);
+        const matchesEmail = data.userEmail?.toLowerCase().includes(searchLower);
+        if (!matchesName && !matchesEmail) {
+          return;
+        }
+      }
+      
+      requests.push({
+        id: doc.id,
+        userId: data.userId,
+        userEmail: data.userEmail,
+        userName: data.userName,
+        userPhotoUrl: data.userPhotoUrl,
+        accountType: data.accountType,
+        personalInfo: data.personalInfo,
+        professional: data.professional,
+        documents: data.documents,
+        status: data.status,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        reviewedAt: data.reviewedAt?.toDate?.() || data.reviewedAt,
+        reviewedBy: data.reviewedBy || null,
+        rejectionReason: data.rejectionReason || null
+      });
+    });
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedRequests = requests.slice(startIndex, endIndex);
+    
+    // Estadísticas
+    const stats = {
+      pending: requests.filter(r => r.status === 'pending').length,
+      approved: requests.filter(r => r.status === 'approved').length,
+      rejected: requests.filter(r => r.status === 'rejected').length
+    };
+    
+    console.log(`✅ [ADMIN] Solicitudes profesionales listadas: ${requests.length} total`);
+    
+    res.json({
+      success: true,
+      data: paginatedRequests,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: requests.length,
+        totalPages: Math.ceil(requests.length / limitNum)
+      },
+      stats
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando solicitudes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando solicitudes',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Aprobar solicitud de perfil profesional (Admin)
+ * POST /api/admin/professional-requests/:requestId/approve
+ */
+app.post('/api/admin/professional-requests/:requestId/approve', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { pricing } = req.body;
+    
+    const requestDoc = await db.collection('professionalRequests').doc(requestId).get();
+    
+    if (!requestDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Solicitud no encontrada'
+      });
+    }
+    
+    const requestData = requestDoc.data();
+    
+    if (requestData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `La solicitud ya fue ${requestData.status === 'approved' ? 'aprobada' : 'rechazada'}`
+      });
+    }
+    
+    // Crear perfil de especialista
+    const specialistData = {
+      personalInfo: {
+        displayName: requestData.personalInfo.displayName,
+        email: requestData.userEmail,
+        photoUrl: requestData.userPhotoUrl,
+        phone: requestData.personalInfo.phone,
+        bio: requestData.personalInfo.bio
+      },
+      professional: requestData.professional,
+      availability: {
+        schedule: {},
+        timezone: 'America/Guayaquil',
+        maxConsultationsPerDay: 10
+      },
+      pricing: {
+        chatConsultation: pricing?.chatConsultation || 25,
+        videoConsultation: pricing?.videoConsultation || 40,
+        currency: pricing?.currency || 'USD',
+        acceptsFreeConsultations: pricing?.acceptsFreeConsultations || false
+      },
+      stats: {
+        totalConsultations: 0,
+        averageRating: 0,
+        responseTime: 0,
+        completionRate: 100
+      },
+      linkedUserId: requestData.userId,
+      accountType: requestData.accountType,
+      permissions: {
+        canAcceptConsultations: true,
+        canSellProducts: false,
+        canCreateEvents: false
+      },
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const specialistRef = await db.collection('specialists').add(specialistData);
+    
+    // Actualizar usuario con professionalProfile
+    await db.collection('users').doc(requestData.userId).update({
+      professionalProfile: {
+        isActive: true,
+        specialistId: specialistRef.id,
+        accountType: requestData.accountType,
+        verifiedAt: new Date()
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    // Actualizar solicitud
+    await db.collection('professionalRequests').doc(requestId).update({
+      status: 'approved',
+      reviewedAt: new Date(),
+      reviewedBy: req.user.email || req.user.uid,
+      specialistId: specialistRef.id,
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [ADMIN] Solicitud aprobada: ${requestId} -> Especialista ${specialistRef.id}`);
+    
+    // TODO: Enviar email de aprobación al usuario
+    // TODO: Enviar notificación push
+    
+    res.json({
+      success: true,
+      message: 'Solicitud aprobada exitosamente. El usuario ahora es un profesional verificado.',
+      data: {
+        requestId,
+        specialistId: specialistRef.id,
+        userId: requestData.userId,
+        userEmail: requestData.userEmail
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error aprobando solicitud:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error aprobando solicitud',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Rechazar solicitud de perfil profesional (Admin)
+ * POST /api/admin/professional-requests/:requestId/reject
+ */
+app.post('/api/admin/professional-requests/:requestId/reject', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+    
+    if (!reason || reason.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar una razón para el rechazo'
+      });
+    }
+    
+    const requestDoc = await db.collection('professionalRequests').doc(requestId).get();
+    
+    if (!requestDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Solicitud no encontrada'
+      });
+    }
+    
+    const requestData = requestDoc.data();
+    
+    if (requestData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `La solicitud ya fue ${requestData.status === 'approved' ? 'aprobada' : 'rechazada'}`
+      });
+    }
+    
+    // Actualizar solicitud
+    await db.collection('professionalRequests').doc(requestId).update({
+      status: 'rejected',
+      reviewedAt: new Date(),
+      reviewedBy: req.user.email || req.user.uid,
+      rejectionReason: reason.trim(),
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [ADMIN] Solicitud rechazada: ${requestId} - Razón: ${reason}`);
+    
+    // TODO: Enviar email de rechazo al usuario con la razón
+    // TODO: Enviar notificación push
+    
+    res.json({
+      success: true,
+      message: 'Solicitud rechazada',
+      data: {
+        requestId,
+        userId: requestData.userId,
+        userEmail: requestData.userEmail,
+        reason: reason.trim()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error rechazando solicitud:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rechazando solicitud',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // SISTEMA DE PERFILES PROFESIONALES - PANEL DEL ESPECIALISTA
 // ============================================================================
 

@@ -702,6 +702,279 @@ const toggleMode = () => {
 
 ---
 
+## 📋 SOLICITUDES DE PERFIL PROFESIONAL
+
+### 13. Solicitar ser Profesional (App)
+```
+POST /api/profile/request-professional
+Authorization: Bearer {user_token}
+```
+
+**Body:**
+```json
+{
+  "accountType": "specialist",
+  "personalInfo": {
+    "displayName": "Dr. Juan Pérez",
+    "phone": "+593987654321",
+    "bio": "Pediatra con 10 años de experiencia en consulta infantil"
+  },
+  "professional": {
+    "specialties": ["Pediatra", "Neonatología"],
+    "licenseNumber": "MP-12345",
+    "university": "Universidad Central del Ecuador",
+    "yearsExperience": 10,
+    "certifications": ["Pediatría Avanzada", "RCP Infantil"]
+  },
+  "documents": [
+    "https://storage.googleapis.com/.../cedula.pdf",
+    "https://storage.googleapis.com/.../titulo.pdf",
+    "https://storage.googleapis.com/.../licencia.pdf"
+  ]
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "Solicitud enviada exitosamente. Te notificaremos cuando sea revisada.",
+  "data": {
+    "requestId": "request_123",
+    "status": "pending",
+    "createdAt": "2026-02-08T12:00:00.000Z"
+  }
+}
+```
+
+**Errores:**
+- `400`: Tipo de cuenta inválido (debe ser: specialist, nutritionist, coach, psychologist)
+- `400`: Nombre y teléfono son requeridos
+- `400`: Debe especificar al menos una especialidad
+- `400`: Debe adjuntar al menos un documento
+- `400`: Ya tienes un perfil profesional activo
+- `400`: Ya tienes una solicitud pendiente de aprobación
+
+---
+
+### 14. Listar Solicitudes (Admin)
+```
+GET /api/admin/professional-requests?status=pending&page=1&limit=20
+Authorization: Bearer {admin_token}
+```
+
+**Query Params:**
+- `status`: pending | approved | rejected
+- `accountType`: specialist | nutritionist | coach | psychologist
+- `search`: Buscar por nombre o email
+- `page`: Número de página (default: 1)
+- `limit`: Resultados por página (default: 20)
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "request_123",
+      "userId": "user_456",
+      "userEmail": "doctor@gmail.com",
+      "userName": "Juan Pérez",
+      "userPhotoUrl": "https://...",
+      "accountType": "specialist",
+      "personalInfo": {
+        "displayName": "Dr. Juan Pérez",
+        "phone": "+593987654321",
+        "bio": "Pediatra con 10 años de experiencia"
+      },
+      "professional": {
+        "specialties": ["Pediatra", "Neonatología"],
+        "licenseNumber": "MP-12345",
+        "university": "Universidad Central del Ecuador",
+        "yearsExperience": 10,
+        "certifications": ["Pediatría Avanzada"]
+      },
+      "documents": [
+        "https://storage.googleapis.com/.../cedula.pdf",
+        "https://storage.googleapis.com/.../titulo.pdf",
+        "https://storage.googleapis.com/.../licencia.pdf"
+      ],
+      "status": "pending",
+      "createdAt": "2026-02-08T12:00:00.000Z",
+      "updatedAt": "2026-02-08T12:00:00.000Z",
+      "reviewedAt": null,
+      "reviewedBy": null,
+      "rejectionReason": null
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 15,
+    "totalPages": 1
+  },
+  "stats": {
+    "pending": 5,
+    "approved": 8,
+    "rejected": 2
+  }
+}
+```
+
+---
+
+### 15. Aprobar Solicitud (Admin)
+```
+POST /api/admin/professional-requests/:requestId/approve
+Authorization: Bearer {admin_token}
+```
+
+**Body (Opcional):**
+```json
+{
+  "pricing": {
+    "chatConsultation": 25,
+    "videoConsultation": 40,
+    "currency": "USD",
+    "acceptsFreeConsultations": false
+  }
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "Solicitud aprobada exitosamente. El usuario ahora es un profesional verificado.",
+  "data": {
+    "requestId": "request_123",
+    "specialistId": "specialist_789",
+    "userId": "user_456",
+    "userEmail": "doctor@gmail.com"
+  }
+}
+```
+
+**Errores:**
+- `404`: Solicitud no encontrada
+- `400`: La solicitud ya fue aprobada/rechazada
+
+**Lo que hace:**
+1. ✅ Crea el perfil de especialista en la colección `specialists`
+2. ✅ Vincula el usuario agregando `professionalProfile` al documento del usuario
+3. ✅ Actualiza el estado de la solicitud a `approved`
+4. ⏳ TODO: Envía email de aprobación
+5. ⏳ TODO: Envía notificación push
+
+---
+
+### 16. Rechazar Solicitud (Admin)
+```
+POST /api/admin/professional-requests/:requestId/reject
+Authorization: Bearer {admin_token}
+```
+
+**Body:**
+```json
+{
+  "reason": "Documentación incompleta. Falta la licencia médica vigente."
+}
+```
+
+**Response 200:**
+```json
+{
+  "success": true,
+  "message": "Solicitud rechazada",
+  "data": {
+    "requestId": "request_123",
+    "userId": "user_456",
+    "userEmail": "doctor@gmail.com",
+    "reason": "Documentación incompleta. Falta la licencia médica vigente."
+  }
+}
+```
+
+**Errores:**
+- `400`: Debe proporcionar una razón para el rechazo
+- `404`: Solicitud no encontrada
+- `400`: La solicitud ya fue aprobada/rechazada
+
+**Lo que hace:**
+1. ✅ Actualiza el estado de la solicitud a `rejected`
+2. ✅ Guarda la razón del rechazo
+3. ⏳ TODO: Envía email al usuario con la razón
+4. ⏳ TODO: Envía notificación push
+
+---
+
+## 🔄 Flujo Completo: Usuario Solicita ser Especialista
+
+```bash
+# 1. Usuario sube sus documentos a Storage (desde el app)
+# POST a Firebase Storage o similar
+# Obtiene URLs: [url1, url2, url3]
+
+# 2. Usuario envía solicitud
+POST /api/profile/request-professional
+Authorization: Bearer {user_token}
+{
+  "accountType": "specialist",
+  "personalInfo": {...},
+  "professional": {...},
+  "documents": ["url1", "url2", "url3"]
+}
+# ✅ Solicitud creada con status: pending
+
+# 3. Admin revisa solicitudes pendientes
+GET /api/admin/professional-requests?status=pending
+# Ve lista de solicitudes con documentos
+
+# 4a. Admin APRUEBA la solicitud
+POST /api/admin/professional-requests/request_123/approve
+{
+  "pricing": {
+    "chatConsultation": 25,
+    "videoConsultation": 40
+  }
+}
+# ✅ Se crea el perfil de especialista
+# ✅ Se vincula con el usuario
+# ✅ Usuario puede acceder al modo profesional
+
+# 4b. O Admin RECHAZA la solicitud
+POST /api/admin/professional-requests/request_123/reject
+{
+  "reason": "Documentación incompleta"
+}
+# ❌ Solicitud rechazada
+# Usuario puede corregir y volver a solicitar
+```
+
+---
+
+## 📊 Estados de Solicitud
+
+| Estado | Descripción | Puede Volver a Solicitar |
+|--------|-------------|--------------------------|
+| `pending` | Pendiente de revisión | No (ya tiene una pendiente) |
+| `approved` | Aprobada, perfil creado | No (ya es profesional) |
+| `rejected` | Rechazada por admin | Sí (puede corregir y reenviar) |
+
+---
+
+## 🎨 Estados de Consulta
+
+| Estado | Descripción | Acciones Disponibles |
+|--------|-------------|---------------------|
+| `pending` | Pendiente de aceptar | Aceptar, Rechazar |
+| `accepted` | Aceptada, esperando inicio | Iniciar |
+| `in_progress` | En progreso (chat activo) | Completar |
+| `completed` | Completada con diagnóstico | Ver historial |
+| `rejected` | Rechazada por especialista | - |
+
+---
+
 ## ⚠️ Validaciones Importantes
 
 ### Vinculación de Usuario
@@ -795,6 +1068,10 @@ curl https://api.munpa.online/api/specialist/consultations?status=pending \
 | POST | `/api/admin/specialists/:id/link-user` | Admin | Vincular usuario |
 | DELETE | `/api/admin/specialists/:id/link-user` | Admin | Desvincular usuario |
 | GET | `/api/profile/professional` | User | Verificar perfil profesional |
+| **POST** | **`/api/profile/request-professional`** | **User** | **Solicitar ser profesional** |
+| **GET** | **`/api/admin/professional-requests`** | **Admin** | **Listar solicitudes** |
+| **POST** | **`/api/admin/professional-requests/:id/approve`** | **Admin** | **Aprobar solicitud** |
+| **POST** | **`/api/admin/professional-requests/:id/reject`** | **Admin** | **Rechazar solicitud** |
 | GET | `/api/specialist/consultations` | User | Listar consultas asignadas |
 | GET | `/api/specialist/consultations/:id` | User | Detalle de consulta |
 | POST | `/api/specialist/consultations/:id/accept` | User | Aceptar consulta |
@@ -805,4 +1082,4 @@ curl https://api.munpa.online/api/specialist/consultations?status=pending \
 | PUT | `/api/specialist/availability` | User | Actualizar disponibilidad |
 | PUT | `/api/specialist/pricing` | User | Actualizar precios |
 
-**Total: 12 nuevos endpoints** ✅
+**Total: 16 endpoints** ✅ (4 nuevos agregados)
