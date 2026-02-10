@@ -41549,8 +41549,7 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
     }
     
     // Verificar que el hijo pertenece al usuario
-    const childDoc = await db.collection('users').doc(userId)
-      .collection('children').doc(childId).get();
+    const childDoc = await db.collection('children').doc(childId).get();
     
     if (!childDoc.exists) {
       return res.status(404).json({
@@ -41560,6 +41559,17 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
     }
     
     const childData = childDoc.data();
+    
+    // Verificar que el usuario es el padre o tiene acceso compartido
+    const hasAccess = childData.parentId === userId || 
+                      (childData.sharedWith && childData.sharedWith.includes(userId));
+    
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para crear consultas para este hijo'
+      });
+    }
     
     // Buscar especialista disponible
     let specialistId = preferredSpecialistId;
