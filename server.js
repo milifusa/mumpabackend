@@ -40946,6 +40946,1121 @@ app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) =>
 });
 
 // ============================================================================
+// SISTEMA DE PERFILES PROFESIONALES - VINCULACIÓN
+// ============================================================================
+
+/**
+ * Vincular especialista con usuario del app (Admin)
+ * POST /api/admin/specialists/:specialistId/link-user
+ */
+app.post('/api/admin/specialists/:specialistId/link-user', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { specialistId } = req.params;
+    const { userEmail } = req.body;
+    
+    if (!userEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email del usuario es requerido'
+      });
+    }
+    
+    // Verificar que el especialista existe
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    const specialistData = specialistDoc.data();
+    
+    // Buscar usuario por email
+    const usersSnapshot = await db.collection('users')
+      .where('email', '==', userEmail.toLowerCase().trim())
+      .limit(1)
+      .get();
+    
+    if (usersSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado con ese email'
+      });
+    }
+    
+    const userDoc = usersSnapshot.docs[0];
+    const userId = userDoc.id;
+    const userData = userDoc.data();
+    
+    // Verificar si el usuario ya tiene un perfil profesional
+    if (userData.professionalProfile?.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'El usuario ya tiene un perfil profesional activo',
+        currentProfile: userData.professionalProfile
+      });
+    }
+    
+    // Verificar si el especialista ya está vinculado
+    if (specialistData.linkedUserId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este especialista ya está vinculado a otro usuario',
+        linkedUserId: specialistData.linkedUserId
+      });
+    }
+    
+    // Actualizar especialista con linkedUserId
+    await db.collection('specialists').doc(specialistId).update({
+      linkedUserId: userId,
+      accountType: 'specialist',
+      permissions: {
+        canAcceptConsultations: true,
+        canSellProducts: false,
+        canCreateEvents: false
+      },
+      updatedAt: new Date()
+    });
+    
+    // Actualizar usuario con professionalProfile
+    await db.collection('users').doc(userId).update({
+      professionalProfile: {
+        isActive: true,
+        specialistId: specialistId,
+        accountType: 'specialist',
+        verifiedAt: new Date()
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    console.log(`✅ [ADMIN] Usuario vinculado: ${userEmail} -> Especialista ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Usuario vinculado exitosamente con perfil profesional',
+      data: {
+        userId,
+        userEmail: userData.email,
+        userName: userData.displayName,
+        specialistId,
+        specialistName: specialistData.personalInfo.displayName,
+        linkedAt: new Date()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error vinculando usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error vinculando usuario con especialista',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Desvincular usuario de especialista (Admin)
+ * DELETE /api/admin/specialists/:specialistId/link-user
+ */
+app.delete('/api/admin/specialists/:specialistId/link-user', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { specialistId } = req.params;
+    
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    const specialistData = specialistDoc.data();
+    
+    if (!specialistData.linkedUserId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este especialista no está vinculado a ningún usuario'
+      });
+    }
+    
+    const linkedUserId = specialistData.linkedUserId;
+    
+    // Remover linkedUserId del especialista
+    await db.collection('specialists').doc(specialistId).update({
+      linkedUserId: admin.firestore.FieldValue.delete(),
+      accountType: admin.firestore.FieldValue.delete(),
+      permissions: admin.firestore.FieldValue.delete(),
+      updatedAt: new Date()
+    });
+    
+    // Remover professionalProfile del usuario
+    await db.collection('users').doc(linkedUserId).update({
+      professionalProfile: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    console.log(`✅ [ADMIN] Usuario desvinculado: ${linkedUserId} -> Especialista ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Usuario desvinculado exitosamente',
+      data: {
+        specialistId,
+        unlinkedUserId: linkedUserId
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error desvinculando usuario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error desvinculando usuario',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Verificar si usuario tiene perfil profesional (App)
+ * GET /api/profile/professional
+ */
+app.get('/api/profile/professional', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    const userData = userDoc.data();
+    
+    // Verificar si tiene perfil profesional
+    if (!userData.professionalProfile?.isActive) {
+      return res.json({
+        success: true,
+        data: {
+          hasProfessionalProfile: false
+        }
+      });
+    }
+    
+    const profile = userData.professionalProfile;
+    
+    // Obtener datos completos del especialista
+    const specialistDoc = await db.collection('specialists').doc(profile.specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.json({
+        success: true,
+        data: {
+          hasProfessionalProfile: false,
+          error: 'Perfil profesional no encontrado'
+        }
+      });
+    }
+    
+    const specialistData = specialistDoc.data();
+    
+    res.json({
+      success: true,
+      data: {
+        hasProfessionalProfile: true,
+        type: profile.accountType,
+        specialistId: profile.specialistId,
+        status: specialistData.status,
+        verifiedAt: profile.verifiedAt?.toDate?.() || profile.verifiedAt,
+        specialist: {
+          displayName: specialistData.personalInfo.displayName,
+          photoUrl: specialistData.personalInfo.photoUrl,
+          specialties: specialistData.professional.specialties,
+          stats: specialistData.stats,
+          pricing: specialistData.pricing
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [PROFILE] Error verificando perfil profesional:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando perfil profesional',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// SISTEMA DE PERFILES PROFESIONALES - PANEL DEL ESPECIALISTA
+// ============================================================================
+
+/**
+ * Obtener consultas asignadas al especialista (App - Modo Profesional)
+ * GET /api/specialist/consultations
+ */
+app.get('/api/specialist/consultations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { status, page = 1, limit = 20, urgency, type } = req.query;
+    
+    // Verificar que el usuario tiene perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    const userData = userDoc.data();
+    
+    if (!userData.professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userData.professionalProfile.specialistId;
+    
+    // Construir query
+    let query = db.collection('consultations')
+      .where('specialistId', '==', specialistId);
+    
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+    
+    query = query.orderBy('createdAt', 'desc');
+    
+    const snapshot = await query.get();
+    
+    // Filtrar y enriquecer datos
+    const consultations = [];
+    
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      
+      // Filtros adicionales
+      if (urgency && data.request?.urgency !== urgency) continue;
+      if (type && data.type !== type) continue;
+      
+      // Obtener info del niño
+      let childInfo = null;
+      if (data.childId) {
+        const childDoc = await db.collection('children').doc(data.childId).get();
+        if (childDoc.exists) {
+          const childData = childDoc.data();
+          const birthDate = parseDateSafe(childData.birthDate);
+          const ageMonths = birthDate ? calculateMonthsFromBirthDate(birthDate) : null;
+          
+          childInfo = {
+            name: childData.name,
+            age: ageMonths ? `${Math.floor(ageMonths / 12)} años ${ageMonths % 12} meses` : 'N/A',
+            photoUrl: childData.photoUrl || null
+          };
+        }
+      }
+      
+      // Obtener info del padre
+      let parentInfo = null;
+      if (data.parentId) {
+        const parentDoc = await db.collection('users').doc(data.parentId).get();
+        if (parentDoc.exists) {
+          const parentData = parentDoc.data();
+          parentInfo = {
+            name: parentData.displayName || 'Usuario',
+            photoUrl: parentData.photoURL || null
+          };
+        }
+      }
+      
+      consultations.push({
+        id: doc.id,
+        childName: childInfo?.name || 'N/A',
+        childAge: childInfo?.age || 'N/A',
+        childPhotoUrl: childInfo?.photoUrl,
+        parent: parentInfo,
+        type: data.type,
+        status: data.status,
+        request: {
+          description: data.request?.description,
+          photos: data.request?.photos || [],
+          symptomDetails: data.request?.symptomDetails || [],
+          urgency: data.request?.urgency
+        },
+        pricing: {
+          finalPrice: data.pricing?.finalPrice || 0,
+          isFree: data.pricing?.finalPrice === 0
+        },
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        scheduledFor: data.scheduledFor?.toDate?.() || data.scheduledFor,
+        acceptedAt: data.acceptedAt?.toDate?.() || data.acceptedAt
+      });
+    }
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedConsultations = consultations.slice(startIndex, endIndex);
+    
+    // Calcular estadísticas
+    const stats = {
+      pending: consultations.filter(c => c.status === 'pending').length,
+      accepted: consultations.filter(c => c.status === 'accepted').length,
+      in_progress: consultations.filter(c => c.status === 'in_progress').length,
+      completed: consultations.filter(c => c.status === 'completed').length
+    };
+    
+    console.log(`✅ [SPECIALIST] Consultas listadas: ${consultations.length} para ${specialistId}`);
+    
+    res.json({
+      success: true,
+      data: paginatedConsultations,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: consultations.length,
+        totalPages: Math.ceil(consultations.length / limitNum)
+      },
+      stats
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error listando consultas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando consultas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener detalles de consulta (Especialista)
+ * GET /api/specialist/consultations/:consultationId
+ */
+app.get('/api/specialist/consultations/:consultationId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { consultationId } = req.params;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const data = consultationDoc.data();
+    
+    // Verificar que la consulta pertenece a este especialista
+    if (data.specialistId !== specialistId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes acceso a esta consulta'
+      });
+    }
+    
+    // Obtener info completa del niño
+    let childInfo = null;
+    if (data.childId) {
+      const childDoc = await db.collection('children').doc(data.childId).get();
+      if (childDoc.exists) {
+        childInfo = {
+          id: childDoc.id,
+          ...childDoc.data(),
+          birthDate: childDoc.data().birthDate?.toDate?.() || childDoc.data().birthDate
+        };
+      }
+    }
+    
+    // Obtener info del padre
+    let parentInfo = null;
+    if (data.parentId) {
+      const parentDoc = await db.collection('users').doc(data.parentId).get();
+      if (parentDoc.exists) {
+        const parentData = parentDoc.data();
+        parentInfo = {
+          id: parentDoc.id,
+          name: parentData.displayName,
+          email: parentData.email,
+          photoUrl: parentData.photoURL,
+          phone: parentData.phone
+        };
+      }
+    }
+    
+    // Obtener mensajes del chat
+    const messagesSnapshot = await db.collection('consultations')
+      .doc(consultationId)
+      .collection('messages')
+      .orderBy('sentAt', 'asc')
+      .get();
+    
+    const messages = [];
+    messagesSnapshot.forEach(msgDoc => {
+      const msgData = msgDoc.data();
+      messages.push({
+        id: msgDoc.id,
+        ...msgData,
+        sentAt: msgData.sentAt?.toDate?.() || msgData.sentAt
+      });
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        id: consultationDoc.id,
+        ...data,
+        child: childInfo,
+        parent: parentInfo,
+        messages,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        acceptedAt: data.acceptedAt?.toDate?.() || data.acceptedAt,
+        startedAt: data.startedAt?.toDate?.() || data.startedAt,
+        completedAt: data.completedAt?.toDate?.() || data.completedAt,
+        scheduledFor: data.scheduledFor?.toDate?.() || data.scheduledFor
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error obteniendo consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Aceptar consulta (Especialista)
+ * POST /api/specialist/consultations/:consultationId/accept
+ */
+app.post('/api/specialist/consultations/:consultationId/accept', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { consultationId } = req.params;
+    const { scheduledFor, estimatedResponseTime } = req.body;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const data = consultationDoc.data();
+    
+    if (data.specialistId !== specialistId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes acceso a esta consulta'
+      });
+    }
+    
+    if (data.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `La consulta ya está en estado: ${data.status}`
+      });
+    }
+    
+    // Actualizar consulta
+    const updateData = {
+      status: 'accepted',
+      acceptedAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    if (scheduledFor) {
+      updateData.scheduledFor = new Date(scheduledFor);
+    }
+    
+    if (estimatedResponseTime) {
+      updateData.estimatedResponseTime = parseInt(estimatedResponseTime);
+    }
+    
+    await db.collection('consultations').doc(consultationId).update(updateData);
+    
+    console.log(`✅ [SPECIALIST] Consulta aceptada: ${consultationId} por ${specialistId}`);
+    
+    // TODO: Enviar notificación push al padre
+    
+    res.json({
+      success: true,
+      message: 'Consulta aceptada exitosamente',
+      data: {
+        status: 'accepted',
+        acceptedAt: updateData.acceptedAt,
+        scheduledFor: updateData.scheduledFor,
+        estimatedResponseTime: updateData.estimatedResponseTime
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error aceptando consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error aceptando consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Rechazar consulta (Especialista)
+ * POST /api/specialist/consultations/:consultationId/reject
+ */
+app.post('/api/specialist/consultations/:consultationId/reject', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { consultationId } = req.params;
+    const { reason } = req.body;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const data = consultationDoc.data();
+    
+    if (data.specialistId !== specialistId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes acceso a esta consulta'
+      });
+    }
+    
+    if (data.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `La consulta ya está en estado: ${data.status}`
+      });
+    }
+    
+    await db.collection('consultations').doc(consultationId).update({
+      status: 'rejected',
+      rejectedAt: new Date(),
+      rejectionReason: reason || 'No especificado',
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [SPECIALIST] Consulta rechazada: ${consultationId} por ${specialistId}`);
+    
+    // TODO: Enviar notificación push al padre
+    // TODO: Reasignar a otro especialista disponible
+    
+    res.json({
+      success: true,
+      message: 'Consulta rechazada',
+      data: {
+        status: 'rejected',
+        reason: reason || 'No especificado'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error rechazando consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rechazando consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Iniciar consulta (Especialista)
+ * POST /api/specialist/consultations/:consultationId/start
+ */
+app.post('/api/specialist/consultations/:consultationId/start', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { consultationId } = req.params;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const data = consultationDoc.data();
+    
+    if (data.specialistId !== specialistId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes acceso a esta consulta'
+      });
+    }
+    
+    if (data.status !== 'accepted') {
+      return res.status(400).json({
+        success: false,
+        message: `La consulta debe estar aceptada. Estado actual: ${data.status}`
+      });
+    }
+    
+    await db.collection('consultations').doc(consultationId).update({
+      status: 'in_progress',
+      startedAt: new Date(),
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [SPECIALIST] Consulta iniciada: ${consultationId} por ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Consulta iniciada exitosamente',
+      data: {
+        status: 'in_progress',
+        startedAt: new Date()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error iniciando consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error iniciando consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Completar consulta (Especialista)
+ * POST /api/specialist/consultations/:consultationId/complete
+ */
+app.post('/api/specialist/consultations/:consultationId/complete', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { consultationId } = req.params;
+    const { diagnosis, treatment, prescriptions, notes, followUpRequired, followUpDate } = req.body;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const data = consultationDoc.data();
+    
+    if (data.specialistId !== specialistId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes acceso a esta consulta'
+      });
+    }
+    
+    if (data.status !== 'in_progress') {
+      return res.status(400).json({
+        success: false,
+        message: `La consulta debe estar en progreso. Estado actual: ${data.status}`
+      });
+    }
+    
+    if (!diagnosis || !treatment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Diagnóstico y tratamiento son requeridos'
+      });
+    }
+    
+    const completedAt = new Date();
+    const startedAt = data.startedAt?.toDate?.() || data.startedAt;
+    const duration = startedAt ? Math.floor((completedAt - new Date(startedAt)) / 60000) : null; // minutos
+    
+    const updateData = {
+      status: 'completed',
+      completedAt,
+      duration,
+      result: {
+        diagnosis: diagnosis.trim(),
+        treatment: treatment.trim(),
+        prescriptions: prescriptions || [],
+        notes: notes?.trim() || null,
+        followUpRequired: followUpRequired || false,
+        followUpDate: followUpDate ? new Date(followUpDate) : null
+      },
+      updatedAt: new Date()
+    };
+    
+    await db.collection('consultations').doc(consultationId).update(updateData);
+    
+    // Actualizar stats del especialista
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    if (specialistDoc.exists) {
+      const specialistData = specialistDoc.data();
+      const totalConsultations = (specialistData.stats?.totalConsultations || 0) + 1;
+      
+      await db.collection('specialists').doc(specialistId).update({
+        'stats.totalConsultations': totalConsultations,
+        updatedAt: new Date()
+      });
+    }
+    
+    console.log(`✅ [SPECIALIST] Consulta completada: ${consultationId} por ${specialistId} (${duration} min)`);
+    
+    // TODO: Enviar notificación push al padre
+    
+    res.json({
+      success: true,
+      message: 'Consulta completada exitosamente',
+      data: {
+        status: 'completed',
+        completedAt,
+        duration
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error completando consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error completando consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Estadísticas del especialista (App - Modo Profesional)
+ * GET /api/specialist/stats
+ */
+app.get('/api/specialist/stats', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { period = 'month' } = req.query; // month, week, all
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    // Calcular fechas según el periodo
+    const now = new Date();
+    let startDate;
+    
+    if (period === 'week') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+    } else if (period === 'month') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    } else {
+      startDate = new Date(0); // All time
+    }
+    
+    // Obtener todas las consultas del especialista
+    const consultationsSnapshot = await db.collection('consultations')
+      .where('specialistId', '==', specialistId)
+      .get();
+    
+    const allConsultations = [];
+    const periodConsultations = [];
+    
+    consultationsSnapshot.forEach(doc => {
+      const data = doc.data();
+      const createdAt = data.createdAt?.toDate?.() || data.createdAt;
+      
+      allConsultations.push(data);
+      
+      if (new Date(createdAt) >= startDate) {
+        periodConsultations.push(data);
+      }
+    });
+    
+    // Calcular métricas del periodo
+    const completed = periodConsultations.filter(c => c.status === 'completed');
+    const revenue = completed.reduce((sum, c) => sum + (c.pricing?.finalPrice || 0), 0);
+    
+    // Calcular promedio de rating
+    const ratings = completed.filter(c => c.rating?.score).map(c => c.rating.score);
+    const averageRating = ratings.length > 0 
+      ? (ratings.reduce((sum, r) => sum + r, 0) / ratings.length).toFixed(1)
+      : 0;
+    
+    // Calcular tiempo de respuesta promedio (en minutos)
+    const responseTimes = completed
+      .filter(c => c.acceptedAt && c.createdAt)
+      .map(c => {
+        const created = new Date(c.createdAt?.toDate?.() || c.createdAt);
+        const accepted = new Date(c.acceptedAt?.toDate?.() || c.acceptedAt);
+        return Math.floor((accepted - created) / 60000);
+      });
+    
+    const averageResponseTime = responseTimes.length > 0
+      ? Math.floor(responseTimes.reduce((sum, t) => sum + t, 0) / responseTimes.length)
+      : 0;
+    
+    // Calcular tasa de completación
+    const acceptedCount = periodConsultations.filter(c => 
+      ['accepted', 'in_progress', 'completed'].includes(c.status)
+    ).length;
+    
+    const completionRate = acceptedCount > 0
+      ? Math.floor((completed.length / acceptedCount) * 100)
+      : 100;
+    
+    // Reviews recientes
+    const recentReviews = completed
+      .filter(c => c.rating?.comment)
+      .slice(-5)
+      .map(c => ({
+        rating: c.rating.score,
+        comment: c.rating.comment,
+        date: c.completedAt?.toDate?.() || c.completedAt
+      }));
+    
+    // Estadísticas por tipo
+    const byType = {
+      chat: periodConsultations.filter(c => c.type === 'chat').length,
+      video: periodConsultations.filter(c => c.type === 'online').length
+    };
+    
+    // Estadísticas totales (all time)
+    const allCompleted = allConsultations.filter(c => c.status === 'completed');
+    const allRevenue = allCompleted.reduce((sum, c) => sum + (c.pricing?.finalPrice || 0), 0);
+    const allRatings = allCompleted.filter(c => c.rating?.score).map(c => c.rating.score);
+    const allAverageRating = allRatings.length > 0
+      ? (allRatings.reduce((sum, r) => sum + r, 0) / allRatings.length).toFixed(1)
+      : 0;
+    
+    res.json({
+      success: true,
+      data: {
+        period: period === 'month' ? 'Este Mes' : period === 'week' ? 'Esta Semana' : 'Todo el Tiempo',
+        thisPeriod: {
+          consultations: periodConsultations.length,
+          revenue,
+          averageRating: parseFloat(averageRating),
+          averageResponseTime,
+          completionRate
+        },
+        allTime: {
+          totalConsultations: allConsultations.length,
+          totalRevenue: allRevenue,
+          averageRating: parseFloat(allAverageRating)
+        },
+        byType,
+        recentReviews
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar disponibilidad (Especialista)
+ * PUT /api/specialist/availability
+ */
+app.put('/api/specialist/availability', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { schedule, maxConsultationsPerDay } = req.body;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const updateData = {
+      updatedAt: new Date()
+    };
+    
+    if (schedule) {
+      updateData['availability.schedule'] = schedule;
+    }
+    
+    if (maxConsultationsPerDay) {
+      updateData['availability.maxConsultationsPerDay'] = parseInt(maxConsultationsPerDay);
+    }
+    
+    await db.collection('specialists').doc(specialistId).update(updateData);
+    
+    console.log(`✅ [SPECIALIST] Disponibilidad actualizada: ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Disponibilidad actualizada exitosamente',
+      data: {
+        schedule,
+        maxConsultationsPerDay
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error actualizando disponibilidad:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando disponibilidad',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar precios (Especialista)
+ * PUT /api/specialist/pricing
+ */
+app.put('/api/specialist/pricing', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { chatConsultation, videoConsultation } = req.body;
+    
+    // Verificar perfil profesional
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil profesional activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const updateData = {
+      updatedAt: new Date()
+    };
+    
+    if (chatConsultation !== undefined) {
+      updateData['pricing.chatConsultation'] = parseFloat(chatConsultation);
+    }
+    
+    if (videoConsultation !== undefined) {
+      updateData['pricing.videoConsultation'] = parseFloat(videoConsultation);
+    }
+    
+    await db.collection('specialists').doc(specialistId).update(updateData);
+    
+    console.log(`✅ [SPECIALIST] Precios actualizados: ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Precios actualizados exitosamente',
+      data: {
+        chatConsultation,
+        videoConsultation
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error actualizando precios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando precios',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // SISTEMA DE CONSULTAS MÉDICAS - CUPONES DE DESCUENTO
 // ============================================================================
 
