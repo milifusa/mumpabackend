@@ -11593,7 +11593,9 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           countryId: firestoreData.countryId || null,
           countryName: firestoreData.countryName || null,
           cityId: firestoreData.cityId || null,
-          cityName: firestoreData.cityName || null
+          cityName: firestoreData.cityName || null,
+          // ✨ NUEVO: Perfil profesional si existe
+          professionalProfile: firestoreData.professionalProfile || null
         };
       }
     }
