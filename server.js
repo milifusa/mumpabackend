@@ -40173,6 +40173,1856 @@ app.get('/api/cron/process-event-reminders', async (req, res) => {
 });
 
 // ============================================================================
+// SISTEMA DE CONSULTAS MÉDICAS - SÍNTOMAS
+// ============================================================================
+
+// ==================== ADMIN - CRUD DE SÍNTOMAS ====================
+
+/**
+ * Crear síntoma (Admin)
+ * POST /api/admin/symptoms
+ */
+app.post('/api/admin/symptoms', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, imageUrl, category, severity, order } = req.body;
+    
+    if (!name || !description) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre y descripción son requeridos'
+      });
+    }
+    
+    const validCategories = ['general', 'digestivo', 'respiratorio', 'piel', 'neurologico', 'ojos_oidos', 'otros'];
+    if (category && !validCategories.includes(category)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Categoría inválida',
+        validCategories
+      });
+    }
+    
+    const validSeverities = ['mild', 'moderate', 'severe'];
+    if (severity && !validSeverities.includes(severity)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Severidad inválida',
+        validSeverities
+      });
+    }
+    
+    const symptomData = {
+      name: name.trim(),
+      description: description.trim(),
+      imageUrl: imageUrl || null,
+      category: category || 'general',
+      severity: severity || 'moderate',
+      order: order || 0,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const symptomRef = await db.collection('symptoms').add(symptomData);
+    
+    console.log(`✅ [ADMIN] Síntoma creado: ${symptomRef.id}`);
+    
+    res.json({
+      success: true,
+      message: 'Síntoma creado exitosamente',
+      data: {
+        id: symptomRef.id,
+        ...symptomData
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando síntoma:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando síntoma',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Listar síntomas (Admin)
+ * GET /api/admin/symptoms
+ */
+app.get('/api/admin/symptoms', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { category, isActive, page = 1, limit = 20, search } = req.query;
+    
+    let query = db.collection('symptoms');
+    
+    // Filtros
+    if (category) {
+      query = query.where('category', '==', category);
+    }
+    
+    if (isActive !== undefined) {
+      query = query.where('isActive', '==', isActive === 'true');
+    }
+    
+    // Ordenar
+    query = query.orderBy('order', 'asc').orderBy('name', 'asc');
+    
+    const snapshot = await query.get();
+    
+    let symptoms = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Filtro de búsqueda en memoria
+      if (search && !data.name.toLowerCase().includes(search.toLowerCase()) && 
+          !data.description.toLowerCase().includes(search.toLowerCase())) {
+        return;
+      }
+      
+      symptoms.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedSymptoms = symptoms.slice(startIndex, endIndex);
+    
+    console.log(`✅ [ADMIN] Síntomas listados: ${symptoms.length} total, ${paginatedSymptoms.length} en página`);
+    
+    res.json({
+      success: true,
+      data: paginatedSymptoms,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: symptoms.length,
+        totalPages: Math.ceil(symptoms.length / limitNum)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando síntomas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando síntomas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener síntoma por ID (Admin)
+ * GET /api/admin/symptoms/:symptomId
+ */
+app.get('/api/admin/symptoms/:symptomId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { symptomId } = req.params;
+    
+    const symptomDoc = await db.collection('symptoms').doc(symptomId).get();
+    
+    if (!symptomDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Síntoma no encontrado'
+      });
+    }
+    
+    const data = symptomDoc.data();
+    
+    res.json({
+      success: true,
+      data: {
+        id: symptomDoc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo síntoma:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo síntoma',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar síntoma (Admin)
+ * PUT /api/admin/symptoms/:symptomId
+ */
+app.put('/api/admin/symptoms/:symptomId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { symptomId } = req.params;
+    const { name, description, imageUrl, category, severity, order, isActive } = req.body;
+    
+    const symptomDoc = await db.collection('symptoms').doc(symptomId).get();
+    
+    if (!symptomDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Síntoma no encontrado'
+      });
+    }
+    
+    const updateData = {
+      updatedAt: new Date()
+    };
+    
+    if (name) updateData.name = name.trim();
+    if (description) updateData.description = description.trim();
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (category) updateData.category = category;
+    if (severity) updateData.severity = severity;
+    if (order !== undefined) updateData.order = order;
+    if (isActive !== undefined) updateData.isActive = isActive;
+    
+    await db.collection('symptoms').doc(symptomId).update(updateData);
+    
+    const updatedDoc = await db.collection('symptoms').doc(symptomId).get();
+    const data = updatedDoc.data();
+    
+    console.log(`✅ [ADMIN] Síntoma actualizado: ${symptomId}`);
+    
+    res.json({
+      success: true,
+      message: 'Síntoma actualizado exitosamente',
+      data: {
+        id: symptomId,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando síntoma:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando síntoma',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Eliminar/Desactivar síntoma (Admin)
+ * DELETE /api/admin/symptoms/:symptomId
+ */
+app.delete('/api/admin/symptoms/:symptomId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { symptomId } = req.params;
+    const { permanent = false } = req.query;
+    
+    const symptomDoc = await db.collection('symptoms').doc(symptomId).get();
+    
+    if (!symptomDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Síntoma no encontrado'
+      });
+    }
+    
+    if (permanent === 'true') {
+      // Eliminación permanente
+      await db.collection('symptoms').doc(symptomId).delete();
+      console.log(`✅ [ADMIN] Síntoma eliminado permanentemente: ${symptomId}`);
+      
+      res.json({
+        success: true,
+        message: 'Síntoma eliminado permanentemente'
+      });
+    } else {
+      // Solo desactivar
+      await db.collection('symptoms').doc(symptomId).update({
+        isActive: false,
+        updatedAt: new Date()
+      });
+      
+      console.log(`✅ [ADMIN] Síntoma desactivado: ${symptomId}`);
+      
+      res.json({
+        success: true,
+        message: 'Síntoma desactivado exitosamente'
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando síntoma:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando síntoma',
+      error: error.message
+    });
+  }
+});
+
+// ==================== APP - LISTA PÚBLICA DE SÍNTOMAS ====================
+
+/**
+ * Listar síntomas activos (App)
+ * GET /api/symptoms
+ */
+app.get('/api/symptoms', authenticateToken, async (req, res) => {
+  try {
+    const { category } = req.query;
+    
+    let query = db.collection('symptoms')
+      .where('isActive', '==', true)
+      .orderBy('order', 'asc')
+      .orderBy('name', 'asc');
+    
+    if (category) {
+      query = query.where('category', '==', category);
+    }
+    
+    const snapshot = await query.get();
+    
+    const symptoms = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      symptoms.push({
+        id: doc.id,
+        name: data.name,
+        description: data.description,
+        imageUrl: data.imageUrl,
+        category: data.category,
+        severity: data.severity
+      });
+    });
+    
+    // Agrupar por categoría
+    const groupedByCategory = symptoms.reduce((acc, symptom) => {
+      if (!acc[symptom.category]) {
+        acc[symptom.category] = [];
+      }
+      acc[symptom.category].push(symptom);
+      return acc;
+    }, {});
+    
+    console.log(`✅ [SYMPTOMS] Síntomas listados: ${symptoms.length} activos`);
+    
+    res.json({
+      success: true,
+      data: symptoms,
+      grouped: groupedByCategory,
+      total: symptoms.length
+    });
+    
+  } catch (error) {
+    console.error('❌ [SYMPTOMS] Error listando síntomas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando síntomas',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// SISTEMA DE CONSULTAS MÉDICAS - ESPECIALISTAS
+// ============================================================================
+
+/**
+ * Crear especialista (Admin)
+ * POST /api/admin/specialists
+ */
+app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { personalInfo, professional, pricing, availability } = req.body;
+    
+    if (!personalInfo?.displayName || !personalInfo?.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre y email son requeridos'
+      });
+    }
+    
+    if (!professional?.specialties || professional.specialties.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe especificar al menos una especialidad'
+      });
+    }
+    
+    const specialistData = {
+      personalInfo: {
+        displayName: personalInfo.displayName.trim(),
+        email: personalInfo.email.trim().toLowerCase(),
+        photoUrl: personalInfo.photoUrl || null,
+        phone: personalInfo.phone || null,
+        bio: personalInfo.bio || null
+      },
+      professional: {
+        specialties: professional.specialties || [],
+        licenseNumber: professional.licenseNumber || null,
+        university: professional.university || null,
+        yearsExperience: professional.yearsExperience || 0,
+        certifications: professional.certifications || []
+      },
+      availability: {
+        schedule: availability?.schedule || {},
+        timezone: availability?.timezone || 'America/Guayaquil',
+        maxConsultationsPerDay: availability?.maxConsultationsPerDay || 10
+      },
+      pricing: {
+        chatConsultation: pricing?.chatConsultation || 25,
+        videoConsultation: pricing?.videoConsultation || 40,
+        currency: pricing?.currency || 'USD',
+        acceptsFreeConsultations: pricing?.acceptsFreeConsultations || false
+      },
+      stats: {
+        totalConsultations: 0,
+        averageRating: 0,
+        responseTime: 0,
+        completionRate: 100
+      },
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const specialistRef = await db.collection('specialists').add(specialistData);
+    
+    console.log(`✅ [ADMIN] Especialista creado: ${specialistRef.id} - ${personalInfo.displayName}`);
+    
+    res.json({
+      success: true,
+      message: 'Especialista creado exitosamente',
+      data: {
+        id: specialistRef.id,
+        ...specialistData
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando especialista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando especialista',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Listar especialistas (Admin)
+ * GET /api/admin/specialists
+ */
+app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { specialty, status, page = 1, limit = 20, search } = req.query;
+    
+    let query = db.collection('specialists');
+    
+    // Filtros
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+    
+    query = query.orderBy('createdAt', 'desc');
+    
+    const snapshot = await query.get();
+    
+    let specialists = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Filtro por especialidad (en memoria)
+      if (specialty && !data.professional.specialties.includes(specialty)) {
+        return;
+      }
+      
+      // Filtro de búsqueda
+      if (search) {
+        const searchLower = search.toLowerCase();
+        const matchesName = data.personalInfo.displayName.toLowerCase().includes(searchLower);
+        const matchesSpecialty = data.professional.specialties.some(s => 
+          s.toLowerCase().includes(searchLower)
+        );
+        if (!matchesName && !matchesSpecialty) {
+          return;
+        }
+      }
+      
+      specialists.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedSpecialists = specialists.slice(startIndex, endIndex);
+    
+    console.log(`✅ [ADMIN] Especialistas listados: ${specialists.length} total`);
+    
+    res.json({
+      success: true,
+      data: paginatedSpecialists,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: specialists.length,
+        totalPages: Math.ceil(specialists.length / limitNum)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando especialistas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando especialistas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener especialista por ID (Admin)
+ * GET /api/admin/specialists/:specialistId
+ */
+app.get('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { specialistId } = req.params;
+    
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    const data = specialistDoc.data();
+    
+    // Obtener estadísticas de consultas
+    const consultationsSnapshot = await db.collection('consultations')
+      .where('specialistId', '==', specialistId)
+      .get();
+    
+    const consultations = [];
+    consultationsSnapshot.forEach(doc => {
+      consultations.push({ id: doc.id, ...doc.data() });
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        id: specialistDoc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
+        recentConsultations: consultations.slice(0, 5)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo especialista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo especialista',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar especialista (Admin)
+ * PUT /api/admin/specialists/:specialistId
+ */
+app.put('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { specialistId } = req.params;
+    const { personalInfo, professional, pricing, availability, status } = req.body;
+    
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    const updateData = {
+      updatedAt: new Date()
+    };
+    
+    if (personalInfo) updateData.personalInfo = personalInfo;
+    if (professional) updateData.professional = professional;
+    if (pricing) updateData.pricing = pricing;
+    if (availability) updateData.availability = availability;
+    if (status) updateData.status = status;
+    
+    await db.collection('specialists').doc(specialistId).update(updateData);
+    
+    const updatedDoc = await db.collection('specialists').doc(specialistId).get();
+    const data = updatedDoc.data();
+    
+    console.log(`✅ [ADMIN] Especialista actualizado: ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Especialista actualizado exitosamente',
+      data: {
+        id: specialistId,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando especialista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando especialista',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Eliminar/Desactivar especialista (Admin)
+ * DELETE /api/admin/specialists/:specialistId
+ */
+app.delete('/api/admin/specialists/:specialistId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { specialistId } = req.params;
+    
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    // Solo desactivar, no eliminar
+    await db.collection('specialists').doc(specialistId).update({
+      status: 'inactive',
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [ADMIN] Especialista desactivado: ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Especialista desactivado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando especialista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error eliminando especialista',
+      error: error.message
+    });
+  }
+});
+
+// ==================== APP - LISTA PÚBLICA DE ESPECIALISTAS ====================
+
+/**
+ * Listar especialistas disponibles (App)
+ * GET /api/specialists
+ */
+app.get('/api/specialists', authenticateToken, async (req, res) => {
+  try {
+    const { specialty, available = 'true' } = req.query;
+    
+    let query = db.collection('specialists')
+      .where('status', '==', 'active')
+      .orderBy('stats.averageRating', 'desc');
+    
+    const snapshot = await query.get();
+    
+    const specialists = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Filtro por especialidad
+      if (specialty && !data.professional.specialties.includes(specialty)) {
+        return;
+      }
+      
+      specialists.push({
+        id: doc.id,
+        displayName: data.personalInfo.displayName,
+        photoUrl: data.personalInfo.photoUrl,
+        bio: data.personalInfo.bio,
+        specialties: data.professional.specialties,
+        yearsExperience: data.professional.yearsExperience,
+        pricing: data.pricing,
+        stats: data.stats
+      });
+    });
+    
+    console.log(`✅ [SPECIALISTS] Especialistas listados: ${specialists.length} disponibles`);
+    
+    res.json({
+      success: true,
+      data: specialists,
+      total: specialists.length
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALISTS] Error listando especialistas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando especialistas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener especialista por ID (App)
+ * GET /api/specialists/:specialistId
+ */
+app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) => {
+  try {
+    const { specialistId } = req.params;
+    
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    const data = specialistDoc.data();
+    
+    if (data.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no disponible'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        id: specialistDoc.id,
+        displayName: data.personalInfo.displayName,
+        photoUrl: data.personalInfo.photoUrl,
+        bio: data.personalInfo.bio,
+        specialties: data.professional.specialties,
+        yearsExperience: data.professional.yearsExperience,
+        certifications: data.professional.certifications,
+        pricing: data.pricing,
+        stats: data.stats
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SPECIALISTS] Error obteniendo especialista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo especialista',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// SISTEMA DE CONSULTAS MÉDICAS - CUPONES DE DESCUENTO
+// ============================================================================
+
+/**
+ * Crear cupón de descuento (Admin)
+ * POST /api/admin/coupons
+ */
+app.post('/api/admin/coupons', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { code, type, value, maxUses, validFrom, validUntil, applicableTo, specialistId } = req.body;
+    
+    if (!code || !type || value === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Código, tipo y valor son requeridos'
+      });
+    }
+    
+    const validTypes = ['percentage', 'fixed', 'free'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo inválido',
+        validTypes
+      });
+    }
+    
+    // Verificar si el código ya existe
+    const existingCoupon = await db.collection('discountCoupons')
+      .where('code', '==', code.toUpperCase())
+      .limit(1)
+      .get();
+    
+    if (!existingCoupon.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'El código de cupón ya existe'
+      });
+    }
+    
+    const couponData = {
+      code: code.toUpperCase().trim(),
+      type,
+      value: parseFloat(value),
+      maxUses: maxUses || null,
+      usedCount: 0,
+      validFrom: validFrom ? new Date(validFrom) : new Date(),
+      validUntil: validUntil ? new Date(validUntil) : null,
+      applicableTo: applicableTo || 'all',
+      specialistId: specialistId || null,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const couponRef = await db.collection('discountCoupons').add(couponData);
+    
+    console.log(`✅ [ADMIN] Cupón creado: ${code}`);
+    
+    res.json({
+      success: true,
+      message: 'Cupón creado exitosamente',
+      data: {
+        id: couponRef.id,
+        ...couponData
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando cupón:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando cupón',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Listar cupones (Admin)
+ * GET /api/admin/coupons
+ */
+app.get('/api/admin/coupons', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { isActive, page = 1, limit = 20 } = req.query;
+    
+    let query = db.collection('discountCoupons');
+    
+    if (isActive !== undefined) {
+      query = query.where('isActive', '==', isActive === 'true');
+    }
+    
+    query = query.orderBy('createdAt', 'desc');
+    
+    const snapshot = await query.get();
+    
+    const coupons = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      coupons.push({
+        id: doc.id,
+        ...data,
+        validFrom: data.validFrom?.toDate?.() || data.validFrom,
+        validUntil: data.validUntil?.toDate?.() || data.validUntil,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedCoupons = coupons.slice(startIndex, endIndex);
+    
+    console.log(`✅ [ADMIN] Cupones listados: ${coupons.length} total`);
+    
+    res.json({
+      success: true,
+      data: paginatedCoupons,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: coupons.length,
+        totalPages: Math.ceil(coupons.length / limitNum)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando cupones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando cupones',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar cupón (Admin)
+ * PUT /api/admin/coupons/:couponId
+ */
+app.put('/api/admin/coupons/:couponId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { couponId } = req.params;
+    const updates = req.body;
+    
+    const couponDoc = await db.collection('discountCoupons').doc(couponId).get();
+    
+    if (!couponDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cupón no encontrado'
+      });
+    }
+    
+    const updateData = {
+      ...updates,
+      updatedAt: new Date()
+    };
+    
+    // Convertir fechas si existen
+    if (updates.validFrom) updateData.validFrom = new Date(updates.validFrom);
+    if (updates.validUntil) updateData.validUntil = new Date(updates.validUntil);
+    
+    await db.collection('discountCoupons').doc(couponId).update(updateData);
+    
+    console.log(`✅ [ADMIN] Cupón actualizado: ${couponId}`);
+    
+    res.json({
+      success: true,
+      message: 'Cupón actualizado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando cupón:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando cupón',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Verificar cupón (App)
+ * GET /api/coupons/verify/:code
+ */
+app.get('/api/coupons/verify/:code', authenticateToken, async (req, res) => {
+  try {
+    const { code } = req.params;
+    const { type, specialistId } = req.query;
+    
+    const couponSnapshot = await db.collection('discountCoupons')
+      .where('code', '==', code.toUpperCase())
+      .where('isActive', '==', true)
+      .limit(1)
+      .get();
+    
+    if (couponSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        message: 'Cupón no válido'
+      });
+    }
+    
+    const couponDoc = couponSnapshot.docs[0];
+    const coupon = couponDoc.data();
+    
+    // Verificar fecha de validez
+    const now = new Date();
+    if (coupon.validFrom && coupon.validFrom.toDate() > now) {
+      return res.status(400).json({
+        success: false,
+        message: 'El cupón aún no está vigente'
+      });
+    }
+    
+    if (coupon.validUntil && coupon.validUntil.toDate() < now) {
+      return res.status(400).json({
+        success: false,
+        message: 'El cupón ha expirado'
+      });
+    }
+    
+    // Verificar usos máximos
+    if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
+      return res.status(400).json({
+        success: false,
+        message: 'El cupón ha alcanzado el límite de usos'
+      });
+    }
+    
+    // Verificar aplicabilidad
+    if (coupon.applicableTo !== 'all') {
+      if (type && coupon.applicableTo !== type) {
+        return res.status(400).json({
+          success: false,
+          message: `Este cupón solo aplica para consultas tipo ${coupon.applicableTo}`
+        });
+      }
+      
+      if (coupon.specialistId && specialistId && coupon.specialistId !== specialistId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Este cupón no aplica para este especialista'
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        id: couponDoc.id,
+        code: coupon.code,
+        type: coupon.type,
+        value: coupon.value,
+        applicableTo: coupon.applicableTo
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [COUPONS] Error verificando cupón:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verificando cupón',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Calcular precio con descuento (App)
+ * POST /api/consultations/calculate-price
+ */
+app.post('/api/consultations/calculate-price', authenticateToken, async (req, res) => {
+  try {
+    const { type, specialistId, couponCode } = req.body;
+    
+    if (!type || !specialistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de consulta y especialista son requeridos'
+      });
+    }
+    
+    // Obtener precio del especialista
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no encontrado'
+      });
+    }
+    
+    const specialist = specialistDoc.data();
+    const basePrice = type === 'chat' 
+      ? specialist.pricing.chatConsultation 
+      : specialist.pricing.videoConsultation;
+    
+    let discount = 0;
+    let couponData = null;
+    
+    // Aplicar cupón si existe
+    if (couponCode) {
+      const couponSnapshot = await db.collection('discountCoupons')
+        .where('code', '==', couponCode.toUpperCase())
+        .where('isActive', '==', true)
+        .limit(1)
+        .get();
+      
+      if (!couponSnapshot.empty) {
+        const coupon = couponSnapshot.docs[0].data();
+        
+        // Validar cupón
+        const now = new Date();
+        const isValid = 
+          (!coupon.validFrom || coupon.validFrom.toDate() <= now) &&
+          (!coupon.validUntil || coupon.validUntil.toDate() >= now) &&
+          (!coupon.maxUses || coupon.usedCount < coupon.maxUses) &&
+          (coupon.applicableTo === 'all' || coupon.applicableTo === type) &&
+          (!coupon.specialistId || coupon.specialistId === specialistId);
+        
+        if (isValid) {
+          if (coupon.type === 'percentage') {
+            discount = basePrice * (coupon.value / 100);
+          } else if (coupon.type === 'fixed') {
+            discount = coupon.value;
+          } else if (coupon.type === 'free') {
+            discount = basePrice;
+          }
+          
+          couponData = {
+            code: coupon.code,
+            type: coupon.type,
+            value: coupon.value
+          };
+        }
+      }
+    }
+    
+    const finalPrice = Math.max(0, basePrice - discount);
+    
+    res.json({
+      success: true,
+      data: {
+        basePrice,
+        discount: Math.round(discount * 100) / 100,
+        finalPrice: Math.round(finalPrice * 100) / 100,
+        currency: specialist.pricing.currency,
+        coupon: couponData,
+        isFree: finalPrice === 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [CONSULTATIONS] Error calculando precio:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error calculando precio',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// SISTEMA DE CONSULTAS MÉDICAS - CONSULTAS
+// ============================================================================
+
+/**
+ * Crear consulta médica (App)
+ * POST /api/children/:childId/consultations
+ */
+app.post('/api/children/:childId/consultations', authenticateToken, async (req, res) => {
+  try {
+    const { childId } = req.params;
+    const userId = req.user.uid;
+    const { 
+      description, 
+      photos = [], 
+      symptoms = [], 
+      type, 
+      urgency = 'normal',
+      preferredSpecialistId,
+      couponCode 
+    } = req.body;
+    
+    if (!description || !type) {
+      return res.status(400).json({
+        success: false,
+        message: 'Descripción y tipo de consulta son requeridos'
+      });
+    }
+    
+    if (!['chat', 'video'].includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de consulta inválido. Debe ser "chat" o "video"'
+      });
+    }
+    
+    // Verificar que el hijo pertenece al usuario
+    const childDoc = await db.collection('users').doc(userId)
+      .collection('children').doc(childId).get();
+    
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Hijo no encontrado'
+      });
+    }
+    
+    const childData = childDoc.data();
+    
+    // Buscar especialista disponible
+    let specialistId = preferredSpecialistId;
+    
+    if (!specialistId) {
+      // Buscar especialista activo con mejor rating
+      const specialistsSnapshot = await db.collection('specialists')
+        .where('status', '==', 'active')
+        .orderBy('stats.averageRating', 'desc')
+        .limit(1)
+        .get();
+      
+      if (specialistsSnapshot.empty) {
+        return res.status(503).json({
+          success: false,
+          message: 'No hay especialistas disponibles en este momento'
+        });
+      }
+      
+      specialistId = specialistsSnapshot.docs[0].id;
+    }
+    
+    const specialistDoc = await db.collection('specialists').doc(specialistId).get();
+    
+    if (!specialistDoc.exists || specialistDoc.data().status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        message: 'Especialista no disponible'
+      });
+    }
+    
+    const specialist = specialistDoc.data();
+    
+    // Calcular precio
+    const basePrice = type === 'chat' 
+      ? specialist.pricing.chatConsultation 
+      : specialist.pricing.videoConsultation;
+    
+    let discount = 0;
+    let finalCouponCode = null;
+    let isFree = false;
+    
+    // Aplicar cupón si existe
+    if (couponCode) {
+      const couponSnapshot = await db.collection('discountCoupons')
+        .where('code', '==', couponCode.toUpperCase())
+        .where('isActive', '==', true)
+        .limit(1)
+        .get();
+      
+      if (!couponSnapshot.empty) {
+        const couponDoc = couponSnapshot.docs[0];
+        const coupon = couponDoc.data();
+        
+        // Validar cupón
+        const now = new Date();
+        const isValid = 
+          (!coupon.validFrom || coupon.validFrom.toDate() <= now) &&
+          (!coupon.validUntil || coupon.validUntil.toDate() >= now) &&
+          (!coupon.maxUses || coupon.usedCount < coupon.maxUses) &&
+          (coupon.applicableTo === 'all' || coupon.applicableTo === type) &&
+          (!coupon.specialistId || coupon.specialistId === specialistId);
+        
+        if (isValid) {
+          if (coupon.type === 'percentage') {
+            discount = basePrice * (coupon.value / 100);
+          } else if (coupon.type === 'fixed') {
+            discount = coupon.value;
+          } else if (coupon.type === 'free') {
+            discount = basePrice;
+            isFree = true;
+          }
+          
+          finalCouponCode = coupon.code;
+          
+          // Incrementar contador de usos
+          await db.collection('discountCoupons').doc(couponDoc.id).update({
+            usedCount: admin.firestore.FieldValue.increment(1)
+          });
+        }
+      }
+    }
+    
+    const finalPrice = Math.max(0, basePrice - discount);
+    
+    // Crear consulta
+    const consultationData = {
+      parentId: userId,
+      childId,
+      childName: childData.name,
+      childAge: childData.age || null,
+      specialistId,
+      specialistName: specialist.personalInfo.displayName,
+      type,
+      status: isFree ? 'pending' : 'awaiting_payment',
+      request: {
+        description: description.trim(),
+        photos: photos || [],
+        symptoms: symptoms || [],
+        urgency: urgency || 'normal'
+      },
+      pricing: {
+        basePrice,
+        discount: Math.round(discount * 100) / 100,
+        finalPrice: Math.round(finalPrice * 100) / 100,
+        couponCode: finalCouponCode,
+        isFree
+      },
+      payment: {
+        method: null,
+        transactionId: null,
+        status: isFree ? 'free' : 'pending',
+        paidAt: isFree ? new Date() : null
+      },
+      schedule: {
+        requestedAt: new Date(),
+        acceptedAt: null,
+        scheduledFor: null,
+        startedAt: null,
+        completedAt: null
+      },
+      chat: {
+        channelId: null,
+        messageCount: 0
+      },
+      video: {
+        roomId: null,
+        duration: 0,
+        recording: null
+      },
+      outcome: {
+        diagnosis: null,
+        treatment: null,
+        prescriptions: [],
+        notes: null,
+        followUpRequired: false
+      },
+      rating: {
+        score: null,
+        comment: null,
+        ratedAt: null
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const consultationRef = await db.collection('consultations').add(consultationData);
+    
+    console.log(`✅ [CONSULTATION] Nueva consulta creada: ${consultationRef.id} - ${type} - $${finalPrice}`);
+    
+    // Notificar al especialista (solo si está pagada o es gratis)
+    if (isFree) {
+      // TODO: Enviar notificación push al especialista
+      console.log(`📱 Notificando al especialista ${specialistId} sobre nueva consulta`);
+    }
+    
+    res.json({
+      success: true,
+      message: 'Consulta creada exitosamente',
+      data: {
+        consultationId: consultationRef.id,
+        ...consultationData,
+        paymentRequired: !isFree
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [CONSULTATION] Error creando consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Listar consultas del usuario (App)
+ * GET /api/consultations
+ */
+app.get('/api/consultations', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { status, childId, page = 1, limit = 20 } = req.query;
+    
+    let query = db.collection('consultations')
+      .where('parentId', '==', userId);
+    
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+    
+    if (childId) {
+      query = query.where('childId', '==', childId);
+    }
+    
+    query = query.orderBy('createdAt', 'desc');
+    
+    const snapshot = await query.get();
+    
+    const consultations = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      consultations.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedConsultations = consultations.slice(startIndex, endIndex);
+    
+    console.log(`✅ [CONSULTATIONS] Consultas listadas: ${consultations.length} total para usuario ${userId}`);
+    
+    res.json({
+      success: true,
+      data: paginatedConsultations,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: consultations.length,
+        totalPages: Math.ceil(consultations.length / limitNum)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [CONSULTATIONS] Error listando consultas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando consultas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener detalles de consulta (App)
+ * GET /api/consultations/:consultationId
+ */
+app.get('/api/consultations/:consultationId', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const consultation = consultationDoc.data();
+    
+    // Verificar que el usuario es el dueño de la consulta
+    if (consultation.parentId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para ver esta consulta'
+      });
+    }
+    
+    // Obtener información del especialista
+    const specialistDoc = await db.collection('specialists').doc(consultation.specialistId).get();
+    const specialist = specialistDoc.exists ? specialistDoc.data() : null;
+    
+    res.json({
+      success: true,
+      data: {
+        id: consultationDoc.id,
+        ...consultation,
+        specialist: specialist ? {
+          id: consultation.specialistId,
+          displayName: specialist.personalInfo.displayName,
+          photoUrl: specialist.personalInfo.photoUrl,
+          specialties: specialist.professional.specialties
+        } : null,
+        createdAt: consultation.createdAt?.toDate?.() || consultation.createdAt,
+        updatedAt: consultation.updatedAt?.toDate?.() || consultation.updatedAt
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [CONSULTATIONS] Error obteniendo consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Cancelar consulta (App)
+ * DELETE /api/consultations/:consultationId
+ */
+app.delete('/api/consultations/:consultationId', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const consultation = consultationDoc.data();
+    
+    // Verificar que el usuario es el dueño
+    if (consultation.parentId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para cancelar esta consulta'
+      });
+    }
+    
+    // No se puede cancelar si ya está completada
+    if (consultation.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede cancelar una consulta completada'
+      });
+    }
+    
+    // No se puede cancelar si ya está en progreso
+    if (consultation.status === 'in_progress') {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede cancelar una consulta en progreso'
+      });
+    }
+    
+    await db.collection('consultations').doc(consultationId).update({
+      status: 'cancelled',
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [CONSULTATION] Consulta cancelada: ${consultationId}`);
+    
+    // TODO: Notificar al especialista
+    // TODO: Procesar reembolso si aplica
+    
+    res.json({
+      success: true,
+      message: 'Consulta cancelada exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('❌ [CONSULTATIONS] Error cancelando consulta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cancelando consulta',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Procesar pago de consulta (App)
+ * POST /api/consultations/:consultationId/payment
+ */
+app.post('/api/consultations/:consultationId/payment', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    const { paymentMethod, paymentToken } = req.body;
+    
+    if (!paymentMethod || !paymentToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Método de pago y token son requeridos'
+      });
+    }
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const consultation = consultationDoc.data();
+    
+    if (consultation.parentId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para pagar esta consulta'
+      });
+    }
+    
+    if (consultation.payment.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Esta consulta ya ha sido pagada'
+      });
+    }
+    
+    // TODO: Integrar con Stripe/PayPhone para procesar el pago
+    // Por ahora, simulamos un pago exitoso
+    
+    const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    await db.collection('consultations').doc(consultationId).update({
+      'payment.method': paymentMethod,
+      'payment.transactionId': transactionId,
+      'payment.status': 'completed',
+      'payment.paidAt': new Date(),
+      status: 'pending',
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [PAYMENT] Pago procesado para consulta ${consultationId}: $${consultation.pricing.finalPrice}`);
+    
+    // TODO: Notificar al especialista sobre la nueva consulta pagada
+    
+    res.json({
+      success: true,
+      message: 'Pago procesado exitosamente',
+      data: {
+        transactionId,
+        amount: consultation.pricing.finalPrice,
+        currency: 'USD'
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [PAYMENT] Error procesando pago:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error procesando pago',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// SISTEMA DE CONSULTAS MÉDICAS - CHAT
+// ============================================================================
+
+/**
+ * Enviar mensaje en consulta (App)
+ * POST /api/consultations/:consultationId/messages
+ */
+app.post('/api/consultations/:consultationId/messages', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    const { message, attachments = [] } = req.body;
+    
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        message: 'El mensaje no puede estar vacío'
+      });
+    }
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const consultation = consultationDoc.data();
+    
+    // Verificar que el usuario es parte de la consulta
+    if (consultation.parentId !== userId && consultation.specialistId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para enviar mensajes en esta consulta'
+      });
+    }
+    
+    const messageData = {
+      senderId: userId,
+      senderType: consultation.parentId === userId ? 'parent' : 'specialist',
+      message: message.trim(),
+      attachments: attachments || [],
+      isRead: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const messageRef = await db.collection('consultations')
+      .doc(consultationId)
+      .collection('messages')
+      .add(messageData);
+    
+    // Actualizar contador de mensajes
+    await db.collection('consultations').doc(consultationId).update({
+      'chat.messageCount': admin.firestore.FieldValue.increment(1),
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [CHAT] Mensaje enviado en consulta ${consultationId}`);
+    
+    // TODO: Notificar a la otra parte
+    
+    res.json({
+      success: true,
+      message: 'Mensaje enviado exitosamente',
+      data: {
+        id: messageRef.id,
+        ...messageData
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [CHAT] Error enviando mensaje:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando mensaje',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener mensajes de consulta (App)
+ * GET /api/consultations/:consultationId/messages
+ */
+app.get('/api/consultations/:consultationId/messages', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    const { limit = 50, before } = req.query;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const consultation = consultationDoc.data();
+    
+    if (consultation.parentId !== userId && consultation.specialistId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para ver estos mensajes'
+      });
+    }
+    
+    let query = db.collection('consultations')
+      .doc(consultationId)
+      .collection('messages')
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit));
+    
+    if (before) {
+      const beforeDoc = await db.collection('consultations')
+        .doc(consultationId)
+        .collection('messages')
+        .doc(before)
+        .get();
+      
+      if (beforeDoc.exists) {
+        query = query.startAfter(beforeDoc);
+      }
+    }
+    
+    const snapshot = await query.get();
+    
+    const messages = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      messages.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    
+    // Ordenar cronológicamente (más antiguo primero)
+    messages.reverse();
+    
+    res.json({
+      success: true,
+      data: messages,
+      total: messages.length
+    });
+    
+  } catch (error) {
+    console.error('❌ [CHAT] Error obteniendo mensajes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo mensajes',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Marcar mensaje como leído (App)
+ * PATCH /api/consultations/:consultationId/messages/:messageId/read
+ */
+app.patch('/api/consultations/:consultationId/messages/:messageId/read', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId, messageId } = req.params;
+    const userId = req.user.uid;
+    
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    
+    if (!consultationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Consulta no encontrada'
+      });
+    }
+    
+    const consultation = consultationDoc.data();
+    
+    if (consultation.parentId !== userId && consultation.specialistId !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso'
+      });
+    }
+    
+    await db.collection('consultations')
+      .doc(consultationId)
+      .collection('messages')
+      .doc(messageId)
+      .update({
+        isRead: true,
+        updatedAt: new Date()
+      });
+    
+    res.json({
+      success: true,
+      message: 'Mensaje marcado como leído'
+    });
+    
+  } catch (error) {
+    console.error('❌ [CHAT] Error marcando mensaje como leído:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marcando mensaje como leído',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
