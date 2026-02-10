@@ -41141,18 +41141,22 @@ app.get('/api/specialists', authenticateToken, async (req, res) => {
   try {
     const { specialty, available = 'true' } = req.query;
     
-    let query = db.collection('professionals')
+    // Obtener todos los profesionales activos que dan consultas
+    const snapshot = await db.collection('professionals')
       .where('status', '==', 'active')
-      .orderBy('stats.averageRating', 'desc');
-    
-    const snapshot = await query.get();
+      .get();
     
     const specialists = [];
     snapshot.forEach(doc => {
       const data = doc.data();
       
+      // Solo incluir los que dan consultas
+      if (!data.canAcceptConsultations) {
+        return;
+      }
+      
       // Filtro por especialidad
-      if (specialty && !data.specialties.includes(specialty)) {
+      if (specialty && !data.specialties?.includes(specialty)) {
         return;
       }
       
@@ -41161,12 +41165,21 @@ app.get('/api/specialists', authenticateToken, async (req, res) => {
         displayName: data.name,
         photoUrl: data.photoUrl,
         bio: data.bio,
-        specialties: data.specialties,
-        yearsExperience: data.professional.yearsExperience,
-        pricing: data.pricing,
-        stats: data.stats
+        specialties: data.specialties || [],
+        yearsExperience: data.professionalInfo?.yearsExperience || 0,
+        pricing: data.consultationPricing || data.pricing,
+        stats: data.consultationStats || data.stats || {
+          totalConsultations: 0,
+          averageRating: 0,
+          responseTime: 0,
+          completionRate: 100
+        },
+        accountType: data.accountType || 'specialist'
       });
     });
+    
+    // Ordenar por rating (en memoria)
+    specialists.sort((a, b) => (b.stats.averageRating || 0) - (a.stats.averageRating || 0));
     
     console.log(`✅ [SPECIALISTS] Especialistas listados: ${specialists.length} disponibles`);
     
@@ -41219,11 +41232,17 @@ app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) =>
         displayName: data.name,
         photoUrl: data.photoUrl,
         bio: data.bio,
-        specialties: data.specialties,
-        yearsExperience: data.professional.yearsExperience,
-        certifications: data.professional.certifications,
-        pricing: data.pricing,
-        stats: data.stats
+        specialties: data.specialties || [],
+        yearsExperience: data.professionalInfo?.yearsExperience || 0,
+        certifications: data.professionalInfo?.certifications || [],
+        pricing: data.consultationPricing || data.pricing,
+        stats: data.consultationStats || data.stats || {
+          totalConsultations: 0,
+          averageRating: 0,
+          responseTime: 0,
+          completionRate: 100
+        },
+        accountType: data.accountType || 'specialist'
       }
     });
     
