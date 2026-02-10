@@ -42027,6 +42027,228 @@ app.patch('/api/consultations/:consultationId/messages/:messageId/read', authent
 // ============================================================================
 
 /**
+ * Estadísticas de consultas (Admin)
+ * GET /api/admin/consultations/stats
+ * NOTA: Esta ruta debe ir ANTES de /:consultationId para que funcione
+ */
+app.get('/api/admin/consultations/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate, specialistId } = req.query;
+    
+    let query = db.collection('consultations');
+    
+    if (specialistId) {
+      query = query.where('specialistId', '==', specialistId);
+    }
+    
+    const snapshot = await query.get();
+    
+    const stats = {
+      total: 0,
+      byStatus: {
+        awaiting_payment: 0,
+        pending: 0,
+        accepted: 0,
+        in_progress: 0,
+        completed: 0,
+        cancelled: 0
+      },
+      byType: {
+        chat: 0,
+        video: 0
+      },
+      byUrgency: {
+        low: 0,
+        normal: 0,
+        high: 0
+      },
+      revenue: {
+        total: 0,
+        pending: 0,
+        completed: 0,
+        free: 0
+      },
+      averagePrice: 0,
+      couponsUsed: 0,
+      consultationsWithPhotos: 0,
+      averageResponseTime: 0,
+      completionRate: 0
+    };
+    
+    const consultations = [];
+    let totalResponseTime = 0;
+    let consultationsWithResponse = 0;
+    
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const createdAt = data.createdAt?.toDate?.() || new Date(data.createdAt);
+      
+      // Filtro por fecha
+      if (startDate && createdAt < new Date(startDate)) return;
+      if (endDate && createdAt > new Date(endDate)) return;
+      
+      consultations.push(data);
+      stats.total++;
+      
+      // Por estado
+      stats.byStatus[data.status] = (stats.byStatus[data.status] || 0) + 1;
+      
+      // Por tipo
+      stats.byType[data.type] = (stats.byType[data.type] || 0) + 1;
+      
+      // Por urgencia
+      stats.byUrgency[data.request.urgency] = (stats.byUrgency[data.request.urgency] || 0) + 1;
+      
+      // Revenue
+      if (data.pricing.isFree) {
+        stats.revenue.free += 1;
+      } else if (data.payment.status === 'completed') {
+        stats.revenue.completed += data.pricing.finalPrice;
+      } else {
+        stats.revenue.pending += data.pricing.finalPrice;
+      }
+      stats.revenue.total += data.pricing.finalPrice || 0;
+      
+      // Cupones
+      if (data.pricing.couponCode) {
+        stats.couponsUsed++;
+      }
+      
+      // Fotos
+      if (data.request.photos && data.request.photos.length > 0) {
+        stats.consultationsWithPhotos++;
+      }
+      
+      // Tiempo de respuesta
+      if (data.schedule.acceptedAt && data.schedule.requestedAt) {
+        const requested = data.schedule.requestedAt.toDate?.() || new Date(data.schedule.requestedAt);
+        const accepted = data.schedule.acceptedAt.toDate?.() || new Date(data.schedule.acceptedAt);
+        const responseTime = (accepted - requested) / (1000 * 60); // minutos
+        totalResponseTime += responseTime;
+        consultationsWithResponse++;
+      }
+    });
+    
+    // Calcular promedios
+    if (stats.total > 0) {
+      stats.averagePrice = Math.round((stats.revenue.total / stats.total) * 100) / 100;
+      stats.completionRate = Math.round((stats.byStatus.completed / stats.total) * 100);
+    }
+    
+    if (consultationsWithResponse > 0) {
+      stats.averageResponseTime = Math.round(totalResponseTime / consultationsWithResponse);
+    }
+    
+    // Top especialistas
+    const specialistCounts = {};
+    consultations.forEach(c => {
+      specialistCounts[c.specialistId] = (specialistCounts[c.specialistId] || 0) + 1;
+    });
+    
+    const topSpecialists = Object.entries(specialistCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, count]) => ({ specialistId: id, consultations: count }));
+    
+    stats.topSpecialists = topSpecialists;
+    
+    console.log(`✅ [ADMIN] Estadísticas calculadas: ${stats.total} consultas`);
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener ingresos por periodo (Admin)
+ * GET /api/admin/consultations/revenue
+ * NOTA: Esta ruta debe ir ANTES de /:consultationId para que funcione
+ */
+app.get('/api/admin/consultations/revenue', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { period = 'month', year, month } = req.query;
+    
+    const snapshot = await db.collection('consultations')
+      .where('payment.status', '==', 'completed')
+      .get();
+    
+    const revenueByPeriod = {};
+    let totalRevenue = 0;
+    let totalConsultations = 0;
+    
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const paidAt = data.payment.paidAt?.toDate?.() || new Date(data.payment.paidAt);
+      
+      let periodKey;
+      if (period === 'day') {
+        periodKey = paidAt.toISOString().split('T')[0]; // YYYY-MM-DD
+      } else if (period === 'month') {
+        periodKey = `${paidAt.getFullYear()}-${String(paidAt.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
+      } else if (period === 'year') {
+        periodKey = `${paidAt.getFullYear()}`; // YYYY
+      }
+      
+      if (!revenueByPeriod[periodKey]) {
+        revenueByPeriod[periodKey] = {
+          revenue: 0,
+          consultations: 0,
+          byType: { chat: 0, video: 0 }
+        };
+      }
+      
+      revenueByPeriod[periodKey].revenue += data.pricing.finalPrice;
+      revenueByPeriod[periodKey].consultations += 1;
+      revenueByPeriod[periodKey].byType[data.type] += 1;
+      
+      totalRevenue += data.pricing.finalPrice;
+      totalConsultations += 1;
+    });
+    
+    // Convertir a array y ordenar
+    const revenueArray = Object.entries(revenueByPeriod)
+      .map(([period, data]) => ({
+        period,
+        ...data,
+        revenue: Math.round(data.revenue * 100) / 100
+      }))
+      .sort((a, b) => a.period.localeCompare(b.period));
+    
+    console.log(`✅ [ADMIN] Ingresos calculados: $${totalRevenue} de ${totalConsultations} consultas`);
+    
+    res.json({
+      success: true,
+      data: {
+        byPeriod: revenueArray,
+        totals: {
+          revenue: Math.round(totalRevenue * 100) / 100,
+          consultations: totalConsultations,
+          averageRevenue: totalConsultations > 0 ? Math.round((totalRevenue / totalConsultations) * 100) / 100 : 0
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo ingresos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo ingresos',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Listar todas las consultas (Admin)
  * GET /api/admin/consultations
  */
@@ -42318,226 +42540,6 @@ app.delete('/api/admin/consultations/:consultationId', authenticateToken, isAdmi
     res.status(500).json({
       success: false,
       message: 'Error cancelando consulta',
-      error: error.message
-    });
-  }
-});
-
-/**
- * Estadísticas de consultas (Admin)
- * GET /api/admin/consultations/stats
- */
-app.get('/api/admin/consultations/stats', authenticateToken, isAdmin, async (req, res) => {
-  try {
-    const { startDate, endDate, specialistId } = req.query;
-    
-    let query = db.collection('consultations');
-    
-    if (specialistId) {
-      query = query.where('specialistId', '==', specialistId);
-    }
-    
-    const snapshot = await query.get();
-    
-    const stats = {
-      total: 0,
-      byStatus: {
-        awaiting_payment: 0,
-        pending: 0,
-        accepted: 0,
-        in_progress: 0,
-        completed: 0,
-        cancelled: 0
-      },
-      byType: {
-        chat: 0,
-        video: 0
-      },
-      byUrgency: {
-        low: 0,
-        normal: 0,
-        high: 0
-      },
-      revenue: {
-        total: 0,
-        pending: 0,
-        completed: 0,
-        free: 0
-      },
-      averagePrice: 0,
-      couponsUsed: 0,
-      consultationsWithPhotos: 0,
-      averageResponseTime: 0,
-      completionRate: 0
-    };
-    
-    const consultations = [];
-    let totalResponseTime = 0;
-    let consultationsWithResponse = 0;
-    
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      const createdAt = data.createdAt?.toDate?.() || new Date(data.createdAt);
-      
-      // Filtro por fecha
-      if (startDate && createdAt < new Date(startDate)) return;
-      if (endDate && createdAt > new Date(endDate)) return;
-      
-      consultations.push(data);
-      stats.total++;
-      
-      // Por estado
-      stats.byStatus[data.status] = (stats.byStatus[data.status] || 0) + 1;
-      
-      // Por tipo
-      stats.byType[data.type] = (stats.byType[data.type] || 0) + 1;
-      
-      // Por urgencia
-      stats.byUrgency[data.request.urgency] = (stats.byUrgency[data.request.urgency] || 0) + 1;
-      
-      // Revenue
-      if (data.pricing.isFree) {
-        stats.revenue.free += 1;
-      } else if (data.payment.status === 'completed') {
-        stats.revenue.completed += data.pricing.finalPrice;
-      } else {
-        stats.revenue.pending += data.pricing.finalPrice;
-      }
-      stats.revenue.total += data.pricing.finalPrice || 0;
-      
-      // Cupones
-      if (data.pricing.couponCode) {
-        stats.couponsUsed++;
-      }
-      
-      // Fotos
-      if (data.request.photos && data.request.photos.length > 0) {
-        stats.consultationsWithPhotos++;
-      }
-      
-      // Tiempo de respuesta
-      if (data.schedule.acceptedAt && data.schedule.requestedAt) {
-        const requested = data.schedule.requestedAt.toDate?.() || new Date(data.schedule.requestedAt);
-        const accepted = data.schedule.acceptedAt.toDate?.() || new Date(data.schedule.acceptedAt);
-        const responseTime = (accepted - requested) / (1000 * 60); // minutos
-        totalResponseTime += responseTime;
-        consultationsWithResponse++;
-      }
-    });
-    
-    // Calcular promedios
-    if (stats.total > 0) {
-      stats.averagePrice = Math.round((stats.revenue.total / stats.total) * 100) / 100;
-      stats.completionRate = Math.round((stats.byStatus.completed / stats.total) * 100);
-    }
-    
-    if (consultationsWithResponse > 0) {
-      stats.averageResponseTime = Math.round(totalResponseTime / consultationsWithResponse);
-    }
-    
-    // Top especialistas
-    const specialistCounts = {};
-    consultations.forEach(c => {
-      specialistCounts[c.specialistId] = (specialistCounts[c.specialistId] || 0) + 1;
-    });
-    
-    const topSpecialists = Object.entries(specialistCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([id, count]) => ({ specialistId: id, consultations: count }));
-    
-    stats.topSpecialists = topSpecialists;
-    
-    console.log(`✅ [ADMIN] Estadísticas calculadas: ${stats.total} consultas`);
-    
-    res.json({
-      success: true,
-      data: stats
-    });
-    
-  } catch (error) {
-    console.error('❌ [ADMIN] Error obteniendo estadísticas:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error obteniendo estadísticas',
-      error: error.message
-    });
-  }
-});
-
-/**
- * Obtener ingresos por periodo (Admin)
- * GET /api/admin/consultations/revenue
- */
-app.get('/api/admin/consultations/revenue', authenticateToken, isAdmin, async (req, res) => {
-  try {
-    const { period = 'month', year, month } = req.query;
-    
-    const snapshot = await db.collection('consultations')
-      .where('payment.status', '==', 'completed')
-      .get();
-    
-    const revenueByPeriod = {};
-    let totalRevenue = 0;
-    let totalConsultations = 0;
-    
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      const paidAt = data.payment.paidAt?.toDate?.() || new Date(data.payment.paidAt);
-      
-      let periodKey;
-      if (period === 'day') {
-        periodKey = paidAt.toISOString().split('T')[0]; // YYYY-MM-DD
-      } else if (period === 'month') {
-        periodKey = `${paidAt.getFullYear()}-${String(paidAt.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
-      } else if (period === 'year') {
-        periodKey = `${paidAt.getFullYear()}`; // YYYY
-      }
-      
-      if (!revenueByPeriod[periodKey]) {
-        revenueByPeriod[periodKey] = {
-          revenue: 0,
-          consultations: 0,
-          byType: { chat: 0, video: 0 }
-        };
-      }
-      
-      revenueByPeriod[periodKey].revenue += data.pricing.finalPrice;
-      revenueByPeriod[periodKey].consultations += 1;
-      revenueByPeriod[periodKey].byType[data.type] += 1;
-      
-      totalRevenue += data.pricing.finalPrice;
-      totalConsultations += 1;
-    });
-    
-    // Convertir a array y ordenar
-    const revenueArray = Object.entries(revenueByPeriod)
-      .map(([period, data]) => ({
-        period,
-        ...data,
-        revenue: Math.round(data.revenue * 100) / 100
-      }))
-      .sort((a, b) => a.period.localeCompare(b.period));
-    
-    console.log(`✅ [ADMIN] Ingresos calculados: $${totalRevenue} de ${totalConsultations} consultas`);
-    
-    res.json({
-      success: true,
-      data: {
-        byPeriod: revenueArray,
-        totals: {
-          revenue: Math.round(totalRevenue * 100) / 100,
-          consultations: totalConsultations,
-          averageRevenue: totalConsultations > 0 ? Math.round((totalRevenue / totalConsultations) * 100) / 100 : 0
-        }
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ [ADMIN] Error obteniendo ingresos:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error obteniendo ingresos',
       error: error.message
     });
   }
