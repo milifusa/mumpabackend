@@ -44707,6 +44707,102 @@ app.delete('/api/admin/consultations/:consultationId', authenticateToken, isAdmi
 // ⚠️ MIDDLEWARE CATCH-ALL - DEBE ESTAR AL FINAL
 // ============================================================================
 
+/**
+ * TEMPORAL: Verificar estado de un profesional
+ * GET /api/temp/check-professional/:id
+ */
+app.get('/api/temp/check-professional/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await db.collection('professionals').doc(id).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'No encontrado' });
+    }
+    
+    const data = doc.data();
+    
+    res.json({
+      success: true,
+      data: {
+        id: doc.id,
+        name: data.name,
+        linkedUserId: data.linkedUserId || null,
+        userId: data.userId || null,
+        accountType: data.accountType || null,
+        canAcceptConsultations: data.canAcceptConsultations || false,
+        consultationPricing: data.consultationPricing || null,
+        hasOldPersonalInfo: !!data.personalInfo,
+        hasOldProfessional: !!data.professional
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * TEMPORAL: Agregar linkedUserId a un profesional
+ * POST /api/temp/add-linked-user/:id
+ */
+app.post('/api/temp/add-linked-user/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId requerido' });
+    }
+    
+    // Verificar que el profesional existe
+    const profDoc = await db.collection('professionals').doc(id).get();
+    if (!profDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Profesional no encontrado' });
+    }
+    
+    // Verificar que el usuario existe
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    
+    const profData = profDoc.data();
+    
+    // Actualizar profesional
+    await db.collection('professionals').doc(id).update({
+      linkedUserId: userId,
+      accountType: 'medical',
+      canAcceptConsultations: true,
+      updatedAt: new Date()
+    });
+    
+    // Actualizar usuario
+    await db.collection('users').doc(userId).update({
+      professionalProfile: {
+        isActive: true,
+        specialistId: id,
+        specialistName: profData.name,
+        accountType: 'medical'
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    console.log(`✅ [TEMP] Usuario vinculado: ${userId} -> Profesional ${id}`);
+    
+    res.json({
+      success: true,
+      message: 'Usuario vinculado exitosamente',
+      data: {
+        professionalId: id,
+        userId: userId
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Middleware para rutas no encontradas (DEBE estar después de todas las rutas)
 app.use('*', (req, res) => {
   console.log('⚠️ [404] Ruta no encontrada:', req.method, req.originalUrl);
