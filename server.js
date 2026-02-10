@@ -40646,6 +40646,66 @@ app.post('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) 
 });
 
 /**
+ * TEMPORAL: Actualizar professionalProfile de usuario específico
+ * POST /api/admin/users/:userId/update-professional-link
+ */
+app.post('/api/admin/users/:userId/update-professional-link', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { newSpecialistId } = req.body;
+    
+    if (!newSpecialistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'newSpecialistId es requerido'
+      });
+    }
+    
+    // Verificar que el profesional existe
+    const professionalDoc = await db.collection('professionals').doc(newSpecialistId).get();
+    if (!professionalDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profesional no encontrado'
+      });
+    }
+    
+    // Actualizar usuario
+    await db.collection('users').doc(userId).update({
+      'professionalProfile.specialistId': newSpecialistId,
+      'professionalProfile.verifiedAt': new Date(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    // Actualizar profesional
+    await db.collection('professionals').doc(newSpecialistId).update({
+      linkedUserId: userId,
+      userId: userId,
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [ADMIN] Usuario ${userId} vinculado a profesional ${newSpecialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Vinculación actualizada exitosamente',
+      data: {
+        userId,
+        newSpecialistId
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando vinculación:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando vinculación',
+      error: error.message
+    });
+  }
+});
+
+/**
  * TEMPORAL: Actualizar profesionales existentes para consultas
  * POST /api/admin/specialists/migrate
  */
