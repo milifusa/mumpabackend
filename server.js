@@ -44707,6 +44707,49 @@ app.delete('/api/admin/consultations/:consultationId', authenticateToken, isAdmi
 // ============================================================================
 
 /**
+ * TEMPORAL: Verificar solicitudes de servicio
+ * GET /api/temp/check-service-requests
+ */
+app.get('/api/temp/check-service-requests', async (req, res) => {
+  try {
+    // Intentar varias colecciones posibles
+    const collections = ['serviceRequests', 'professionalRequests', 'service_requests', 'marketplaceRequests'];
+    const results = {};
+    
+    for (const collectionName of collections) {
+      try {
+        const snapshot = await db.collection(collectionName)
+          .orderBy('createdAt', 'desc')
+          .limit(5)
+          .get();
+        
+        results[collectionName] = {
+          exists: true,
+          count: snapshot.size,
+          samples: snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }))
+        };
+      } catch (error) {
+        results[collectionName] = {
+          exists: false,
+          error: error.message
+        };
+      }
+    }
+    
+    res.json({
+      success: true,
+      collections: results
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * TEMPORAL: Verificar estado de un profesional
  * GET /api/temp/check-professional/:id
  */
