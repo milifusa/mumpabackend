@@ -40654,7 +40654,6 @@ app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) =
     const { specialty, status, page = 1, limit = 20, search, accountType } = req.query;
     
     // Obtener TODOS los profesionales y filtrar en memoria
-    // (Evita problema de índices en Firestore)
     const snapshot = await db.collection('professionals')
       .orderBy('createdAt', 'desc')
       .get();
@@ -40664,7 +40663,16 @@ app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) =
       const data = doc.data();
       
       // Filtro: Solo los que dan consultas
-      if (data.canAcceptConsultations !== true) {
+      // Incluye si:
+      // 1. canAcceptConsultations === true
+      // 2. O tiene consultationPricing (profesionales antiguos)
+      // 3. O tiene linkedUserId (está vinculado a un usuario)
+      const givesConsultations = 
+        data.canAcceptConsultations === true || 
+        data.consultationPricing !== undefined ||
+        data.linkedUserId !== undefined;
+      
+      if (!givesConsultations) {
         return;
       }
       
