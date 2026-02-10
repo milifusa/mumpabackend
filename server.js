@@ -42836,9 +42836,8 @@ async function findBestAutoApplyCoupon(userId, type, specialistId) {
     console.log(`   • Tiene consulta completada: ${hasCompletedConsultation}`);
     
     // Verificar si tiene hijos
-    const childrenSnapshot = await db.collection('users')
-      .doc(userId)
-      .collection('children')
+    const childrenSnapshot = await db.collection('children')
+      .where('parentId', '==', userId)
       .get();
     const hasChildren = !childrenSnapshot.empty;
     
