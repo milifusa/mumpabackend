@@ -41636,6 +41636,133 @@ app.post('/api/profile/request-professional', authenticateToken, async (req, res
 });
 
 /**
+ * Enviar solicitud de servicio profesional (App)
+ * POST /api/profile/request-service
+ */
+app.post('/api/profile/request-service', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { 
+      businessName,
+      profileCategoryId,
+      cityId,
+      countryId,
+      address,
+      summary,
+      extraInfo,
+      whatsappLink,
+      instagram,
+      website,
+      logoUrl,
+      logoStoragePath,
+      latitude,
+      longitude
+    } = req.body;
+    
+    // Validaciones
+    if (!businessName || !profileCategoryId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nombre del negocio y categoría son requeridos'
+      });
+    }
+    
+    // Verificar que el usuario existe
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    const userData = userDoc.data();
+    
+    // Obtener información de la categoría
+    let profileCategory = null;
+    if (profileCategoryId) {
+      const categoryDoc = await db.collection('professional_profile_categories').doc(profileCategoryId).get();
+      if (categoryDoc.exists) {
+        const catData = categoryDoc.data();
+        profileCategory = {
+          id: categoryDoc.id,
+          name: catData.name,
+          logoUrl: catData.logoUrl
+        };
+      }
+    }
+    
+    // Obtener información de ubicación
+    let cityName = null;
+    let countryName = null;
+    
+    if (countryId) {
+      const countryDoc = await db.collection('countries').doc(countryId).get();
+      if (countryDoc.exists) {
+        countryName = countryDoc.data().name;
+      }
+    }
+    
+    if (cityId) {
+      const cityDoc = await db.collection('cities').doc(cityId).get();
+      if (cityDoc.exists) {
+        cityName = cityDoc.data().name;
+      }
+    }
+    
+    // Crear solicitud
+    const requestData = {
+      userId,
+      userEmail: userData.email,
+      userName: userData.displayName || userData.name,
+      userPhotoUrl: userData.photoURL || null,
+      businessName: businessName.trim(),
+      profileCategoryId,
+      profileCategory,
+      cityId: cityId || null,
+      cityName: cityName || null,
+      countryId: countryId || null,
+      countryName: countryName || null,
+      address: address?.trim() || null,
+      summary: summary?.trim() || null,
+      extraInfo: extraInfo?.trim() || null,
+      whatsappLink: whatsappLink?.trim() || null,
+      instagram: instagram?.trim() || null,
+      website: website?.trim() || null,
+      logoUrl: logoUrl || null,
+      logoStoragePath: logoStoragePath || null,
+      latitude: latitude || 0,
+      longitude: longitude || 0,
+      status: 'pending', // pending, approved, rejected
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const requestRef = await db.collection('serviceRequests').add(requestData);
+    
+    console.log(`✅ [SERVICE-REQUEST] Solicitud creada: ${requestRef.id} - ${businessName}`);
+    
+    res.json({
+      success: true,
+      message: 'Solicitud enviada exitosamente. Te notificaremos cuando sea revisada.',
+      data: {
+        id: requestRef.id,
+        ...requestData
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [SERVICE-REQUEST] Error creando solicitud:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando solicitud',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Listar solicitudes de perfiles profesionales (Admin)
  * GET /api/admin/professional-requests
  */
@@ -41927,6 +42054,248 @@ app.post('/api/admin/professional-requests/:requestId/reject', authenticateToken
     
   } catch (error) {
     console.error('❌ [ADMIN] Error rechazando solicitud:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error rechazando solicitud',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// SOLICITUDES DE SERVICIOS PROFESIONALES
+// ============================================================================
+
+/**
+ * Listar solicitudes de servicios (Admin)
+ * GET /api/admin/service-requests
+ */
+app.get('/api/admin/service-requests', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { status, profileCategoryId, page = 1, limit = 20, search } = req.query;
+    
+    let query = db.collection('serviceRequests');
+    
+    // Filtros
+    if (status) {
+      query = query.where('status', '==', status);
+    }
+    
+    if (profileCategoryId) {
+      query = query.where('profileCategoryId', '==', profileCategoryId);
+    }
+    
+    query = query.orderBy('createdAt', 'desc');
+    
+    const snapshot = await query.get();
+    
+    let requests = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      // Filtro de búsqueda
+      if (search) {
+        const searchLower = search.toLowerCase();
+        const matchesName = data.businessName?.toLowerCase().includes(searchLower);
+        const matchesEmail = data.userEmail?.toLowerCase().includes(searchLower);
+        if (!matchesName && !matchesEmail) {
+          return;
+        }
+      }
+      
+      requests.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    
+    // Paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedRequests = requests.slice(startIndex, endIndex);
+    
+    // Estadísticas
+    const stats = {
+      pending: requests.filter(r => r.status === 'pending').length,
+      approved: requests.filter(r => r.status === 'approved').length,
+      rejected: requests.filter(r => r.status === 'rejected').length
+    };
+    
+    console.log(`✅ [ADMIN] Solicitudes de servicio listadas: ${requests.length} total`);
+    
+    res.json({
+      success: true,
+      data: paginatedRequests,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: requests.length,
+        totalPages: Math.ceil(requests.length / limitNum)
+      },
+      stats
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando solicitudes de servicio:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando solicitudes',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Aprobar solicitud de servicio (Admin)
+ * POST /api/admin/service-requests/:requestId/approve
+ */
+app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    
+    const requestDoc = await db.collection('serviceRequests').doc(requestId).get();
+    
+    if (!requestDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Solicitud no encontrada'
+      });
+    }
+    
+    const requestData = requestDoc.data();
+    
+    if (requestData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `La solicitud ya fue ${requestData.status === 'approved' ? 'aprobada' : 'rechazada'}`
+      });
+    }
+    
+    // Crear profesional/servicio en la colección professionals
+    const professionalData = {
+      name: requestData.businessName,
+      userId: requestData.userId,
+      profileCategoryId: requestData.profileCategoryId,
+      profileCategory: requestData.profileCategory,
+      headline: requestData.summary || '',
+      bio: requestData.extraInfo || '',
+      specialties: [],
+      tags: [],
+      photoUrl: requestData.logoUrl || null,
+      location: requestData.address || '',
+      countryId: requestData.countryId,
+      countryName: requestData.countryName,
+      cityId: requestData.cityId,
+      cityName: requestData.cityName,
+      locations: requestData.cityId ? [{
+        countryId: requestData.countryId,
+        countryName: requestData.countryName,
+        cityId: requestData.cityId,
+        cityName: requestData.cityName
+      }] : [],
+      contactEmail: requestData.userEmail,
+      contactPhone: requestData.whatsappLink || '',
+      website: requestData.website || '',
+      instagram: requestData.instagram || '',
+      status: 'active',
+      accountType: 'service',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const professionalRef = await db.collection('professionals').add(professionalData);
+    
+    // Actualizar solicitud
+    await db.collection('serviceRequests').doc(requestId).update({
+      status: 'approved',
+      approvedProfessionalId: professionalRef.id,
+      reviewedAt: new Date(),
+      reviewedBy: req.user.email || req.user.uid,
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [ADMIN] Solicitud de servicio aprobada: ${requestId} -> Profesional creado: ${professionalRef.id}`);
+    
+    res.json({
+      success: true,
+      message: 'Solicitud aprobada y servicio publicado',
+      data: {
+        requestId,
+        professionalId: professionalRef.id
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error aprobando solicitud de servicio:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error aprobando solicitud',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Rechazar solicitud de servicio (Admin)
+ * POST /api/admin/service-requests/:requestId/reject
+ */
+app.post('/api/admin/service-requests/:requestId/reject', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+    
+    if (!reason || reason.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debe proporcionar una razón para el rechazo'
+      });
+    }
+    
+    const requestDoc = await db.collection('serviceRequests').doc(requestId).get();
+    
+    if (!requestDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Solicitud no encontrada'
+      });
+    }
+    
+    const requestData = requestDoc.data();
+    
+    if (requestData.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: `La solicitud ya fue ${requestData.status === 'approved' ? 'aprobada' : 'rechazada'}`
+      });
+    }
+    
+    // Actualizar solicitud
+    await db.collection('serviceRequests').doc(requestId).update({
+      status: 'rejected',
+      reviewedAt: new Date(),
+      reviewedBy: req.user.email || req.user.uid,
+      rejectionReason: reason.trim(),
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [ADMIN] Solicitud de servicio rechazada: ${requestId} - Razón: ${reason}`);
+    
+    res.json({
+      success: true,
+      message: 'Solicitud rechazada',
+      data: {
+        requestId,
+        status: 'rejected',
+        rejectionReason: reason.trim()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [ADMIN] Error rechazando solicitud de servicio:', error);
     res.status(500).json({
       success: false,
       message: 'Error rechazando solicitud',
