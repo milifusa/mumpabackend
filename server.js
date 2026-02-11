@@ -1124,6 +1124,64 @@ const firebaseReady = setupFirebase();
 // Inicializar OpenAI
 const openaiReady = setupOpenAI();
 
+/**
+ * Proxy de imágenes para evitar CORS en Storage
+ * GET /api/storage-proxy?url=https://storage.googleapis.com/mumpabackend.firebasestorage.app/path/to/image.png
+ */
+app.get('/api/storage-proxy', async (req, res) => {
+  try {
+    const { url } = req.query;
+    
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Parámetro url requerido'
+      });
+    }
+    
+    // Validar que la URL es de nuestro bucket de Storage
+    const allowedPrefixes = [
+      'https://storage.googleapis.com/mumpabackend.firebasestorage.app/',
+      'https://storage.googleapis.com/mumpabackend.appspot.com/',
+      'https://firebasestorage.googleapis.com/v0/b/mumpabackend'
+    ];
+    
+    const isAllowed = allowedPrefixes.some(prefix => url.startsWith(prefix));
+    
+    if (!isAllowed) {
+      return res.status(403).json({
+        success: false,
+        message: 'URL no permitida'
+      });
+    }
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Munpa-Backend/1.0' }
+    });
+    
+    if (!response.ok) {
+      return res.status(response.status).send(response.statusText);
+    }
+    
+    const contentType = response.headers.get('Content-Type') || 'image/png';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+    
+  } catch (error) {
+    console.error('❌ [STORAGE-PROXY] Error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo imagen',
+      error: error.message
+    });
+  }
+});
+
 // Ruta de salud
 app.get('/health', (req, res) => {
   res.json({

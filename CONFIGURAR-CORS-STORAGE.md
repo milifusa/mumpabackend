@@ -248,13 +248,32 @@ Solo necesitas **aplicarlo** siguiendo la Opción 1 o 2.
 
 ## 🎯 Resumen Rápido
 
-**Para aplicar CORS en 2 minutos:**
+### Opción A: Usar el proxy de imágenes (inmediato, sin configurar CORS)
 
-1. Ve a https://console.firebase.google.com/project/mumpabackend/storage
-2. Click en ⋮ (3 puntos) del bucket
-3. "Edit CORS configuration"
-4. Pega el contenido de `cors-storage-config.json`
-5. Guardar
+El backend tiene un proxy que evita CORS. En tu dashboard, transforma las URLs:
+
+```javascript
+// Antes (genera error CORS)
+const imageUrl = "https://storage.googleapis.com/mumpabackend.firebasestorage.app/images/recommendation/xxx.png";
+
+// Después (usa el proxy)
+const imageUrl = `https://api.munpa.online/api/storage-proxy?url=${encodeURIComponent(originalUrl)}`;
+```
+
+O crea un pipe/helper en Angular:
+```typescript
+transformStorageUrl(url: string): string {
+  if (!url || !url.includes('storage.googleapis.com')) return url;
+  return `https://api.munpa.online/api/storage-proxy?url=${encodeURIComponent(url)}`;
+}
+```
+
+### Opción B: Configurar CORS en el bucket (solución definitiva)
+
+1. Instala Google Cloud SDK: `brew install google-cloud-sdk`
+2. Autentica: `gcloud auth login` y `gcloud config set project mumpabackend`
+3. Aplica CORS: `gsutil cors set cors-storage-config.json gs://mumpabackend.firebasestorage.app`
+4. O con gcloud: `gcloud storage buckets update gs://mumpabackend.firebasestorage.app --cors-file=cors-storage-config.json`
 
 **¡Listo!** 🎉
 
