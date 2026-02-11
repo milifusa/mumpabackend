@@ -45076,6 +45076,39 @@ app.delete('/api/admin/consultations/:consultationId', authenticateToken, isAdmi
 // ============================================================================
 
 /**
+ * TEMPORAL: Verificar solicitudes de servicio sin autenticación
+ * GET /api/temp/list-service-requests
+ */
+app.get('/api/temp/list-service-requests', async (req, res) => {
+  try {
+    const snapshot = await db.collection('serviceRequests')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const requests = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      requests.push({
+        id: doc.id,
+        businessName: data.businessName,
+        userEmail: data.userEmail,
+        status: data.status,
+        createdAt: data.createdAt,
+        profileCategory: data.profileCategory
+      });
+    });
+    
+    res.json({
+      success: true,
+      count: requests.length,
+      data: requests
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * TEMPORAL: Buscar documento por ID en múltiples colecciones
  * GET /api/temp/find-document/:id
  */
