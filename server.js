@@ -25659,12 +25659,29 @@ app.get('/api/marketplace/products/:id', async (req, res) => {
 
     const productData = productDoc.data();
     
+    // Precio efectivo (promo si aplica)
+    let effectivePrice = productData.price;
+    let hasPromo = false;
+    if (productData.type === 'venta' && productData.price) {
+      const promoValid = productData.promoValidUntil && new Date(productData.promoValidUntil) >= new Date();
+      if (promoValid && (productData.promoPrice != null || productData.discountPercentage != null)) {
+        hasPromo = true;
+        if (productData.promoPrice != null) {
+          effectivePrice = productData.promoPrice;
+        } else {
+          effectivePrice = Math.max(0, productData.price * (1 - (productData.discountPercentage || 0) / 100));
+        }
+      }
+    }
+    
     // Enriquecer con información actualizada del vendedor
     const sellerDoc = await db.collection('users').doc(productData.userId).get();
     let enrichedProduct = {
       id: productDoc.id,
       ...productData,
-      location: normalizeMarketplaceLocation(productData)
+      location: normalizeMarketplaceLocation(productData),
+      effectivePrice: productData.type === 'venta' ? effectivePrice : null,
+      hasPromo
     };
     
     if (sellerDoc.exists) {
@@ -25943,7 +25960,12 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
       tradeFor,
       location,
       cityId,
-      countryId
+      countryId,
+      promoPrice,
+      discountPercentage,
+      promoValidUntil,
+      promoLabel,
+      promoClear
     } = req.body;
 
     if (!db) {
@@ -26068,6 +26090,32 @@ app.put('/api/marketplace/products/:id', authenticateToken, async (req, res) => 
 
     if (tradeFor) {
       updateData.tradeFor = tradeFor.trim();
+    }
+
+    // Promociones (solo para productos de venta)
+    if (productDoc.data().type === 'venta') {
+      if (promoClear) {
+        updateData.promoPrice = admin.firestore.FieldValue.delete();
+        updateData.discountPercentage = admin.firestore.FieldValue.delete();
+        updateData.promoValidUntil = admin.firestore.FieldValue.delete();
+        updateData.promoLabel = admin.firestore.FieldValue.delete();
+      } else if (promoPrice !== undefined || discountPercentage !== undefined || promoValidUntil !== undefined || promoLabel !== undefined) {
+        const basePrice = productDoc.data().price || 0;
+        if (promoPrice !== undefined && promoPrice !== null && promoPrice !== '') {
+          const p = parseFloat(promoPrice);
+          if (p >= 0 && p <= basePrice) updateData.promoPrice = p;
+        }
+        if (discountPercentage !== undefined && discountPercentage !== null && discountPercentage !== '') {
+          const d = parseFloat(discountPercentage);
+          if (d >= 0 && d <= 100) updateData.discountPercentage = d;
+        }
+        if (promoValidUntil !== undefined && promoValidUntil !== null && promoValidUntil !== '') {
+          updateData.promoValidUntil = new Date(promoValidUntil);
+        }
+        if (promoLabel !== undefined && promoLabel !== null) {
+          updateData.promoLabel = String(promoLabel).trim().slice(0, 50);
+        }
+      }
     }
 
     const hasLocationUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, 'cityId')
@@ -26244,6 +26292,17 @@ app.patch('/api/marketplace/products/:id/status', authenticateToken, async (req,
 
       // Crear transacción
       const productData = productDoc.data();
+      let saleAmount = productData.price || 0;
+      if (productData.type === 'venta') {
+        const promoValid = productData.promoValidUntil && new Date(productData.promoValidUntil) >= now;
+        if (promoValid && (productData.promoPrice != null || productData.discountPercentage != null)) {
+          if (productData.promoPrice != null) {
+            saleAmount = productData.promoPrice;
+          } else {
+            saleAmount = Math.max(0, saleAmount * (1 - (productData.discountPercentage || 0) / 100));
+          }
+        }
+      }
       const transactionData = {
         productId: id,
         productTitle: productData.title,
@@ -26252,7 +26311,8 @@ app.patch('/api/marketplace/products/:id/status', authenticateToken, async (req,
         buyerId: buyerId || null,
         buyerName: buyerName || 'No especificado',
         type: productData.type,
-        amount: productData.price || 0,
+        amount: saleAmount,
+        originalPrice: productData.type === 'venta' ? (productData.price || 0) : null,
         tradeDetails: productData.tradeFor || null,
         status: 'completada',
         createdAt: now,
@@ -41407,6 +41467,419 @@ app.get('/api/vendors/:vendorId', authenticateToken, async (req, res) => {
 });
 
 /**
+ * Estadísticas y ganancias del vendedor (App)
+ * GET /api/vendor/stats
+ */
+app.get('/api/vendor/stats', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { period = 'month' } = req.query; // week, month, all
+    
+    // Verificar perfil de servicio
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil de vendedor activo'
+      });
+    }
+    
+    const profileType = userDoc.data().professionalProfile.accountType;
+    if (profileType !== 'service') {
+      return res.status(403).json({
+        success: false,
+        message: 'Este endpoint es solo para perfiles de servicio/vendedor'
+      });
+    }
+    
+    const now = new Date();
+    let startDate;
+    
+    if (period === 'week') {
+      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (period === 'month') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    } else {
+      startDate = new Date(0);
+    }
+    
+    // Transacciones como vendedor
+    const transactionsSnapshot = await db.collection('marketplace_transactions')
+      .where('sellerId', '==', userId)
+      .get();
+    
+    const allTransactions = transactionsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
+    }));
+    
+    const periodTransactions = allTransactions.filter(t => new Date(t.createdAt) >= startDate);
+    
+    // Ganancias (solo ventas, no donaciones ni trueques)
+    const periodSales = periodTransactions.filter(t => t.type === 'venta');
+    const periodEarnings = periodSales.reduce((sum, t) => sum + (t.amount || 0), 0);
+    
+    const allSales = allTransactions.filter(t => t.type === 'venta');
+    const allEarnings = allSales.reduce((sum, t) => sum + (t.amount || 0), 0);
+    
+    // Productos
+    const productsSnapshot = await db.collection('marketplace_products')
+      .where('userId', '==', userId)
+      .get();
+    
+    const products = productsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const availableProducts = products.filter(p => p.status === 'disponible');
+    const soldProducts = products.filter(p => ['vendido', 'donado', 'intercambiado'].includes(p.status));
+    
+    const totalViews = products.reduce((sum, p) => sum + (p.views || 0), 0);
+    
+    // Mensajes recibidos
+    const messagesSnapshot = await db.collection('marketplace_messages')
+      .where('receiverId', '==', userId)
+      .get();
+    
+    const unreadMessages = messagesSnapshot.docs.filter(d => !d.data().isRead).length;
+    
+    res.json({
+      success: true,
+      data: {
+        period: period === 'month' ? 'Este Mes' : period === 'week' ? 'Esta Semana' : 'Todo el Tiempo',
+        earnings: {
+          thisPeriod: periodEarnings,
+          thisPeriodSales: periodSales.length,
+          total: allEarnings,
+          totalSales: allSales.length
+        },
+        products: {
+          total: products.length,
+          available: availableProducts.length,
+          sold: soldProducts.length
+        },
+        engagement: {
+          totalViews,
+          unreadMessages
+        },
+        byType: {
+          venta: allSales.length,
+          donacion: allTransactions.filter(t => t.type === 'donacion').length,
+          trueque: allTransactions.filter(t => t.type === 'trueque').length
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [VENDOR] Error obteniendo estadísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo estadísticas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener horario de apertura y cierre (Perfil de servicio)
+ * GET /api/vendor/hours
+ */
+app.get('/api/vendor/hours', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil de vendedor activo'
+      });
+    }
+    
+    if (userDoc.data().professionalProfile.accountType !== 'service') {
+      return res.status(403).json({
+        success: false,
+        message: 'Este endpoint es solo para perfiles de servicio'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    const proDoc = await db.collection('professionals').doc(specialistId).get();
+    
+    if (!proDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Perfil no encontrado'
+      });
+    }
+    
+    const businessHours = proDoc.data().businessHours || {};
+    
+    res.json({
+      success: true,
+      data: {
+        schedule: businessHours.schedule || {},
+        timezone: businessHours.timezone || 'America/Guayaquil'
+      }
+    });
+  } catch (error) {
+    console.error('❌ [VENDOR] Error obteniendo horario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo horario',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar horario de apertura y cierre (Perfil de servicio)
+ * PUT /api/vendor/hours
+ * Body: { schedule: { monday: { open: "09:00", close: "18:00" }, ... }, timezone }
+ */
+app.put('/api/vendor/hours', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { schedule, timezone } = req.body;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil de vendedor activo'
+      });
+    }
+    
+    if (userDoc.data().professionalProfile.accountType !== 'service') {
+      return res.status(403).json({
+        success: false,
+        message: 'Este endpoint es solo para perfiles de servicio'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    const updateData = { updatedAt: new Date() };
+    
+    if (schedule) {
+      const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+      const normalized = {};
+      for (const day of days) {
+        const d = schedule[day];
+        if (d && (d.open || d.close)) {
+          normalized[day] = {
+            open: d.open || '09:00',
+            close: d.close || '18:00'
+          };
+        } else if (d === null) {
+          normalized[day] = null; // cerrado
+        }
+      }
+      updateData['businessHours.schedule'] = Object.keys(normalized).length ? normalized : schedule;
+    }
+    
+    if (timezone) {
+      updateData['businessHours.timezone'] = String(timezone);
+    }
+    
+    await db.collection('professionals').doc(specialistId).update(updateData);
+    
+    console.log(`✅ [VENDOR] Horario de apertura actualizado: ${specialistId}`);
+    
+    res.json({
+      success: true,
+      message: 'Horario de apertura actualizado exitosamente',
+      data: { schedule: schedule || null, timezone: timezone || null }
+    });
+  } catch (error) {
+    console.error('❌ [VENDOR] Error actualizando horario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error actualizando horario',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Historial de ventas del vendedor
+ * GET /api/vendor/sales?page=1&limit=20
+ */
+app.get('/api/vendor/sales', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { page = 1, limit = 20 } = req.query;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil de vendedor activo'
+      });
+    }
+    
+    if (userDoc.data().professionalProfile.accountType !== 'service') {
+      return res.status(403).json({
+        success: false,
+        message: 'Este endpoint es solo para perfiles de servicio'
+      });
+    }
+    
+    const snapshot = await db.collection('marketplace_transactions')
+      .where('sellerId', '==', userId)
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const all = snapshot.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        ...d,
+        createdAt: d.createdAt?.toDate?.() || d.createdAt
+      };
+    });
+    
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const start = (pageNum - 1) * limitNum;
+    const sales = all.slice(start, start + limitNum);
+    
+    res.json({
+      success: true,
+      data: sales,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: all.length,
+        hasMore: start + limitNum < all.length
+      }
+    });
+  } catch (error) {
+    console.error('❌ [VENDOR] Error obteniendo ventas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo historial de ventas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Promociones activas del vendedor (productos con descuento)
+ * GET /api/vendor/promotions
+ */
+app.get('/api/vendor/promotions', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil de vendedor activo'
+      });
+    }
+    
+    const productsSnapshot = await db.collection('marketplace_products')
+      .where('userId', '==', userId)
+      .get();
+    
+    const now = new Date();
+    const promos = productsSnapshot.docs
+      .filter(doc => {
+        const d = doc.data();
+        return d.status === 'disponible' && d.type === 'venta';
+      })
+      .map(doc => {
+        const d = doc.data();
+        const promoValid = d.promoValidUntil && new Date(d.promoValidUntil) >= now;
+        if (!promoValid || (d.promoPrice == null && d.discountPercentage == null)) return null;
+        let effectivePrice = d.price;
+        if (d.promoPrice != null) effectivePrice = d.promoPrice;
+        else effectivePrice = Math.max(0, d.price * (1 - (d.discountPercentage || 0) / 100));
+        return {
+          id: doc.id,
+          title: d.title,
+          price: d.price,
+          effectivePrice,
+          promoPrice: d.promoPrice,
+          discountPercentage: d.discountPercentage,
+          promoLabel: d.promoLabel,
+          promoValidUntil: d.promoValidUntil?.toDate?.() || d.promoValidUntil
+        };
+      })
+      .filter(Boolean);
+    
+    res.json({
+      success: true,
+      data: promos
+    });
+  } catch (error) {
+    console.error('❌ [VENDOR] Error obteniendo promociones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo promociones',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Cupones activos que aplican al especialista (consultas)
+ * GET /api/specialist/coupons
+ */
+app.get('/api/specialist/coupons', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil de especialista activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const couponsSnapshot = await db.collection('discountCoupons')
+      .where('isActive', '==', true)
+      .get();
+    
+    const now = new Date();
+    const coupons = couponsSnapshot.docs
+      .map(doc => {
+        const c = doc.data();
+        if (c.validFrom && new Date(c.validFrom) > now) return null;
+        if (c.validUntil && new Date(c.validUntil) < now) return null;
+        if (c.specialistId && c.specialistId !== specialistId) return null;
+        return {
+          id: doc.id,
+          code: c.code,
+          type: c.type,
+          value: c.value,
+          applicableTo: c.applicableTo,
+          maxUses: c.maxUses,
+          usedCount: c.usedCount,
+          validUntil: c.validUntil?.toDate?.() || c.validUntil,
+          autoApply: c.autoApply
+        };
+      })
+      .filter(Boolean);
+    
+    res.json({
+      success: true,
+      data: coupons
+    });
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error obteniendo cupones:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo cupones',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Obtener especialista por ID (App)
  * GET /api/specialists/:specialistId
  */
@@ -42798,6 +43271,92 @@ app.get('/api/specialist/consultations', authenticateToken, async (req, res) => 
 });
 
 /**
+ * Historial de consultas completadas (Especialista médico)
+ * GET /api/specialist/consultations/history?page=1&limit=20
+ */
+app.get('/api/specialist/consultations/history', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { page = 1, limit = 20 } = req.query;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil médico activo'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    
+    const snapshot = await db.collection('consultations')
+      .where('specialistId', '==', specialistId)
+      .where('status', '==', 'completed')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    const consultations = [];
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      let childInfo = null;
+      if (data.childId) {
+        const childDoc = await db.collection('children').doc(data.childId).get();
+        if (childDoc.exists) {
+          const c = childDoc.data();
+          const birthDate = parseDateSafe(c.birthDate);
+          const ageMonths = birthDate ? calculateMonthsFromBirthDate(birthDate) : null;
+          childInfo = { name: c.name, age: ageMonths ? `${Math.floor(ageMonths / 12)} años ${ageMonths % 12} meses` : 'N/A' };
+        }
+      }
+      let parentInfo = null;
+      if (data.parentId) {
+        const parentDoc = await db.collection('users').doc(data.parentId).get();
+        if (parentDoc.exists) {
+          const p = parentDoc.data();
+          parentInfo = { name: p.displayName || 'Usuario' };
+        }
+      }
+      consultations.push({
+        id: doc.id,
+        childName: childInfo?.name || 'N/A',
+        childAge: childInfo?.age || 'N/A',
+        parent: parentInfo,
+        type: data.type,
+        status: data.status,
+        result: data.result,
+        pricing: { finalPrice: data.pricing?.finalPrice || 0 },
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        completedAt: data.completedAt?.toDate?.() || data.completedAt,
+        rating: data.rating
+      });
+    }
+    
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const start = (pageNum - 1) * limitNum;
+    const paginated = consultations.slice(start, start + limitNum);
+    
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: consultations.length,
+        hasMore: start + limitNum < consultations.length
+      }
+    });
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error obteniendo historial:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo historial de consultas',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Obtener detalles de consulta (Especialista)
  * GET /api/specialist/consultations/:consultationId
  */
@@ -43357,7 +43916,7 @@ app.get('/api/specialist/stats', authenticateToken, async (req, res) => {
     // Estadísticas por tipo
     const byType = {
       chat: periodConsultations.filter(c => c.type === 'chat').length,
-      video: periodConsultations.filter(c => c.type === 'online').length
+      video: periodConsultations.filter(c => c.type === 'video' || c.type === 'online').length
     };
     
     // Estadísticas totales (all time)
@@ -43400,13 +43959,67 @@ app.get('/api/specialist/stats', authenticateToken, async (req, res) => {
 });
 
 /**
- * Actualizar disponibilidad (Especialista)
+ * Obtener horario de atención (Especialista médico)
+ * GET /api/specialist/availability
+ */
+app.get('/api/specialist/availability', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes un perfil médico activo'
+      });
+    }
+    
+    const profileType = userDoc.data().professionalProfile.accountType;
+    if (profileType === 'service') {
+      return res.status(403).json({
+        success: false,
+        message: 'Este endpoint es para perfiles médicos. Usa /api/vendor/hours para perfil de servicio'
+      });
+    }
+    
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
+    
+    if (!specialistDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Perfil no encontrado'
+      });
+    }
+    
+    const avail = specialistDoc.data().availability || {};
+    
+    res.json({
+      success: true,
+      data: {
+        schedule: avail.schedule || {},
+        timezone: avail.timezone || 'America/Guayaquil',
+        maxConsultationsPerDay: avail.maxConsultationsPerDay || 10
+      }
+    });
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error obteniendo horario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo horario',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Actualizar horario de atención (Especialista médico)
  * PUT /api/specialist/availability
  */
 app.put('/api/specialist/availability', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { schedule, maxConsultationsPerDay } = req.body;
+    const { schedule, maxConsultationsPerDay, timezone } = req.body;
     
     // Verificar perfil profesional
     const userDoc = await db.collection('users').doc(userId).get();
@@ -43428,20 +44041,25 @@ app.put('/api/specialist/availability', authenticateToken, async (req, res) => {
       updateData['availability.schedule'] = schedule;
     }
     
-    if (maxConsultationsPerDay) {
+    if (maxConsultationsPerDay !== undefined) {
       updateData['availability.maxConsultationsPerDay'] = parseInt(maxConsultationsPerDay);
+    }
+    
+    if (timezone) {
+      updateData['availability.timezone'] = String(timezone);
     }
     
     await db.collection('professionals').doc(specialistId).update(updateData);
     
-    console.log(`✅ [SPECIALIST] Disponibilidad actualizada: ${specialistId}`);
+    console.log(`✅ [SPECIALIST] Horario de atención actualizado: ${specialistId}`);
     
     res.json({
       success: true,
-      message: 'Disponibilidad actualizada exitosamente',
+      message: 'Horario de atención actualizado exitosamente',
       data: {
-        schedule,
-        maxConsultationsPerDay
+        schedule: schedule || null,
+        maxConsultationsPerDay: maxConsultationsPerDay !== undefined ? parseInt(maxConsultationsPerDay) : null,
+        timezone: timezone || null
       }
     });
     
