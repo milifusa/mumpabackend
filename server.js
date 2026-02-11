@@ -41163,7 +41163,7 @@ app.get('/api/specialists', authenticateToken, async (req, res) => {
       specialists.push({
         id: doc.id,
         displayName: data.name,
-        photoUrl: data.photoUrl,
+        photoUrl: data.photoUrl || data.personalInfo?.photoUrl || data.photoURL || data.logoUrl || null,
         bio: data.bio,
         specialties: data.specialties || [],
         yearsExperience: data.professionalInfo?.yearsExperience || 0,
@@ -41230,7 +41230,7 @@ app.get('/api/specialists/:specialistId', authenticateToken, async (req, res) =>
       data: {
         id: specialistDoc.id,
         displayName: data.name,
-        photoUrl: data.photoUrl,
+        photoUrl: data.photoUrl || data.personalInfo?.photoUrl || data.photoURL || data.logoUrl || null,
         bio: data.bio,
         specialties: data.specialties || [],
         yearsExperience: data.professionalInfo?.yearsExperience || 0,
