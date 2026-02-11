@@ -41636,6 +41636,106 @@ app.post('/api/profile/request-professional', authenticateToken, async (req, res
 });
 
 /**
+ * Subir documento para solicitud profesional (App)
+ * POST /api/professionals/requests/upload-document
+ */
+const uploadDocument = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB máximo para documentos
+  },
+  fileFilter: function (req, file, cb) {
+    // Permitir PDFs, imágenes y documentos
+    const allowedTypes = [
+      'application/pdf',
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/heic',
+      'image/heif'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Solo se permiten archivos PDF o imágenes'), false);
+    }
+  }
+});
+
+app.post('/api/professionals/requests/upload-document', authenticateToken, uploadDocument.single('document'), async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se recibió ningún archivo'
+      });
+    }
+    
+    const file = req.file;
+    const timestamp = Date.now();
+    
+    // Determinar extensión del archivo
+    let extension = 'pdf';
+    if (file.mimetype.startsWith('image/')) {
+      const mimeExtensions = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/heic': 'heic',
+        'image/heif': 'heif'
+      };
+      extension = mimeExtensions[file.mimetype] || 'jpg';
+    }
+    
+    // Crear referencia en Storage
+    const fileName = `documents/professional-requests/doc-${userId}-${timestamp}.${extension}`;
+    const fileRef = bucket.file(fileName);
+    
+    // Subir archivo
+    await fileRef.save(file.buffer, {
+      metadata: {
+        contentType: file.mimetype,
+        metadata: {
+          uploadedBy: userId,
+          uploadedAt: new Date().toISOString()
+        }
+      }
+    });
+    
+    // Hacer el archivo público
+    await fileRef.makePublic();
+    
+    // Obtener URL pública
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    
+    console.log(`✅ [DOCUMENT] Documento subido: ${fileName}`);
+    
+    res.json({
+      success: true,
+      message: 'Documento subido exitosamente',
+      data: {
+        url: publicUrl,
+        storagePath: fileName,
+        fileName: file.originalname,
+        size: file.size,
+        mimeType: file.mimetype
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [DOCUMENT] Error subiendo documento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error subiendo documento',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Enviar solicitud de servicio profesional (App)
  * POST /api/profile/request-service
  */
