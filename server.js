@@ -40964,17 +40964,12 @@ app.get('/api/admin/specialists', authenticateToken, isAdmin, async (req, res) =
     snapshot.forEach(doc => {
       const data = doc.data();
       
-      // Filtro: Solo los que dan consultas
-      // Incluye si:
-      // 1. canAcceptConsultations === true
-      // 2. O tiene consultationPricing (profesionales antiguos)
-      // 3. O tiene linkedUserId (está vinculado a un usuario)
-      const givesConsultations = 
-        data.canAcceptConsultations === true || 
-        data.consultationPricing !== undefined ||
-        data.linkedUserId !== undefined;
+      // Incluir: profesionales de consultas O de servicios (vendedores)
+      const isConsultation = data.canAcceptConsultations === true || data.consultationPricing !== undefined;
+      const isService = data.accountType === 'service' || data.isSeller === true;
+      const hasLink = data.linkedUserId !== undefined;
       
-      if (!givesConsultations) {
+      if (!isConsultation && !isService && !hasLink) {
         return;
       }
       
@@ -41252,6 +41247,160 @@ app.get('/api/specialists', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error listando especialistas',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Listar vendedores/servicios (perfiles con productos) - App
+ * GET /api/vendors
+ */
+app.get('/api/vendors', authenticateToken, async (req, res) => {
+  try {
+    const { profileCategoryId, cityId, search } = req.query;
+    
+    const snapshot = await db.collection('professionals')
+      .where('status', '==', 'active')
+      .get();
+    
+    const vendors = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      
+      if (data.accountType !== 'service' && !data.isSeller) {
+        return;
+      }
+      
+      if (profileCategoryId && data.profileCategoryId !== profileCategoryId) {
+        return;
+      }
+      
+      if (cityId && data.cityId !== cityId) {
+        return;
+      }
+      
+      if (search) {
+        const searchLower = search.toLowerCase();
+        if (!data.name?.toLowerCase().includes(searchLower) &&
+            !data.bio?.toLowerCase().includes(searchLower)) {
+          return;
+        }
+      }
+      
+      vendors.push({
+        id: doc.id,
+        displayName: data.name,
+        photoUrl: data.photoUrl || data.logoUrl || null,
+        bio: data.bio,
+        headline: data.headline,
+        profileCategory: data.profileCategory,
+        location: data.location,
+        cityName: data.cityName,
+        countryName: data.countryName,
+        contactPhone: data.contactPhone,
+        whatsappLink: data.contactPhone,
+        website: data.website,
+        instagram: data.instagram,
+        accountType: 'service'
+      });
+    });
+    
+    res.json({
+      success: true,
+      data: vendors,
+      total: vendors.length
+    });
+    
+  } catch (error) {
+    console.error('❌ [VENDORS] Error listando vendedores:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando vendedores',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Obtener vendedor por ID (App)
+ * GET /api/vendors/:vendorId
+ */
+app.get('/api/vendors/:vendorId', authenticateToken, async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    
+    const vendorDoc = await db.collection('professionals').doc(vendorId).get();
+    
+    if (!vendorDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendedor no encontrado'
+      });
+    }
+    
+    const data = vendorDoc.data();
+    
+    if (data.accountType !== 'service' && !data.isSeller) {
+      return res.status(404).json({
+        success: false,
+        message: 'Perfil no disponible'
+      });
+    }
+    
+    if (data.status !== 'active') {
+      return res.status(404).json({
+        success: false,
+        message: 'Vendedor no disponible'
+      });
+    }
+    
+    // Obtener productos del vendedor (por userId)
+    const userId = data.linkedUserId || data.userId;
+    let products = [];
+    if (userId) {
+      const productsSnapshot = await db.collection('marketplace_products')
+        .where('userId', '==', userId)
+        .where('status', '==', 'available')
+        .limit(20)
+        .get();
+      
+      products = productsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
+      }));
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        id: vendorDoc.id,
+        displayName: data.name,
+        photoUrl: data.photoUrl || data.logoUrl || null,
+        bio: data.bio,
+        headline: data.headline,
+        profileCategory: data.profileCategory,
+        location: data.location,
+        address: data.location,
+        cityName: data.cityName,
+        countryName: data.countryName,
+        contactPhone: data.contactPhone,
+        whatsappLink: data.contactPhone,
+        website: data.website,
+        instagram: data.instagram,
+        contactEmail: data.contactEmail,
+        accountType: 'service',
+        products,
+        productsCount: products.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ [VENDORS] Error obteniendo vendedor:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo vendedor',
       error: error.message
     });
   }
@@ -41538,22 +41687,43 @@ app.get('/api/profile/professional', authenticateToken, async (req, res) => {
     
     const specialistData = specialistDoc.data();
     
+    const responseData = {
+      hasProfessionalProfile: true,
+      type: profile.accountType,
+      specialistId: profile.specialistId,
+      status: specialistData.status,
+      verifiedAt: profile.verifiedAt?.toDate?.() || profile.verifiedAt,
+      specialist: {
+        displayName: specialistData.name,
+        photoUrl: specialistData.photoUrl || specialistData.logoUrl,
+        specialties: specialistData.specialties,
+        stats: specialistData.consultationStats,
+        pricing: specialistData.consultationPricing
+      }
+    };
+    
+    // Si es perfil de servicio (vendedor), incluir info de productos
+    if (profile.accountType === 'service') {
+      const productsSnapshot = await db.collection('marketplace_products')
+        .where('userId', '==', userId)
+        .get();
+      
+      const productsCount = productsSnapshot.size;
+      const availableCount = productsSnapshot.docs.filter(
+        d => d.data().status === 'available'
+      ).length;
+      
+      responseData.specialist.isSeller = true;
+      responseData.specialist.productsCount = productsCount;
+      responseData.specialist.productsAvailable = availableCount;
+      responseData.specialist.contactPhone = specialistData.contactPhone;
+      responseData.specialist.website = specialistData.website;
+      responseData.specialist.instagram = specialistData.instagram;
+    }
+    
     res.json({
       success: true,
-      data: {
-        hasProfessionalProfile: true,
-        type: profile.accountType,
-        specialistId: profile.specialistId,
-        status: specialistData.status,
-        verifiedAt: profile.verifiedAt?.toDate?.() || profile.verifiedAt,
-        specialist: {
-          displayName: specialistData.name,
-          photoUrl: specialistData.photoUrl,
-          specialties: specialistData.specialties,
-          stats: specialistData.consultationStats,
-          pricing: specialistData.consultationPricing
-        }
-      }
+      data: responseData
     });
     
   } catch (error) {
@@ -42334,10 +42504,11 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
       });
     }
     
-    // Crear profesional/servicio en la colección professionals
+    // Crear profesional/servicio en la colección professionals (perfil para productos, NO consultas)
     const professionalData = {
       name: requestData.businessName,
       userId: requestData.userId,
+      linkedUserId: requestData.userId,
       profileCategoryId: requestData.profileCategoryId,
       profileCategory: requestData.profileCategory,
       headline: requestData.summary || '',
@@ -42362,11 +42533,25 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
       instagram: requestData.instagram || '',
       status: 'active',
       accountType: 'service',
+      canAcceptConsultations: false,
+      isSeller: true,
       createdAt: new Date(),
       updatedAt: new Date()
     };
     
     const professionalRef = await db.collection('professionals').add(professionalData);
+    
+    // Vincular perfil al usuario para que pueda administrar productos desde el app
+    await db.collection('users').doc(requestData.userId).update({
+      professionalProfile: {
+        isActive: true,
+        specialistId: professionalRef.id,
+        specialistName: requestData.businessName,
+        accountType: 'service',
+        verifiedAt: new Date()
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
     
     // Actualizar solicitud
     await db.collection('serviceRequests').doc(requestId).update({
