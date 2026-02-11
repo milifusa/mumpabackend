@@ -41666,6 +41666,7 @@ const uploadDocument = multer({
 app.post('/api/professionals/requests/upload-document', authenticateToken, uploadDocument.single('document'), async (req, res) => {
   try {
     const userId = req.user.uid;
+    const bucket = admin.storage().bucket();
     
     if (!req.file) {
       return res.status(400).json({
