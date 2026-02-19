@@ -517,7 +517,9 @@ GET /api/consultations/:consultationId
 Authorization: Bearer {user_token}
 ```
 
-**Response:**
+**Acceso:** Padre (parentId) o especialista asignado (linkedUserId).
+
+**Response (incluye `result` cuando la consulta está completada):**
 ```json
 {
   "success": true,
@@ -525,19 +527,31 @@ Authorization: Bearer {user_token}
     "id": "consultation_1",
     "childName": "Sofía",
     "childAge": "2 años",
-    "type": "video",
-    "status": "pending",
+    "type": "chat",
+    "status": "completed",
     "request": {
       "description": "Mi bebé tiene fiebre desde ayer...",
       "photos": ["https://..."],
       "symptoms": ["symptom_1", "symptom_2"],
-      "urgency": "high"
+      "urgency": "high",
+      "symptomDetails": []
     },
-    "pricing": {
-      "basePrice": 40,
-      "discount": 4,
-      "finalPrice": 36,
-      "isFree": false
+    "result": {
+      "diagnosis": "Resfriado común",
+      "treatment": "Reposo, hidratación, paracetamol según peso",
+      "prescriptions": [
+        {
+          "medication": "Paracetamol",
+          "dosage": "500mg",
+          "frequency": "cada 8 horas",
+          "duration": "3 días",
+          "instructions": "Tomar con alimentos"
+        }
+      ],
+      "notes": "Controlar temperatura. Si persiste fiebre > 3 días, reevaluar.",
+      "followUpRequired": true,
+      "followUpDate": "2026-02-15T10:00:00Z",
+      "completedAt": "2026-02-08T12:00:00Z"
     },
     "specialist": {
       "id": "specialist_1",
@@ -545,15 +559,9 @@ Authorization: Bearer {user_token}
       "photoUrl": "https://...",
       "specialties": ["Pediatra"]
     },
-    "payment": {
-      "status": "pending"
-    },
-    "schedule": {
-      "requestedAt": "2026-02-08T10:00:00Z"
-    },
-    "chat": {
-      "messageCount": 0
-    }
+    "pricing": { "finalPrice": 36, "isFree": false },
+    "createdAt": "2026-02-08T10:00:00Z",
+    "updatedAt": "2026-02-08T12:00:00Z"
   }
 }
 ```
@@ -659,6 +667,118 @@ Authorization: Bearer {user_token}
 ```bash
 PATCH /api/consultations/:consultationId/messages/:messageId/read
 Authorization: Bearer {user_token}
+```
+
+### 5.4 Unirse a Videollamada (App)
+```bash
+POST /api/consultations/:consultationId/video/join
+Authorization: Bearer {user_token}
+Content-Type: application/json
+
+{ "role": "host" }
+```
+
+**Response:** `{ channelName, uid, token, appId }` - Usar con SDK de Agora. Ver **GUIA-VIDEO-CONSULTAS.md**.
+
+### 5.5 Finalizar Videollamada (App)
+```bash
+POST /api/consultations/:consultationId/video/end
+Authorization: Bearer {user_token}
+Content-Type: application/json
+
+{ "durationSeconds": 720 }
+```
+
+---
+
+## 6️⃣ PANEL DEL ESPECIALISTA
+
+### 6.1 Listar Consultas Asignadas
+```bash
+GET /api/specialist/consultations?status=pending&page=1&limit=20
+Authorization: Bearer {specialist_token}
+```
+
+**Query:** `status` (pending, accepted, in_progress, completed), `urgency`, `type`, `page`, `limit`
+
+### 6.2 Obtener Detalle de Consulta (Especialista)
+```bash
+GET /api/specialist/consultations/:consultationId
+Authorization: Bearer {specialist_token}
+```
+
+**Response incluye:** `canPrescribe` (si puede emitir recetas), `child`, `parent`, `messages`, `result` (si ya completó)
+
+### 6.3 Aceptar Consulta
+```bash
+POST /api/specialist/consultations/:consultationId/accept
+Authorization: Bearer {specialist_token}
+Content-Type: application/json
+
+{
+  "scheduledFor": "2026-02-10T15:00:00Z",
+  "estimatedResponseTime": 15
+}
+```
+
+### 6.4 Rechazar Consulta
+```bash
+POST /api/specialist/consultations/:consultationId/reject
+Authorization: Bearer {specialist_token}
+Content-Type: application/json
+
+{ "reason": "No disponible en este horario" }
+```
+
+### 6.5 Iniciar Consulta
+```bash
+POST /api/specialist/consultations/:consultationId/start
+Authorization: Bearer {specialist_token}
+```
+
+Cambia estado de `accepted` a `in_progress`.
+
+### 6.6 Completar Consulta (diagnóstico, tratamiento, recetas)
+```bash
+POST /api/specialist/consultations/:consultationId/complete
+Authorization: Bearer {specialist_token}
+Content-Type: application/json
+
+{
+  "diagnosis": "Resfriado común",
+  "treatment": "Reposo, hidratación, paracetamol según peso",
+  "prescriptions": [
+    {
+      "medication": "Paracetamol",
+      "dosage": "500mg",
+      "frequency": "cada 8 horas",
+      "duration": "3 días",
+      "instructions": "Tomar con alimentos"
+    }
+  ],
+  "notes": "Controlar temperatura. Si persiste fiebre > 3 días, reevaluar.",
+  "followUpRequired": true,
+  "followUpDate": "2026-02-15"
+}
+```
+
+**Requisitos:**
+- **diagnosis** y **treatment** obligatorios
+- **prescriptions**: solo si el especialista tiene `canPrescribe` (accountType=specialist). Nutricionistas/coaches no pueden emitir recetas
+- Para **chat**: puede completar desde `accepted` o `in_progress` (si accepted, se auto-inicia)
+- El padre recibe notificación push y ve el resultado en `GET /api/consultations/:id`
+
+### 6.7 Mensajes (Especialista)
+```bash
+GET  /api/specialist/consultations/:consultationId/messages
+POST /api/specialist/consultations/:consultationId/messages
+Authorization: Bearer {specialist_token}
+```
+
+### 6.8 Historial de Consultas Completadas
+```bash
+GET /api/specialist/consultations/history?page=1&limit=20
+Authorization: Bearer {specialist_token}
 ```
 
 ---
@@ -1015,13 +1135,73 @@ Authorization: Bearer {admin_token}
 
 ---
 
+## 🔄 Completar consulta de chat (Especialista)
+
+### Flujo
+1. **pending** → Especialista acepta: `POST /api/specialist/consultations/:id/accept`
+2. **accepted** → (Opcional) Iniciar: `POST /api/specialist/consultations/:id/start` o ir directo a completar
+3. **Completar** con resultados: `POST /api/specialist/consultations/:id/complete`
+
+### POST /api/specialist/consultations/:consultationId/complete
+```bash
+POST /api/specialist/consultations/:consultationId/complete
+Authorization: Bearer {specialist_token}
+Content-Type: application/json
+
+{
+  "diagnosis": "Resumen del diagnóstico",
+  "treatment": "Recomendaciones de tratamiento",
+  "prescriptions": [
+    {
+      "medication": "Paracetamol",
+      "dosage": "500mg",
+      "frequency": "cada 8 horas",
+      "duration": "3 días",
+      "instructions": "Tomar con alimentos"
+    }
+  ],
+  "notes": "Observaciones adicionales",
+  "followUpRequired": true,
+  "followUpDate": "2026-02-20T10:00:00Z"
+}
+```
+
+**Notas:**
+- `prescriptions` solo si el perfil tiene `canPrescribe`. Nutricionistas/coaches no pueden emitir recetas.
+- `diagnosis` y `treatment` son obligatorios.
+- Puede completar desde `accepted` o `in_progress` (para chat, no hace falta iniciar explícitamente).
+
+### Resumen para el usuario (padre)
+**GET /api/consultations/:consultationId** incluye `result`:
+```json
+{
+  "result": {
+    "diagnosis": "...",
+    "treatment": "...",
+    "prescriptions": [...],
+    "notes": "...",
+    "followUpRequired": true,
+    "followUpDate": "...",
+    "completedAt": "..."
+  }
+}
+```
+
+**GET /api/specialist/consultations/:consultationId** incluye `canPrescribe` y `result` para que el especialista sepa si puede emitir recetas.
+
+---
+
 ## 🎯 Próximos Endpoints
 
-### Panel del Especialista:
+### Panel del Especialista (ver sección 6️⃣):
 - `GET /api/specialist/consultations` - Consultas asignadas
+- `GET /api/specialist/consultations/:id` - Detalle (incluye `canPrescribe`, `messages`, `result`)
 - `POST /api/specialist/consultations/:id/accept` - Aceptar consulta
-- `POST /api/specialist/consultations/:id/complete` - Completar con diagnóstico
-- `GET /api/specialist/stats` - Estadísticas del especialista
+- `POST /api/specialist/consultations/:id/start` - Iniciar consulta
+- `POST /api/specialist/consultations/:id/complete` - Completar con diagnóstico/tratamiento/recetas
+- `GET/POST /api/specialist/consultations/:id/messages` - Ver/enviar mensajes
+- `GET /api/specialist/consultations/history` - Historial completado
+- `GET /api/specialist/stats` - Estadísticas
 
 ### Videollamadas:
 - `POST /api/consultations/:id/video/start` - Iniciar videollamada

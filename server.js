@@ -306,6 +306,63 @@ app.use(cors({
 // Compresión para respuestas más rápidas
 app.use(compression());
 
+// Stripe webhook necesita body raw (antes de express.json)
+app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  let event;
+  try {
+    if (!endpointSecret) throw new Error('STRIPE_WEBHOOK_SECRET not set');
+    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+  } catch (err) {
+    console.error('❌ [STRIPE] Webhook signature error:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+  if (event.type === 'payment_intent.succeeded') {
+    const pi = event.data.object;
+    const consultationId = pi.metadata?.consultationId;
+    const orderId = pi.metadata?.orderId;
+
+    if (consultationId && db) {
+      db.collection('consultations').doc(consultationId).get().then(doc => {
+        if (doc.exists && doc.data().payment?.status !== 'completed') {
+          const d = doc.data();
+          db.collection('consultations').doc(consultationId).update({
+            'payment.method': 'stripe',
+            'payment.transactionId': pi.id,
+            'payment.status': 'completed',
+            'payment.paidAt': new Date(),
+            status: 'pending',
+            updatedAt: new Date()
+          }).then(() => {
+            if (typeof notifySpecialistNewConsultation === 'function' && d.specialistId && d.childName) {
+              notifySpecialistNewConsultation(d.specialistId, consultationId, d.childName).catch(() => {});
+            }
+            console.log(`✅ [STRIPE] Consulta ${consultationId} marcada como pagada`);
+          });
+        }
+      }).catch(e => console.error('❌ [STRIPE] Webhook DB error:', e));
+    }
+
+    if (orderId && db) {
+      db.collection('vendor_orders').doc(orderId).get().then(doc => {
+        if (doc.exists && doc.data().payment?.status !== 'completed') {
+          db.collection('vendor_orders').doc(orderId).update({
+            'payment.method': 'stripe',
+            'payment.transactionId': pi.id,
+            'payment.status': 'completed',
+            'payment.paidAt': new Date(),
+            status: 'paid',
+            updatedAt: new Date()
+          }).then(() => console.log(`✅ [STRIPE] Orden vendor ${orderId} marcada como pagada`));
+        }
+      }).catch(e => console.error('❌ [STRIPE] Webhook vendor order error:', e));
+    }
+  }
+  res.json({ received: true });
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -7838,43 +7895,37 @@ app.get('/api/recommendations/nearby', authenticateToken, async (req, res) => {
   }
 });
 
-// Obtener top 3 recomendaciones mejor calificadas y cercanas (APP)
+// Obtener top 3 recomendaciones mejor calificadas por ciudad (APP)
+// Filtra por ciudad del perfil y ciudad del recomendado, sin radio en km
 app.get('/api/recommendations/nearby/top', authenticateToken, async (req, res) => {
   try {
-    const { latitude, longitude, radius = 10, categoryId, limit = 3, minReviews = 0, minRating = 0, cityId, countryId } = req.query;
-    
-    console.log('⭐📍 [APP] Top recomendaciones cercanas:', { latitude, longitude, radius });
+    const { latitude, longitude, categoryId, limit = 3, minReviews = 0, minRating = 0, cityId, countryId } = req.query;
 
-    const hasCoords = latitude !== undefined && longitude !== undefined;
     const profileLocation = await getUserLocationFromProfile(req.user.uid);
-    const userLat = hasCoords ? parseFloat(latitude) : parseFloat(profileLocation.latitude);
-    const userLng = hasCoords ? parseFloat(longitude) : parseFloat(profileLocation.longitude);
     const effectiveCityId = cityId || profileLocation.cityId || null;
     const effectiveCountryId = countryId || profileLocation.countryId || null;
 
-    if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) {
+    if (!effectiveCityId && !effectiveCountryId) {
       return res.status(400).json({
         success: false,
-        message: 'Ubicación no disponible. Actualiza tu perfil antes de buscar.'
+        message: 'Ubicación no disponible. Actualiza tu perfil (ciudad/país) antes de buscar.'
       });
     }
 
-    const cacheKey = `${req.path}?uid=${req.user.uid}&lat=${userLat}&lng=${userLng}&cityId=${effectiveCityId || ''}&countryId=${effectiveCountryId || ''}&radius=${radius}&categoryId=${categoryId || ''}&limit=${limit}&minReviews=${minReviews}&minRating=${minRating}`;
+    const hasCoords = latitude !== undefined && longitude !== undefined;
+    const userLat = hasCoords ? parseFloat(latitude) : parseFloat(profileLocation.latitude);
+    const userLng = hasCoords ? parseFloat(longitude) : parseFloat(profileLocation.longitude);
+
+    console.log('⭐📍 [APP] Top recomendaciones por ciudad:', { cityId: effectiveCityId, countryId: effectiveCountryId });
+
+    const cacheKey = `${req.path}?uid=${req.user.uid}&lat=${Number.isFinite(userLat) ? userLat : ''}&lng=${Number.isFinite(userLng) ? userLng : ''}&cityId=${effectiveCityId || ''}&countryId=${effectiveCountryId || ''}&categoryId=${categoryId || ''}&limit=${limit}&minReviews=${minReviews}&minRating=${minRating}`;
     const cached = getCachedResponse(cacheKey);
     if (cached) {
       return res.json(cached);
     }
-    const maxRadius = Math.min(parseFloat(radius), 100);
     const limitNumber = Math.min(parseInt(limit), 10);
     const minReviewsNumber = Math.max(parseInt(minReviews), 0);
     const minRatingNumber = Math.max(parseFloat(minRating), 0);
-
-    if (isNaN(userLat) || isNaN(userLng)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Latitude y longitude deben ser números válidos'
-      });
-    }
 
     let query = db.collection('recommendations')
       .where('isActive', '==', true);
@@ -7890,7 +7941,7 @@ app.get('/api/recommendations/nearby/top', authenticateToken, async (req, res) =
       snapshot.docs.map(async (doc) => {
         const data = doc.data();
         let distance = null;
-        if (data.latitude && data.longitude) {
+        if (Number.isFinite(userLat) && Number.isFinite(userLng) && data.latitude && data.longitude) {
           distance = calculateDistance(
             userLat,
             userLng,
@@ -7931,57 +7982,40 @@ app.get('/api/recommendations/nearby/top', authenticateToken, async (req, res) =
     const baseList = recommendationsWithDistance.filter(rec => rec !== null);
     const locationFiltered = filterRecommendationsByLocation({
       items: baseList,
-      userLat,
-      userLng,
+      userLat: null,
+      userLng: null,
       cityId: effectiveCityId,
       countryId: effectiveCountryId,
-      maxDistanceKm: maxRadius
+      maxDistanceKm: 100
     });
 
     const preferDistance = minReviewsNumber === 0 && minRatingNumber === 0;
     const allSorted = locationFiltered
       .sort((a, b) => {
-        if (preferDistance) {
+        if (preferDistance && a.distance != null && b.distance != null) {
           if (a.distance !== b.distance) return a.distance - b.distance;
-          if (b.averageRating !== a.averageRating) return b.averageRating - a.averageRating;
-          return b.totalReviews - a.totalReviews;
         }
         if (b.averageRating !== a.averageRating) return b.averageRating - a.averageRating;
-        if (a.distance !== b.distance) return a.distance - b.distance;
+        if (a.distance != null && b.distance != null && a.distance !== b.distance) return a.distance - b.distance;
         return b.totalReviews - a.totalReviews;
       });
-
-    const radiusSteps = [maxRadius];
-    let usedFallback = false;
-    let validRecommendations = [];
 
     const ratedOnly = allSorted
       .filter(rec => rec.totalReviews >= minReviewsNumber && rec.averageRating >= minRatingNumber);
 
-    for (const stepRadius of radiusSteps) {
-      const baseList = preferDistance ? allSorted : ratedOnly;
-      const withinRadius = baseList.filter(rec => rec.distance <= stepRadius);
-      validRecommendations = withinRadius.slice(0, limitNumber);
-      if (validRecommendations.length >= limitNumber) break;
-    }
-
-    if (validRecommendations.length < limitNumber) {
-      usedFallback = true;
-    }
+    const validRecommendations = (preferDistance ? allSorted : ratedOnly).slice(0, limitNumber);
 
     const responsePayload = {
       success: true,
       data: validRecommendations,
       meta: {
-        latitude: userLat,
-        longitude: userLng,
-        radius: maxRadius,
+        latitude: Number.isFinite(userLat) ? userLat : null,
+        longitude: Number.isFinite(userLng) ? userLng : null,
         limit: limitNumber,
         minReviews: minReviewsNumber,
         minRating: minRatingNumber,
         cityId: effectiveCityId,
-        countryId: effectiveCountryId,
-        filledWithFallback: usedFallback
+        countryId: effectiveCountryId
       }
     };
 
@@ -14222,6 +14256,196 @@ app.post('/api/guide/today', authenticateToken, async (req, res) => {
       success: false,
       message: 'Error obteniendo guía diaria',
       error: error.message
+    });
+  }
+});
+
+/**
+ * Generar receta según ingredientes en la nevera y edad del hijo
+ * POST /api/recipes/from-ingredients
+ * Body: { ingredients: "leche, huevos, pan, queso...", childId: "xxx" }
+ */
+app.post('/api/recipes/from-ingredients', authenticateToken, async (req, res) => {
+  try {
+    const { ingredients, childId } = req.body || {};
+    const userId = req.user.uid;
+
+    const ingredientsText = typeof ingredients === 'string' ? ingredients.trim() : '';
+    if (!ingredientsText || ingredientsText.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Envía "ingredients" con los alimentos que tienes en la nevera (texto libre)'
+      });
+    }
+
+    let ageMonths = null;
+    let childName = null;
+
+    if (childId) {
+      if (!db) {
+        return res.status(503).json({ success: false, message: 'Base de datos no disponible' });
+      }
+      const childDoc = await db.collection('children').doc(childId).get();
+      if (!childDoc.exists) {
+        return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+      }
+      const childData = childDoc.data();
+      const isParent = childData.parentId === userId;
+      const isShared = Array.isArray(childData.sharedWith) && childData.sharedWith.includes(userId);
+      if (!isParent && !isShared) {
+        return res.status(403).json({ success: false, message: 'Sin permiso para este hijo' });
+      }
+      childName = childData.name || null;
+      const birthDate = childData.birthDate?.toDate?.() || childData.birthDate;
+      if (birthDate) {
+        ageMonths = calculateMonthsFromBirthDate(birthDate);
+      }
+    }
+
+    const ageContext = ageMonths !== null
+      ? `El niño tiene ${ageMonths} meses (${Math.floor(ageMonths / 12)} años y ${ageMonths % 12} meses). La receta debe ser apropiada para su edad: evita alimentos de riesgo (miel antes del año, frutos secos enteros en menores de 5 años, etc.) y adapta texturas según la edad.`
+      : 'No se especificó edad del niño. Sugiere recetas seguras para distintas edades e indica para qué rango de edad es adecuada cada una.';
+
+    if (!openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'El servicio de recetas no está disponible (OPENAI_API_KEY no configurada)'
+      });
+    }
+
+    const systemPrompt = `Eres un asistente de recetas para familias con niños pequeños. Tu tarea es sugerir recetas saludables, fáciles de preparar y apropiadas para la edad del niño.
+
+${ageContext}
+
+Responde en JSON con esta estructura EXACTA (igual que las recetas de nutrición):
+{
+  "recipe": {
+    "mealType": "breakfast" | "lunch" | "dinner",
+    "name": "Nombre atractivo de la receta",
+    "description": "Breve descripción (1-2 líneas)",
+    "ageAppropriate": true,
+    "prepTime": número en minutos,
+    "cookTime": número en minutos,
+    "servings": número de porciones,
+    "difficulty": "fácil" | "media" | "avanzada",
+    "ingredients": [
+      { "item": "ingrediente", "quantity": "cantidad con unidad" }
+    ],
+    "instructions": ["Paso 1 detallado", "Paso 2 detallado", "etc..."],
+    "nutritionalInfo": {
+      "calories": "aproximado por porción",
+      "protein": "gramos aproximados",
+      "carbs": "gramos aproximados",
+      "fat": "gramos aproximados"
+    },
+    "tips": ["Consejo útil 1", "Consejo útil 2"],
+    "allergens": ["posibles alérgenos presentes"]
+  }
+}
+
+Usa principalmente los ingredientes que el usuario indicó. Puedes sugerir 1-2 ingredientes adicionales comunes si mejoran la receta.`;
+
+    const userPrompt = `Ingredientes que tengo en la nevera:\n${ingredientsText}\n\nGenera una receta apropiada.`;
+
+    let content = '';
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        max_tokens: 1200,
+        temperature: 0.7
+      });
+      content = completion.choices[0]?.message?.content || '';
+    } catch (openaiErr) {
+      console.error('❌ [RECIPES] OpenAI error:', openaiErr.message);
+      return res.status(502).json({
+        success: false,
+        message: openaiErr.message?.includes('quota') || openaiErr.message?.includes('429')
+          ? 'Límite de uso alcanzado. Intenta más tarde.'
+          : 'Error al generar la receta. Intenta de nuevo.'
+      });
+    }
+
+    let recipe = null;
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        recipe = JSON.parse(jsonMatch[0]);
+      }
+    } catch (e) {
+      console.warn('⚠️ [RECIPES] No se pudo parsear JSON:', e.message);
+    }
+
+    if (!recipe || !recipe.recipe) {
+      recipe = {
+        recipe: {
+          mealType: 'lunch',
+          name: 'Receta sugerida',
+          description: 'No se pudo generar la receta. Intenta con otros ingredientes.',
+          ageAppropriate: true,
+          prepTime: 0,
+          cookTime: 0,
+          servings: 2,
+          difficulty: 'fácil',
+          ingredients: [],
+          instructions: [content || 'Intenta con otros ingredientes.'],
+          nutritionalInfo: { calories: '-', protein: '-', carbs: '-', fat: '-' },
+          tips: [],
+          allergens: []
+        }
+      };
+    }
+
+    const r = recipe?.recipe || {};
+    const recipeIngredients = Array.isArray(r.ingredients)
+      ? r.ingredients.map(ing => typeof ing === 'string' ? { item: ing, quantity: '' } : { item: String(ing?.item || ing?.name || ''), quantity: String(ing?.quantity || '') })
+      : [];
+    const tips = Array.isArray(r.tips) ? r.tips : (typeof r.tips === 'string' && r.tips ? [r.tips] : []);
+    const allergens = Array.isArray(r.allergens) ? r.allergens : [];
+    const instructions = Array.isArray(r.instructions) ? r.instructions : (typeof r.instructions === 'string' ? [r.instructions] : []);
+
+    const enrichedRecipe = {
+      id: `recipe_${Date.now()}_0`,
+      mealType: r.mealType || 'lunch',
+      name: r.name || r.title || 'Receta',
+      description: r.description || '',
+      ageAppropriate: r.ageAppropriate !== false,
+      prepTime: parseInt(r.prepTime, 10) || 0,
+      cookTime: parseInt(r.cookTime, 10) || 0,
+      servings: parseInt(r.servings, 10) || 2,
+      difficulty: r.difficulty || 'fácil',
+      ingredients: recipeIngredients,
+      instructions,
+      nutritionalInfo: (r.nutritionalInfo && typeof r.nutritionalInfo === 'object') ? {
+        calories: String(r.nutritionalInfo.calories || '-'),
+        protein: String(r.nutritionalInfo.protein || '-'),
+        carbs: String(r.nutritionalInfo.carbs || '-'),
+        fat: String(r.nutritionalInfo.fat || '-')
+      } : { calories: '-', protein: '-', carbs: '-', fat: '-' },
+      tips,
+      allergens,
+      childId: childId || null,
+      ageMonths,
+      generatedAt: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      data: [enrichedRecipe],
+      metadata: {
+        childName: childName || null,
+        ageMonths
+      }
+    });
+  } catch (err) {
+    console.error('❌ [RECIPES] Error:', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Error generando receta',
+      error: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
 });
@@ -25012,6 +25236,22 @@ const PRODUCT_CONDITIONS = [
   'usado'
 ];
 
+// Mapeo de variantes/aliases a condición canónica
+const CONDITION_ALIASES = {
+  nuevo: 'nuevo',
+  new: 'nuevo',
+  como_nuevo: 'como_nuevo',
+  'como nuevo': 'como_nuevo',
+  like_new: 'como_nuevo',
+  'like new': 'como_nuevo',
+  buen_estado: 'buen_estado',
+  'buen estado': 'buen_estado',
+  good: 'buen_estado',
+  good_condition: 'buen_estado',
+  usado: 'usado',
+  used: 'usado'
+};
+
 // Tipos de transacción
 const TRANSACTION_TYPES = [
   'venta',
@@ -31264,6 +31504,41 @@ async function sendPushNotification(tokens, notification, data = {}) {
   } catch (error) {
     console.error('❌ [PUSH] Error enviando notificación:', error);
     return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Notificar al especialista que tiene una consulta pendiente de aceptar
+ */
+async function notifySpecialistNewConsultation(specialistId, consultationId, childName) {
+  try {
+    if (!db) return;
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
+    if (!specialistDoc.exists) return;
+    const specialistData = specialistDoc.data();
+    const specialistUserId = specialistData.linkedUserId || specialistData.userId;
+    if (!specialistUserId) return;
+
+    const userDoc = await db.collection('users').doc(specialistUserId).get();
+    if (!userDoc.exists || !userDoc.data().fcmTokens?.length) return;
+
+    const tokens = userDoc.data().fcmTokens || [];
+    const notification = {
+      title: '🔔 Nueva consulta pendiente',
+      body: childName ? `Tienes una consulta de ${childName} que debes aceptar` : 'Tienes una nueva consulta pendiente de aceptar'
+    };
+    const data = {
+      type: 'consultation_pending',
+      consultationId,
+      screen: 'ConsultationDetail',
+      action: 'accept'
+    };
+
+    const result = await sendPushNotification(tokens, notification, data);
+    console.log(`✅ [PUSH] Notificación enviada al especialista ${specialistId}: ${result.successCount || 0}`);
+    return result;
+  } catch (err) {
+    console.error('❌ [PUSH] Error notificando especialista:', err.message);
   }
 }
 
@@ -41762,6 +42037,709 @@ app.get('/api/vendor/sales', authenticateToken, async (req, res) => {
   }
 });
 
+// ============================================================================
+// PRODUCTOS DEL VENDOR (Tienda - sección separada del marketplace P2P)
+// ============================================================================
+
+const ensureVendorProfile = async (userId) => {
+  const userDoc = await db.collection('users').doc(userId).get();
+  if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+    throw new Error('NO_VENDOR_PROFILE');
+  }
+  if (userDoc.data().professionalProfile.accountType !== 'service') {
+    throw new Error('NOT_SERVICE_PROFILE');
+  }
+  return userDoc.data();
+};
+
+/**
+ * Listar categorías propias del vendedor
+ * GET /api/vendor/categories
+ */
+app.get('/api/vendor/categories', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    await ensureVendorProfile(userId);
+    
+    const snapshot = await db.collection('vendor_categories')
+      .where('vendorId', '==', userId)
+      .get();
+    
+    const categories = snapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data(), productCount: doc.data().productCount || 0 }))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+    
+    res.json({ success: true, data: categories });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error listando categorías:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo categorías', error: error.message });
+  }
+});
+
+/**
+ * Crear categoría propia del vendedor
+ * POST /api/vendor/categories
+ */
+app.post('/api/vendor/categories', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { name, description } = req.body;
+    await ensureVendorProfile(userId);
+    
+    if (!name || name.trim().length < 2) {
+      return res.status(400).json({ success: false, message: 'Nombre mínimo 2 caracteres' });
+    }
+    
+    const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    if (slug.length < 2) {
+      return res.status(400).json({ success: false, message: 'Nombre inválido' });
+    }
+    
+    const existing = await db.collection('vendor_categories')
+      .where('vendorId', '==', userId)
+      .where('slug', '==', slug)
+      .limit(1)
+      .get();
+    if (!existing.empty) {
+      return res.status(400).json({ success: false, message: 'Ya tienes una categoría con ese nombre' });
+    }
+    
+    const snap = await db.collection('vendor_categories').where('vendorId', '==', userId).get();
+    const categoryData = {
+      vendorId: userId,
+      name: name.trim(),
+      slug,
+      description: description ? description.trim() : '',
+      order: snap.size,
+      productCount: 0,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const ref = await db.collection('vendor_categories').add(categoryData);
+    console.log(`✅ [VENDOR] Categoría creada: ${ref.id}`);
+    res.json({ success: true, message: 'Categoría creada', data: { id: ref.id, ...categoryData } });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error creando categoría:', error);
+    res.status(500).json({ success: false, message: 'Error creando categoría', error: error.message });
+  }
+});
+
+/**
+ * Listar descuentos del vendedor
+ * GET /api/vendor/discounts
+ */
+app.get('/api/vendor/discounts', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    await ensureVendorProfile(userId);
+
+    const snapshot = await db.collection('vendor_discounts')
+      .where('vendorId', '==', userId)
+      .get();
+
+    const discounts = snapshot.docs
+      .map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt,
+        validFrom: doc.data().validFrom?.toDate?.() || doc.data().validFrom,
+        validUntil: doc.data().validUntil?.toDate?.() || doc.data().validUntil,
+        updatedAt: doc.data().updatedAt?.toDate?.() || doc.data().updatedAt
+      }))
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    res.json({ success: true, data: discounts });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error listando descuentos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo descuentos', error: error.message });
+  }
+});
+
+/**
+ * Crear descuento del vendedor
+ * POST /api/vendor/discounts
+ */
+app.post('/api/vendor/discounts', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { name, type, value, code, minPurchaseAmount, validFrom, validUntil, applicableTo, categoryIds, productIds } = req.body || {};
+    await ensureVendorProfile(userId);
+
+    if (!name || typeof name !== 'string' || name.trim().length < 2) {
+      return res.status(400).json({ success: false, message: 'Nombre mínimo 2 caracteres' });
+    }
+    if (!type || !['percentage', 'fixed'].includes(type)) {
+      return res.status(400).json({ success: false, message: 'Tipo inválido (percentage o fixed)' });
+    }
+    const val = parseFloat(value);
+    if (isNaN(val) || val <= 0) {
+      return res.status(400).json({ success: false, message: 'Valor debe ser mayor a 0' });
+    }
+    if (type === 'percentage' && val > 100) {
+      return res.status(400).json({ success: false, message: 'Porcentaje máximo 100' });
+    }
+
+    const discountData = {
+      vendorId: userId,
+      name: name.trim(),
+      type,
+      value: val,
+      code: code ? String(code).trim().toUpperCase() : null,
+      minPurchaseAmount: minPurchaseAmount ? parseFloat(minPurchaseAmount) : null,
+      validFrom: validFrom ? new Date(validFrom) : null,
+      validUntil: validUntil ? new Date(validUntil) : null,
+      applicableTo: applicableTo || 'all',
+      categoryIds: Array.isArray(categoryIds) ? categoryIds : [],
+      productIds: Array.isArray(productIds) ? productIds : [],
+      isActive: true,
+      usageCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    if (discountData.code) {
+      const existing = await db.collection('vendor_discounts')
+        .where('vendorId', '==', userId)
+        .where('code', '==', discountData.code)
+        .limit(1)
+        .get();
+      if (!existing.empty) {
+        return res.status(400).json({ success: false, message: 'Ya tienes un descuento con ese código' });
+      }
+    }
+
+    const ref = await db.collection('vendor_discounts').add(discountData);
+    console.log(`✅ [VENDOR] Descuento creado: ${ref.id}`);
+    res.json({ success: true, message: 'Descuento creado', data: { id: ref.id, ...discountData } });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error creando descuento:', error);
+    res.status(500).json({ success: false, message: 'Error creando descuento', error: error.message });
+  }
+});
+
+/**
+ * Actualizar descuento del vendedor
+ * PUT /api/vendor/discounts/:id
+ */
+app.put('/api/vendor/discounts/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+    const { name, type, value, code, minPurchaseAmount, validFrom, validUntil, applicableTo, categoryIds, productIds, isActive } = req.body || {};
+    await ensureVendorProfile(userId);
+
+    const doc = await db.collection('vendor_discounts').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Descuento no encontrado' });
+    }
+    if (doc.data().vendorId !== userId) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos' });
+    }
+
+    const updateData = { updatedAt: new Date() };
+    if (name !== undefined) updateData.name = String(name).trim();
+    if (type !== undefined) updateData.type = type;
+    if (value !== undefined) updateData.value = parseFloat(value);
+    if (code !== undefined) updateData.code = code ? String(code).trim().toUpperCase() : null;
+    if (minPurchaseAmount !== undefined) updateData.minPurchaseAmount = minPurchaseAmount ? parseFloat(minPurchaseAmount) : null;
+    if (validFrom !== undefined) updateData.validFrom = validFrom ? new Date(validFrom) : null;
+    if (validUntil !== undefined) updateData.validUntil = validUntil ? new Date(validUntil) : null;
+    if (applicableTo !== undefined) updateData.applicableTo = applicableTo;
+    if (categoryIds !== undefined) updateData.categoryIds = Array.isArray(categoryIds) ? categoryIds : [];
+    if (productIds !== undefined) updateData.productIds = Array.isArray(productIds) ? productIds : [];
+    if (isActive !== undefined) updateData.isActive = !!isActive;
+
+    await db.collection('vendor_discounts').doc(id).update(updateData);
+    console.log(`✅ [VENDOR] Descuento actualizado: ${id}`);
+    res.json({ success: true, message: 'Descuento actualizado' });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error actualizando descuento:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando descuento', error: error.message });
+  }
+});
+
+/**
+ * Eliminar descuento del vendedor
+ * DELETE /api/vendor/discounts/:id
+ */
+app.delete('/api/vendor/discounts/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+    await ensureVendorProfile(userId);
+
+    const doc = await db.collection('vendor_discounts').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Descuento no encontrado' });
+    }
+    if (doc.data().vendorId !== userId) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos' });
+    }
+
+    await db.collection('vendor_discounts').doc(id).delete();
+    console.log(`✅ [VENDOR] Descuento eliminado: ${id}`);
+    res.json({ success: true, message: 'Descuento eliminado' });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error eliminando descuento:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando descuento', error: error.message });
+  }
+});
+
+/**
+ * Listar productos del vendedor
+ * GET /api/vendor/products
+ */
+app.get('/api/vendor/products', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { status, vendorCategoryId } = req.query;
+    await ensureVendorProfile(userId);
+    
+    const snapshot = await db.collection('marketplace_products')
+      .where('userId', '==', userId)
+      .where('productSource', '==', 'vendor')
+      .orderBy('createdAt', 'desc')
+      .get();
+    
+    let products = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.() || doc.data().createdAt
+    }));
+    
+    if (status && ['disponible', 'vendido', 'donado', 'intercambiado'].includes(status)) {
+      products = products.filter(p => p.status === status);
+    } else {
+      products = products.filter(p => p.status === 'disponible');
+    }
+    if (vendorCategoryId) products = products.filter(p => p.vendorCategoryId === vendorCategoryId);
+    
+    res.json({ success: true, data: products });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error listando productos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo productos', error: error.message });
+  }
+});
+
+/**
+ * Crear producto del vendedor
+ * POST /api/vendor/products
+ */
+app.post('/api/vendor/products', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const body = req.body || {};
+    const { title, description, vendorCategoryId, condition, photos, price, location, cityId, countryId, promoPrice, discountPercentage, promoValidUntil, promoLabel } = body;
+    
+    await ensureVendorProfile(userId);
+    
+    const t = typeof title === 'string' ? title.trim() : '';
+    if (!t || t.length < 5 || t.length > 100) {
+      return res.status(400).json({ success: false, message: 'Título entre 5 y 100 caracteres' });
+    }
+    const d = typeof description === 'string' ? description.trim() : '';
+    if (!d || d.length < 10 || d.length > 1000) {
+      return res.status(400).json({ success: false, message: 'Descripción entre 10 y 1000 caracteres' });
+    }
+    if (!vendorCategoryId) {
+      return res.status(400).json({ success: false, message: 'Debes elegir una categoría de tu tienda (vendorCategoryId)' });
+    }
+    let rawCond = '';
+    if (typeof condition === 'string') rawCond = condition.trim();
+    else if (typeof condition === 'number' && condition >= 0 && condition < PRODUCT_CONDITIONS.length) rawCond = PRODUCT_CONDITIONS[condition];
+    else if (condition != null && typeof condition === 'object' && (condition.value || condition.id)) rawCond = String(condition.value || condition.id).trim();
+    else if (condition != null) rawCond = String(condition).trim();
+    const key = rawCond.toLowerCase().replace(/\s+/g, '_').replace(/-/g, '_');
+    const cond = CONDITION_ALIASES[key] || CONDITION_ALIASES[rawCond.toLowerCase()] || CONDITION_ALIASES[rawCond.toLowerCase().replace(/\s+/g, ' ')] || (PRODUCT_CONDITIONS.includes(rawCond) ? rawCond : PRODUCT_CONDITIONS.includes(key) ? key : null);
+    if (!cond || !PRODUCT_CONDITIONS.includes(cond)) {
+      return res.status(400).json({ success: false, message: 'Condición inválida (nuevo, como_nuevo, buen_estado, usado)' });
+    }
+    const photoList = Array.isArray(photos) ? photos.filter(p => p && typeof p === 'string' && p.trim().length > 0) : [];
+    if (photoList.length === 0 || photoList.length > 5) {
+      return res.status(400).json({ success: false, message: 'Entre 1 y 5 fotos (URLs) requeridas' });
+    }
+    const priceNum = parseFloat(price);
+    if (isNaN(priceNum) || priceNum <= 0) {
+      return res.status(400).json({ success: false, message: 'Precio mayor a 0 requerido' });
+    }
+    
+    const vcDoc = await db.collection('vendor_categories').doc(String(vendorCategoryId)).get();
+    if (!vcDoc.exists) {
+      return res.status(400).json({ success: false, message: 'Categoría no encontrada. Crea una con POST /api/vendor/categories' });
+    }
+    if (vcDoc.data().vendorId !== userId) {
+      return res.status(403).json({ success: false, message: 'Categoría no pertenece a tu tienda' });
+    }
+    
+    let locationData = { countryId: null, countryName: 'Ecuador', cityId: null, cityName: 'Quito' };
+    try {
+      if (cityId || countryId) {
+        locationData = await resolveCountryCity(countryId, cityId);
+      } else {
+        locationData = await getDefaultUserLocation();
+      }
+    } catch (err) {
+      console.warn('[VENDOR] Error ubicación, usando por defecto:', err.message);
+      locationData = { countryId: null, countryName: 'Ecuador', cityId: null, cityName: 'Quito' };
+    }
+    
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data() || {};
+    
+    const now = new Date();
+    const productData = {
+      userId,
+      userName: userData.displayName || userData.name || 'Vendedor',
+      userPhoto: userData.photoUrl || userData.photoURL || null,
+      title: t,
+      description: d,
+      vendorCategoryId,
+      vendorCategoryName: vcDoc.data().name,
+      category: null,
+      categoryName: null,
+      productSource: 'vendor',
+      condition: cond,
+      photos: photoList,
+      type: 'venta',
+      price: priceNum,
+      tradeFor: null,
+      location: location && typeof location === 'object' ? location : { city: locationData.cityName || '', country: locationData.countryName || '' },
+      countryId: locationData.countryId,
+      countryName: locationData.countryName,
+      cityId: locationData.cityId,
+      cityName: locationData.cityName,
+      status: 'disponible',
+      views: 0,
+      favorites: 0,
+      messages: 0,
+      promoPrice: promoPrice ? parseFloat(promoPrice) : null,
+      discountPercentage: discountPercentage ? parseFloat(discountPercentage) : null,
+      promoValidUntil: promoValidUntil ? new Date(promoValidUntil) : null,
+      promoLabel: promoLabel ? String(promoLabel).slice(0, 50) : null,
+      isApproved: true,
+      isReported: false,
+      reportCount: 0,
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: now,
+      soldAt: null
+    };
+    
+    const ref = await db.collection('marketplace_products').add(productData);
+    await db.collection('vendor_categories').doc(vendorCategoryId).update({
+      productCount: admin.firestore.FieldValue.increment(1),
+      updatedAt: new Date()
+    });
+    
+    console.log(`✅ [VENDOR] Producto creado: ${ref.id}`);
+    res.json({ success: true, message: 'Producto agregado', data: { id: ref.id, ...productData } });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error creando producto:', error.message, error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Error creando producto',
+      error: error.message,
+      code: error.code || undefined
+    });
+  }
+});
+
+/**
+ * Actualizar producto del vendedor
+ * PUT /api/vendor/products/:id
+ */
+app.put('/api/vendor/products/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+    const { title, description, vendorCategoryId, condition, photos, price, promoPrice, discountPercentage, promoValidUntil, promoLabel, promoClear } = req.body;
+    
+    await ensureVendorProfile(userId);
+    
+    const doc = await db.collection('marketplace_products').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    }
+    const data = doc.data();
+    if (data.userId !== userId) {
+      return res.status(403).json({ success: false, message: 'No tienes permisos' });
+    }
+    if (data.productSource !== 'vendor') {
+      return res.status(400).json({ success: false, message: 'Este producto no es de tu tienda' });
+    }
+    
+    const updateData = { updatedAt: new Date() };
+    if (title) updateData.title = title.trim();
+    if (description) updateData.description = description.trim();
+    if (condition) updateData.condition = condition;
+    if (photos) updateData.photos = photos;
+    if (price !== undefined) updateData.price = parseFloat(price);
+    
+    if (vendorCategoryId !== undefined) {
+      const oldVcId = data.vendorCategoryId;
+      if (vendorCategoryId) {
+        const vcDoc = await db.collection('vendor_categories').doc(vendorCategoryId).get();
+        if (!vcDoc.exists || vcDoc.data().vendorId !== userId) {
+          return res.status(400).json({ success: false, message: 'Categoría inválida' });
+        }
+        updateData.vendorCategoryId = vendorCategoryId;
+        updateData.vendorCategoryName = vcDoc.data().name;
+        if (oldVcId !== vendorCategoryId) {
+          if (oldVcId) await db.collection('vendor_categories').doc(oldVcId).update({ productCount: admin.firestore.FieldValue.increment(-1), updatedAt: new Date() });
+          await db.collection('vendor_categories').doc(vendorCategoryId).update({ productCount: admin.firestore.FieldValue.increment(1), updatedAt: new Date() });
+        }
+      } else {
+        updateData.vendorCategoryId = null;
+        updateData.vendorCategoryName = null;
+        if (oldVcId) await db.collection('vendor_categories').doc(oldVcId).update({ productCount: admin.firestore.FieldValue.increment(-1), updatedAt: new Date() });
+      }
+    }
+    
+    if (promoClear) {
+      updateData.promoPrice = admin.firestore.FieldValue.delete();
+      updateData.discountPercentage = admin.firestore.FieldValue.delete();
+      updateData.promoValidUntil = admin.firestore.FieldValue.delete();
+      updateData.promoLabel = admin.firestore.FieldValue.delete();
+    } else if (promoPrice !== undefined || discountPercentage !== undefined || promoValidUntil !== undefined || promoLabel !== undefined) {
+      if (promoPrice != null) updateData.promoPrice = parseFloat(promoPrice);
+      if (discountPercentage != null) updateData.discountPercentage = parseFloat(discountPercentage);
+      if (promoValidUntil != null) updateData.promoValidUntil = new Date(promoValidUntil);
+      if (promoLabel != null) updateData.promoLabel = String(promoLabel).slice(0, 50);
+    }
+    
+    await db.collection('marketplace_products').doc(id).update(updateData);
+    res.json({ success: true, message: 'Producto actualizado' });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error actualizando producto:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando producto', error: error.message });
+  }
+});
+
+/**
+ * Eliminar producto del vendedor
+ * DELETE /api/vendor/products/:id
+ */
+app.delete('/api/vendor/products/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+    await ensureVendorProfile(userId);
+    
+    const doc = await db.collection('marketplace_products').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    }
+    const data = doc.data();
+    if (data.userId !== userId || data.productSource !== 'vendor') {
+      return res.status(403).json({ success: false, message: 'No tienes permisos' });
+    }
+    
+    await db.collection('marketplace_products').doc(id).update({ status: 'eliminado', updatedAt: new Date() });
+    if (data.vendorCategoryId) {
+      await db.collection('vendor_categories').doc(data.vendorCategoryId).update({
+        productCount: admin.firestore.FieldValue.increment(-1),
+        updatedAt: new Date()
+      });
+    }
+    console.log(`✅ [VENDOR] Producto eliminado: ${id}`);
+    res.json({ success: true, message: 'Producto eliminado' });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error eliminando producto:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando producto', error: error.message });
+  }
+});
+
+/**
+ * Cambiar estado producto (vendido)
+ * PATCH /api/vendor/products/:id/status
+ */
+app.patch('/api/vendor/products/:id/status', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+    const { status, buyerId, buyerName } = req.body;
+    
+    await ensureVendorProfile(userId);
+    
+    if (!status || !['vendido', 'donado', 'intercambiado'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Estado inválido' });
+    }
+    
+    const doc = await db.collection('marketplace_products').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    }
+    const data = doc.data();
+    if (data.userId !== userId || data.productSource !== 'vendor') {
+      return res.status(403).json({ success: false, message: 'No tienes permisos' });
+    }
+    
+    const now = new Date();
+    let saleAmount = data.price || 0;
+    if (data.promoValidUntil && new Date(data.promoValidUntil) >= now) {
+      if (data.promoPrice != null) saleAmount = data.promoPrice;
+      else if (data.discountPercentage != null) saleAmount = Math.max(0, saleAmount * (1 - data.discountPercentage / 100));
+    }
+    
+    await db.collection('marketplace_products').doc(id).update({
+      status,
+      soldAt: now,
+      updatedAt: now
+    });
+    
+    await db.collection('marketplace_transactions').add({
+      productId: id,
+      productTitle: data.title,
+      sellerId: userId,
+      sellerName: data.userName,
+      buyerId: buyerId || null,
+      buyerName: buyerName || 'No especificado',
+      type: 'venta',
+      amount: saleAmount,
+      status: 'completada',
+      createdAt: now,
+      completedAt: now
+    });
+    
+    if (data.vendorCategoryId) {
+      await db.collection('vendor_categories').doc(data.vendorCategoryId).update({
+        productCount: admin.firestore.FieldValue.increment(-1),
+        updatedAt: now
+      });
+    }
+    
+    console.log(`✅ [VENDOR] Producto ${status}: ${id}`);
+    res.json({ success: true, message: `Producto marcado como ${status}` });
+  } catch (error) {
+    if (error.message === 'NO_VENDOR_PROFILE' || error.message === 'NOT_SERVICE_PROFILE') {
+      return res.status(403).json({ success: false, message: 'Solo vendedores' });
+    }
+    console.error('❌ [VENDOR] Error cambiando estado:', error);
+    res.status(500).json({ success: false, message: 'Error cambiando estado', error: error.message });
+  }
+});
+
+/**
+ * Checkout: crear PaymentIntent para orden de productos vendor
+ * POST /api/vendor/orders/checkout/create-intent
+ * Body: { items: [{ productId, quantity }] }
+ * Retorna clientSecret para confirmar con Stripe SDK (Card, Apple Pay, Google Pay)
+ */
+app.post('/api/vendor/orders/checkout/create-intent', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'items requerido (array de { productId, quantity })' });
+    }
+
+    const stripeSecret = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecret) return res.status(503).json({ success: false, message: 'Stripe no configurado' });
+
+    const orderItems = [];
+    let totalCents = 0;
+
+    for (const it of items) {
+      const productId = it.productId;
+      const quantity = Math.max(1, parseInt(it.quantity, 10) || 1);
+      const productDoc = await db.collection('marketplace_products').doc(productId).get();
+      if (!productDoc.exists) {
+        return res.status(404).json({ success: false, message: `Producto ${productId} no encontrado` });
+      }
+      const p = productDoc.data();
+      if (p.productSource !== 'vendor' || p.status !== 'disponible') {
+        return res.status(400).json({ success: false, message: `Producto ${productId} no disponible para compra` });
+      }
+
+      let unitPrice = parseFloat(p.price) || 0;
+      const now = new Date();
+      if (p.promoValidUntil && new Date(p.promoValidUntil) >= now) {
+        if (p.promoPrice != null) unitPrice = parseFloat(p.promoPrice) || unitPrice;
+        else if (p.discountPercentage != null) unitPrice = Math.max(0, unitPrice * (1 - (p.discountPercentage || 0) / 100));
+      }
+      const lineTotal = Math.round(unitPrice * quantity * 100);
+      totalCents += lineTotal;
+      orderItems.push({
+        productId,
+        title: p.title,
+        quantity,
+        unitPrice,
+        vendorId: p.userId,
+        vendorName: p.userName
+      });
+    }
+
+    if (totalCents < 50) return res.status(400).json({ success: false, message: 'Monto mínimo $0.50' });
+
+    const orderRef = await db.collection('vendor_orders').add({
+      buyerId: userId,
+      items: orderItems,
+      totalCents,
+      total: totalCents / 100,
+      currency: 'usd',
+      status: 'pending',
+      payment: { status: 'pending', method: null, transactionId: null, paidAt: null },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+    const orderId = orderRef.id;
+
+    const stripe = require('stripe')(stripeSecret);
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: totalCents,
+      currency: 'usd',
+      metadata: { orderId, userId },
+      payment_method_types: ['card']
+    });
+
+    res.json({
+      success: true,
+      data: {
+        orderId,
+        clientSecret: paymentIntent.client_secret,
+        paymentIntentId: paymentIntent.id,
+        total: totalCents / 100,
+        currency: 'usd'
+      }
+    });
+  } catch (err) {
+    console.error('❌ [VENDOR] checkout create-intent:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 /**
  * Promociones activas del vendedor (productos con descuento)
  * GET /api/vendor/promotions
@@ -43153,24 +44131,44 @@ app.get('/api/specialist/consultations', authenticateToken, async (req, res) => 
       });
     }
     
-    const specialistId = userData.professionalProfile.specialistId;
-    
-    // Construir query
-    let query = db.collection('consultations')
-      .where('specialistId', '==', specialistId);
-    
-    if (status) {
-      query = query.where('status', '==', status);
+    let specialistId = userData.professionalProfile.specialistId;
+    if (!specialistId) {
+      const proSnapshot = await db.collection('professionals')
+        .where('linkedUserId', '==', userId)
+        .limit(1)
+        .get();
+      if (!proSnapshot.empty) {
+        specialistId = proSnapshot.docs[0].id;
+        await db.collection('users').doc(userId).update({
+          'professionalProfile.specialistId': specialistId,
+          updatedAt: new Date()
+        });
+        console.log(`📌 [SPECIALIST] specialistId asignado desde linkedUserId: ${specialistId}`);
+      }
+    }
+    if (!specialistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No tienes especialista vinculado. Contacta al administrador.'
+      });
     }
     
-    query = query.orderBy('createdAt', 'desc');
+    const snapshot = await db.collection('consultations')
+      .where('specialistId', '==', specialistId)
+      .get();
     
-    const snapshot = await query.get();
+    let docs = snapshot.docs;
+    if (status) docs = docs.filter(d => d.data().status === status);
+    const toMs = (doc) => {
+      const c = doc.data()?.createdAt;
+      return c?.toMillis?.() ?? c?.toDate?.()?.getTime?.() ?? (c instanceof Date ? c.getTime() : 0);
+    };
+    docs = docs.sort((a, b) => toMs(b) - toMs(a));
     
     // Filtrar y enriquecer datos
     const consultations = [];
     
-    for (const doc of snapshot.docs) {
+    for (const doc of docs) {
       const data = doc.data();
       
       // Filtros adicionales
@@ -43246,7 +44244,7 @@ app.get('/api/specialist/consultations', authenticateToken, async (req, res) => 
       completed: consultations.filter(c => c.status === 'completed').length
     };
     
-    console.log(`✅ [SPECIALIST] Consultas listadas: ${consultations.length} para ${specialistId}`);
+    console.log(`✅ [SPECIALIST] Consultas listadas: ${consultations.length} para specialistId=${specialistId} (userId=${userId})`);
     
     res.json({
       success: true,
@@ -43425,23 +44423,29 @@ app.get('/api/specialist/consultations/:consultationId', authenticateToken, asyn
       }
     }
     
-    // Obtener mensajes del chat
-    const messagesSnapshot = await db.collection('consultations')
-      .doc(consultationId)
-      .collection('messages')
-      .orderBy('sentAt', 'asc')
-      .get();
-    
-    const messages = [];
-    messagesSnapshot.forEach(msgDoc => {
-      const msgData = msgDoc.data();
-      messages.push({
-        id: msgDoc.id,
-        ...msgData,
-        sentAt: msgData.sentAt?.toDate?.() || msgData.sentAt
+    let messages = [];
+    try {
+      const messagesSnapshot = await db.collection('consultations')
+        .doc(consultationId)
+        .collection('messages')
+        .orderBy('createdAt', 'asc')
+        .get();
+      messagesSnapshot.forEach(msgDoc => {
+        const msgData = msgDoc.data();
+        messages.push({
+          id: msgDoc.id,
+          ...msgData,
+          createdAt: msgData.createdAt?.toDate?.() || msgData.createdAt
+        });
       });
-    });
-    
+    } catch (e) {
+      const altSnap = await db.collection('consultations').doc(consultationId).collection('messages').get();
+      messages = altSnap.docs.map(d => ({ id: d.id, ...d.data(), createdAt: d.data().createdAt?.toDate?.() || d.data().createdAt })).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    }
+
+    const specialistProDoc = await db.collection('professionals').doc(specialistId).get();
+    const canPrescribe = specialistProDoc.exists ? (specialistProDoc.data().permissions?.canPrescribe ?? specialistProDoc.data().canPrescribe ?? false) : false;
+
     res.json({
       success: true,
       data: {
@@ -43450,6 +44454,8 @@ app.get('/api/specialist/consultations/:consultationId', authenticateToken, asyn
         child: childInfo,
         parent: parentInfo,
         messages,
+        result: data.result || data.outcome,
+        canPrescribe,
         createdAt: data.createdAt?.toDate?.() || data.createdAt,
         acceptedAt: data.acceptedAt?.toDate?.() || data.acceptedAt,
         startedAt: data.startedAt?.toDate?.() || data.startedAt,
@@ -43711,80 +44717,97 @@ app.post('/api/specialist/consultations/:consultationId/start', authenticateToke
 /**
  * Completar consulta (Especialista)
  * POST /api/specialist/consultations/:consultationId/complete
+ * Body: { diagnosis, treatment, prescriptions?, notes?, followUpRequired?, followUpDate? }
+ * - Para chat: puede completar desde accepted o in_progress (si accepted, se auto-inicia)
+ * - prescriptions: solo si el especialista tiene canPrescribe. Formato: [{ medication, dosage, frequency, duration, instructions }]
  */
 app.post('/api/specialist/consultations/:consultationId/complete', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.uid;
     const { consultationId } = req.params;
-    const { diagnosis, treatment, prescriptions, notes, followUpRequired, followUpDate } = req.body;
+    const { diagnosis, treatment, prescriptions = [], notes, followUpRequired, followUpDate } = req.body;
     
-    // Verificar perfil profesional
     const userDoc = await db.collection('users').doc(userId).get();
-    
     if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes un perfil profesional activo'
-      });
+      return res.status(403).json({ success: false, message: 'No tienes un perfil profesional activo' });
     }
     
     const specialistId = userDoc.data().professionalProfile.specialistId;
+    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
+    if (!specialistDoc.exists) {
+      return res.status(400).json({ success: false, message: 'Especialista no encontrado' });
+    }
+    
+    const canPrescribe = specialistDoc.data().permissions?.canPrescribe ?? specialistDoc.data().canPrescribe ?? false;
+    const prescriptionsList = Array.isArray(prescriptions) ? prescriptions : [];
+    if (prescriptionsList.length > 0 && !canPrescribe) {
+      return res.status(403).json({
+        success: false,
+        message: 'Tu perfil no permite emitir recetas médicas'
+      });
+    }
     
     const consultationDoc = await db.collection('consultations').doc(consultationId).get();
-    
     if (!consultationDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Consulta no encontrada'
-      });
+      return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
     }
     
     const data = consultationDoc.data();
-    
     if (data.specialistId !== specialistId) {
-      return res.status(403).json({
+      return res.status(403).json({ success: false, message: 'No tienes acceso a esta consulta' });
+    }
+    
+    const validStatus = ['accepted', 'in_progress'].includes(data.status);
+    if (!validStatus) {
+      return res.status(400).json({
         success: false,
-        message: 'No tienes acceso a esta consulta'
+        message: `La consulta debe estar aceptada o en progreso. Estado actual: ${data.status}`
       });
     }
     
-    if (data.status !== 'in_progress') {
-      return res.status(400).json({
-        success: false,
-        message: `La consulta debe estar en progreso. Estado actual: ${data.status}`
-      });
+    if (!diagnosis || !String(diagnosis).trim()) {
+      return res.status(400).json({ success: false, message: 'El diagnóstico es requerido' });
     }
-    
-    if (!diagnosis || !treatment) {
-      return res.status(400).json({
-        success: false,
-        message: 'Diagnóstico y tratamiento son requeridos'
-      });
+    if (!treatment || !String(treatment).trim()) {
+      return res.status(400).json({ success: false, message: 'El tratamiento es requerido' });
     }
     
     const completedAt = new Date();
-    const startedAt = data.startedAt?.toDate?.() || data.startedAt;
-    const duration = startedAt ? Math.floor((completedAt - new Date(startedAt)) / 60000) : null; // minutos
+    let startedAt = data.startedAt?.toDate?.() || data.startedAt;
+    if (!startedAt && data.status === 'accepted') {
+      startedAt = completedAt;
+    }
+    const duration = startedAt ? Math.floor((completedAt - new Date(startedAt)) / 60000) : null;
+    
+    const result = {
+      diagnosis: String(diagnosis).trim(),
+      treatment: String(treatment).trim(),
+      prescriptions: prescriptionsList.map(p => ({
+        medication: p.medication || p.name || '',
+        dosage: p.dosage || '',
+        frequency: p.frequency || '',
+        duration: p.duration || '',
+        instructions: p.instructions || ''
+      })),
+      notes: notes ? String(notes).trim() : null,
+      followUpRequired: !!followUpRequired,
+      followUpDate: followUpDate ? new Date(followUpDate) : null,
+      completedBy: userId,
+      completedAt
+    };
     
     const updateData = {
       status: 'completed',
       completedAt,
       duration,
-      result: {
-        diagnosis: diagnosis.trim(),
-        treatment: treatment.trim(),
-        prescriptions: prescriptions || [],
-        notes: notes?.trim() || null,
-        followUpRequired: followUpRequired || false,
-        followUpDate: followUpDate ? new Date(followUpDate) : null
-      },
+      result,
+      outcome: result,
+      startedAt: startedAt || admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: new Date()
     };
     
     await db.collection('consultations').doc(consultationId).update(updateData);
     
-    // Actualizar stats del especialista
-    const specialistDoc = await db.collection('professionals').doc(specialistId).get();
     if (specialistDoc.exists) {
       const specialistData = specialistDoc.data();
       const totalConsultations = (specialistData.stats?.totalConsultations || 0) + 1;
@@ -43796,16 +44819,24 @@ app.post('/api/specialist/consultations/:consultationId/complete', authenticateT
     }
     
     console.log(`✅ [SPECIALIST] Consulta completada: ${consultationId} por ${specialistId} (${duration} min)`);
-    
-    // TODO: Enviar notificación push al padre
-    
+
+    if (data.parentId) {
+      const parentDoc = await db.collection('users').doc(data.parentId).get();
+      if (parentDoc.exists && parentDoc.data().fcmTokens?.length) {
+        const notification = { title: '✅ Consulta completada', body: `Tu consulta con ${data.specialistName || 'el especialista'} ha finalizado. Revisa el diagnóstico y tratamiento.` };
+        const notifData = { type: 'consultation_completed', consultationId, screen: 'ConsultationDetail' };
+        sendPushNotification(parentDoc.data().fcmTokens, notification, notifData).catch(() => {});
+      }
+    }
+
     res.json({
       success: true,
       message: 'Consulta completada exitosamente',
       data: {
         status: 'completed',
         completedAt,
-        duration
+        duration,
+        result
       }
     });
     
@@ -43816,6 +44847,111 @@ app.post('/api/specialist/consultations/:consultationId/complete', authenticateT
       message: 'Error completando consulta',
       error: error.message
     });
+  }
+});
+
+/**
+ * Enviar mensaje en consulta (Especialista)
+ * POST /api/specialist/consultations/:consultationId/messages
+ */
+app.post('/api/specialist/consultations/:consultationId/messages', authenticateToken, async (req, res) => {
+  const { consultationId } = req.params;
+  const userId = req.user.uid;
+  const { message, attachments = [] } = req.body || {};
+
+  if (!message) {
+    return res.status(400).json({ success: false, message: 'El mensaje no puede estar vacío' });
+  }
+
+  try {
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    if (!consultationDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
+    }
+    const consultation = consultationDoc.data();
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({ success: false, message: 'No tienes perfil profesional activo' });
+    }
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    if (consultation.specialistId !== specialistId) {
+      return res.status(403).json({ success: false, message: 'No tienes acceso a esta consulta' });
+    }
+
+    const messageData = {
+      senderId: userId,
+      senderType: 'specialist',
+      message: String(message).trim(),
+      attachments: Array.isArray(attachments) ? attachments : [],
+      isRead: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const messageRef = await db.collection('consultations').doc(consultationId).collection('messages').add(messageData);
+    await db.collection('consultations').doc(consultationId).update({
+      'chat.messageCount': admin.firestore.FieldValue.increment(1),
+      updatedAt: new Date()
+    });
+
+    console.log(`✅ [SPECIALIST] Mensaje enviado en consulta ${consultationId}`);
+    res.json({ success: true, message: 'Mensaje enviado exitosamente', data: { id: messageRef.id, ...messageData } });
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error enviando mensaje:', error);
+    res.status(500).json({ success: false, message: 'Error enviando mensaje', error: error.message });
+  }
+});
+
+/**
+ * Obtener mensajes de consulta (Especialista)
+ * GET /api/specialist/consultations/:consultationId/messages
+ */
+app.get('/api/specialist/consultations/:consultationId/messages', authenticateToken, async (req, res) => {
+  const consultationId = req.params.consultationId;
+  const userId = req.user.uid;
+  const { limit = 50, before } = req.query;
+
+  try {
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    if (!consultationDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
+    }
+    const consultation = consultationDoc.data();
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists || !userDoc.data().professionalProfile?.isActive) {
+      return res.status(403).json({ success: false, message: 'No tienes perfil profesional activo' });
+    }
+    const specialistId = userDoc.data().professionalProfile.specialistId;
+    if (consultation.specialistId !== specialistId) {
+      return res.status(403).json({ success: false, message: 'No tienes acceso a esta consulta' });
+    }
+
+    let query = db.collection('consultations').doc(consultationId).collection('messages')
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limit) || 50);
+
+    if (before) {
+      const beforeDoc = await db.collection('consultations').doc(consultationId).collection('messages').doc(before).get();
+      if (beforeDoc.exists) query = query.startAfter(beforeDoc);
+    }
+
+    const snapshot = await query.get();
+    const messages = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      messages.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || data.createdAt,
+        updatedAt: data.updatedAt?.toDate?.() || data.updatedAt
+      });
+    });
+    messages.reverse();
+
+    res.json({ success: true, data: messages, total: messages.length });
+  } catch (error) {
+    console.error('❌ [SPECIALIST] Error obteniendo mensajes:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo mensajes', error: error.message });
   }
 });
 
@@ -44969,10 +46105,8 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
       }
     }
     
-    // Notificar al especialista (solo si está pagada o es gratis)
-    if (isFree) {
-      // TODO: Enviar notificación push al especialista
-      console.log(`📱 Notificando al especialista ${specialistId} sobre nueva consulta`);
+    if (consultationData.status === 'pending') {
+      notifySpecialistNewConsultation(specialistId, consultationRef.id, childData.name).catch(() => {});
     }
     
     res.json({
@@ -45000,16 +46134,17 @@ app.post('/api/children/:childId/consultations', authenticateToken, async (req, 
 });
 
 /**
- * Listar consultas del usuario (App)
+ * Listar consultas del usuario como consumidor/padre (App - perfil normal)
  * GET /api/consultations
+ * - Consultas donde el usuario es el padre (parentId == userId)
+ * - Para consultas como especialista: usar GET /api/specialist/consultations
  */
 app.get('/api/consultations', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.uid;
     const { status, childId, page = 1, limit = 20 } = req.query;
     
-    let query = db.collection('consultations')
-      .where('parentId', '==', userId);
+    let query = db.collection('consultations').where('parentId', '==', userId);
     
     if (status) {
       query = query.where('status', '==', status);
@@ -45041,7 +46176,7 @@ app.get('/api/consultations', authenticateToken, async (req, res) => {
     const endIndex = startIndex + limitNum;
     const paginatedConsultations = consultations.slice(startIndex, endIndex);
     
-    console.log(`✅ [CONSULTATIONS] Consultas listadas: ${consultations.length} total para usuario ${userId}`);
+    console.log(`✅ [CONSULTATIONS] Consultas listadas: ${consultations.length} (padre) para usuario ${userId}`);
     
     res.json({
       success: true,
@@ -45083,18 +46218,25 @@ app.get('/api/consultations/:consultationId', authenticateToken, async (req, res
     }
     
     const consultation = consultationDoc.data();
-    
-    // Verificar que el usuario es el dueño de la consulta
-    if (consultation.parentId !== userId) {
+
+    const isParent = consultation.parentId === userId;
+    let specialistDoc = null;
+    let isSpecialist = false;
+    if (consultation.specialistId) {
+      specialistDoc = await db.collection('professionals').doc(consultation.specialistId).get();
+      if (specialistDoc.exists) {
+        const sp = specialistDoc.data();
+        isSpecialist = (sp.linkedUserId === userId || sp.userId === userId);
+      }
+    }
+    if (!isParent && !isSpecialist) {
       return res.status(403).json({
         success: false,
         message: 'No tienes permiso para ver esta consulta'
       });
     }
-    
-    // Obtener información del especialista
-    const specialistDoc = await db.collection('professionals').doc(consultation.specialistId).get();
-    const specialist = specialistDoc.exists ? specialistDoc.data() : null;
+
+    const specialist = specialistDoc && specialistDoc.exists ? specialistDoc.data() : null;
     
     // Obtener detalles de los síntomas
     const symptomDetails = [];
@@ -45118,6 +46260,7 @@ app.get('/api/consultations/:consultationId', authenticateToken, async (req, res
       }
     }
     
+    const result = consultation.result || consultation.outcome;
     res.json({
       success: true,
       data: {
@@ -45125,8 +46268,17 @@ app.get('/api/consultations/:consultationId', authenticateToken, async (req, res
         ...consultation,
         request: {
           ...consultation.request,
-          symptomDetails  // Agregar detalles de los síntomas
+          symptomDetails
         },
+        result: result ? {
+          diagnosis: result.diagnosis,
+          treatment: result.treatment,
+          prescriptions: result.prescriptions || [],
+          notes: result.notes,
+          followUpRequired: result.followUpRequired,
+          followUpDate: result.followUpDate?.toDate?.() || result.followUpDate,
+          completedAt: result.completedAt?.toDate?.() || result.completedAt
+        } : null,
         specialist: specialist ? {
           id: consultation.specialistId,
           displayName: specialist.name,
@@ -45218,82 +46370,105 @@ app.delete('/api/consultations/:consultationId', authenticateToken, async (req, 
 });
 
 /**
+ * Crear PaymentIntent para consulta (Stripe)
+ * POST /api/consultations/:consultationId/payment/create-intent
+ * Retorna clientSecret para confirmar en el frontend con Stripe SDK
+ */
+app.post('/api/consultations/:consultationId/payment/create-intent', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    const consultationDoc = await db.collection('consultations').doc(consultationId).get();
+    if (!consultationDoc.exists) return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
+    const consultation = consultationDoc.data();
+    if (consultation.parentId !== userId) return res.status(403).json({ success: false, message: 'Sin permiso' });
+    if (consultation.payment?.status === 'completed') return res.status(400).json({ success: false, message: 'Ya pagada' });
+    const amount = Math.round((consultation.pricing?.finalPrice || 0) * 100);
+    if (amount < 50) return res.status(400).json({ success: false, message: 'Monto mínimo $0.50' });
+
+    const stripeSecret = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecret) return res.status(503).json({ success: false, message: 'Stripe no configurado' });
+
+    const stripe = require('stripe')(stripeSecret);
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency: 'usd',
+      metadata: { consultationId, userId },
+      payment_method_types: ['card']
+    });
+
+    res.json({
+      success: true,
+      data: {
+        clientSecret: paymentIntent.client_secret,
+        paymentIntentId: paymentIntent.id
+      }
+    });
+  } catch (err) {
+    console.error('❌ [STRIPE] create-intent:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/**
  * Procesar pago de consulta (App)
  * POST /api/consultations/:consultationId/payment
+ * Body (Stripe): { paymentMethodId } - confirma PaymentIntent con método de pago
+ * Body (legacy): { paymentMethod, paymentToken } - simula pago (sin Stripe)
  */
 app.post('/api/consultations/:consultationId/payment', authenticateToken, async (req, res) => {
   try {
     const { consultationId } = req.params;
     const userId = req.user.uid;
-    const { paymentMethod, paymentToken } = req.body;
-    
-    if (!paymentMethod || !paymentToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'Método de pago y token son requeridos'
-      });
-    }
-    
+    const { paymentMethodId, paymentIntentId } = req.body;
+
     const consultationDoc = await db.collection('consultations').doc(consultationId).get();
-    
-    if (!consultationDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Consulta no encontrada'
-      });
-    }
-    
+    if (!consultationDoc.exists) return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
     const consultation = consultationDoc.data();
-    
-    if (consultation.parentId !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'No tienes permiso para pagar esta consulta'
+    if (consultation.parentId !== userId) return res.status(403).json({ success: false, message: 'Sin permiso' });
+    if (consultation.payment?.status === 'completed') return res.status(400).json({ success: false, message: 'Ya pagada' });
+
+    const stripeSecret = process.env.STRIPE_SECRET_KEY;
+    if (stripeSecret && paymentMethodId && paymentIntentId) {
+      const stripe = require('stripe')(stripeSecret);
+      const confirmed = await stripe.paymentIntents.confirm(paymentIntentId, { payment_method: paymentMethodId });
+      if (confirmed.status !== 'succeeded' && confirmed.status !== 'requires_capture') {
+        return res.status(400).json({ success: false, message: 'Pago no completado', status: confirmed.status });
+      }
+    } else if (!stripeSecret) {
+      const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await db.collection('consultations').doc(consultationId).update({
+        'payment.method': 'simulated',
+        'payment.transactionId': transactionId,
+        'payment.status': 'completed',
+        'payment.paidAt': new Date(),
+        status: 'pending',
+        updatedAt: new Date()
       });
+      notifySpecialistNewConsultation(consultation.specialistId, consultationId, consultation.childName).catch(() => {});
+      return res.json({ success: true, message: 'Pago procesado', data: { transactionId, amount: consultation.pricing?.finalPrice, currency: 'USD' } });
+    } else {
+      return res.status(400).json({ success: false, message: 'paymentMethodId y paymentIntentId requeridos para Stripe' });
     }
-    
-    if (consultation.payment.status === 'completed') {
-      return res.status(400).json({
-        success: false,
-        message: 'Esta consulta ya ha sido pagada'
-      });
-    }
-    
-    // TODO: Integrar con Stripe/PayPhone para procesar el pago
-    // Por ahora, simulamos un pago exitoso
-    
-    const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
+
     await db.collection('consultations').doc(consultationId).update({
-      'payment.method': paymentMethod,
-      'payment.transactionId': transactionId,
+      'payment.method': 'stripe',
+      'payment.transactionId': paymentIntentId,
       'payment.status': 'completed',
       'payment.paidAt': new Date(),
       status: 'pending',
       updatedAt: new Date()
     });
-    
-    console.log(`✅ [PAYMENT] Pago procesado para consulta ${consultationId}: $${consultation.pricing.finalPrice}`);
-    
-    // TODO: Notificar al especialista sobre la nueva consulta pagada
-    
+    notifySpecialistNewConsultation(consultation.specialistId, consultationId, consultation.childName).catch(() => {});
+
     res.json({
       success: true,
       message: 'Pago procesado exitosamente',
-      data: {
-        transactionId,
-        amount: consultation.pricing.finalPrice,
-        currency: 'USD'
-      }
+      data: { transactionId: paymentIntentId, amount: consultation.pricing?.finalPrice, currency: 'USD' }
     });
-    
-  } catch (error) {
-    console.error('❌ [PAYMENT] Error procesando pago:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error procesando pago',
-      error: error.message
-    });
+  } catch (err) {
+    console.error('❌ [PAYMENT] Error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -45328,9 +46503,16 @@ app.post('/api/consultations/:consultationId/messages', authenticateToken, async
     }
     
     const consultation = consultationDoc.data();
-    
-    // Verificar que el usuario es parte de la consulta
-    if (consultation.parentId !== userId && consultation.specialistId !== userId) {
+    const isParent = consultation.parentId === userId;
+    let isSpecialist = false;
+    if (!isParent && consultation.specialistId) {
+      const spDoc = await db.collection('professionals').doc(consultation.specialistId).get();
+      if (spDoc.exists) {
+        const sp = spDoc.data();
+        isSpecialist = (sp.linkedUserId === userId || sp.userId === userId);
+      }
+    }
+    if (!isParent && !isSpecialist) {
       return res.status(403).json({
         success: false,
         message: 'No tienes permiso para enviar mensajes en esta consulta'
@@ -45339,7 +46521,7 @@ app.post('/api/consultations/:consultationId/messages', authenticateToken, async
     
     const messageData = {
       senderId: userId,
-      senderType: consultation.parentId === userId ? 'parent' : 'specialist',
+      senderType: isParent ? 'parent' : 'specialist',
       message: message.trim(),
       attachments: attachments || [],
       isRead: false,
@@ -45401,14 +46583,22 @@ app.get('/api/consultations/:consultationId/messages', authenticateToken, async 
     }
     
     const consultation = consultationDoc.data();
-    
-    if (consultation.parentId !== userId && consultation.specialistId !== userId) {
+    const isParent = consultation.parentId === userId;
+    let isSpecialist = false;
+    if (!isParent && consultation.specialistId) {
+      const spDoc = await db.collection('professionals').doc(consultation.specialistId).get();
+      if (spDoc.exists) {
+        const sp = spDoc.data();
+        isSpecialist = (sp.linkedUserId === userId || sp.userId === userId);
+      }
+    }
+    if (!isParent && !isSpecialist) {
       return res.status(403).json({
         success: false,
         message: 'No tienes permiso para ver estos mensajes'
       });
     }
-    
+
     let query = db.collection('consultations')
       .doc(consultationId)
       .collection('messages')
@@ -45478,14 +46668,22 @@ app.patch('/api/consultations/:consultationId/messages/:messageId/read', authent
     }
     
     const consultation = consultationDoc.data();
-    
-    if (consultation.parentId !== userId && consultation.specialistId !== userId) {
+    const isParent = consultation.parentId === userId;
+    let isSpecialist = false;
+    if (!isParent && consultation.specialistId) {
+      const spDoc = await db.collection('professionals').doc(consultation.specialistId).get();
+      if (spDoc.exists) {
+        const sp = spDoc.data();
+        isSpecialist = (sp.linkedUserId === userId || sp.userId === userId);
+      }
+    }
+    if (!isParent && !isSpecialist) {
       return res.status(403).json({
         success: false,
         message: 'No tienes permiso'
       });
     }
-    
+
     await db.collection('consultations')
       .doc(consultationId)
       .collection('messages')
@@ -45507,6 +46705,122 @@ app.patch('/api/consultations/:consultationId/messages/:messageId/read', authent
       message: 'Error marcando mensaje como leído',
       error: error.message
     });
+  }
+});
+
+// ============================================================================
+// VIDEO CONSULTAS (Agora RTC)
+// ============================================================================
+
+const ensureConsultationAccess = async (consultationId, userId) => {
+  const doc = await db.collection('consultations').doc(consultationId).get();
+  if (!doc.exists) throw new Error('NOT_FOUND');
+  const data = doc.data();
+  const isParent = data.parentId === userId;
+  let isSpecialist = false;
+  if (!isParent && data.specialistId) {
+    const sp = await db.collection('professionals').doc(data.specialistId).get();
+    if (sp.exists) {
+      const sd = sp.data();
+      isSpecialist = (sd.linkedUserId === userId || sd.userId === userId);
+    }
+  }
+  if (!isParent && !isSpecialist) throw new Error('FORBIDDEN');
+  if (data.type !== 'video') throw new Error('NOT_VIDEO');
+  return { doc, data };
+};
+
+/**
+ * Obtener token/channel para unirse a videollamada
+ * POST /api/consultations/:consultationId/video/join
+ * Body: { role?: "host" | "audience" } - host por defecto
+ */
+app.post('/api/consultations/:consultationId/video/join', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    const { role = 'host' } = req.body || {};
+    const { doc, data } = await ensureConsultationAccess(consultationId, userId);
+    if (!['accepted', 'in_progress'].includes(data.status)) {
+      return res.status(400).json({ success: false, message: `La consulta debe estar aceptada o en progreso. Estado: ${data.status}` });
+    }
+    const channelName = `consultation_${consultationId}`;
+    const hash = String(userId).split('').reduce((a, c) => ((a << 5) - a) + c.charCodeAt(0), 0);
+    const numericUid = Math.abs(hash) % 2147483647 || 1;
+    let token = null;
+    const appId = process.env.AGORA_APP_ID;
+    const appCert = process.env.AGORA_APP_CERTIFICATE;
+
+    if (appId && appCert) {
+      try {
+        const agora = require('agora-token');
+        const tokenExpire = 3600;
+        token = agora.RtcTokenBuilder.buildTokenWithUid(appId, appCert, channelName, numericUid, agora.RtcRole.PUBLISHER, tokenExpire, tokenExpire);
+      } catch (e) {
+        console.warn('⚠️ [VIDEO] Agora token error:', e.message);
+      }
+    }
+
+    if (!data.video?.roomId) {
+      await db.collection('consultations').doc(consultationId).update({
+        'video.roomId': channelName,
+        'video.startedAt': admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: new Date()
+      });
+    }
+
+    const videoData = {
+      channelName,
+      uid: numericUid,
+      token,
+      appId: appId || null
+    };
+
+    res.json({
+      success: true,
+      data: {
+        ...videoData,
+        enlace: videoData
+      }
+    });
+  } catch (err) {
+    if (err.message === 'NOT_FOUND') return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
+    if (err.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Sin permiso' });
+    if (err.message === 'NOT_VIDEO') return res.status(400).json({ success: false, message: 'Esta consulta no es de tipo video' });
+    console.error('❌ [VIDEO] Error join:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/**
+ * Finalizar videollamada y registrar duración
+ * POST /api/consultations/:consultationId/video/end
+ * Body: { durationSeconds?: number }
+ */
+app.post('/api/consultations/:consultationId/video/end', authenticateToken, async (req, res) => {
+  try {
+    const { consultationId } = req.params;
+    const userId = req.user.uid;
+    const { durationSeconds } = req.body || {};
+    const { data } = await ensureConsultationAccess(consultationId, userId);
+
+    const videoData = data.video || {};
+    const startedAt = videoData.startedAt?.toDate?.() || videoData.startedAt;
+    const duration = durationSeconds || (startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0);
+
+    await db.collection('consultations').doc(consultationId).update({
+      'video.duration': duration,
+      'video.endedAt': admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: new Date()
+    });
+
+    res.json({ success: true, data: { duration } });
+  } catch (err) {
+    if (err.message === 'NOT_FOUND') return res.status(404).json({ success: false, message: 'Consulta no encontrada' });
+    if (err.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Sin permiso' });
+    if (err.message === 'NOT_VIDEO') return res.status(400).json({ success: false, message: 'Esta consulta no es de tipo video' });
+    console.error('❌ [VIDEO] Error end:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
