@@ -3685,16 +3685,34 @@ app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res)
 
     let maxIterations = 5;
     let lastContent = '';
+    const modelsToTry = (process.env.OPENAI_MODEL ? [process.env.OPENAI_MODEL] : []).concat(
+      ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo', 'gpt-4.1-mini']
+    ).filter((m, i, arr) => arr.indexOf(m) === i);
 
     while (maxIterations-- > 0) {
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-        messages,
-        tools: openaiTools,
-        tool_choice: 'auto',
-        max_tokens: 2500,
-        temperature: 0.3
-      });
+      let completion = null;
+      let lastErr = null;
+      for (const model of modelsToTry) {
+        try {
+          completion = await openai.chat.completions.create({
+            model,
+            messages,
+            tools: openaiTools,
+            tool_choice: 'auto',
+            max_tokens: 2500,
+            temperature: 0.3
+          });
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (e.status === 403 || (e.message && e.message.includes('does not have access'))) {
+            console.warn(`[AI-ADMIN] Modelo ${model} no disponible, intentando siguiente...`);
+            continue;
+          }
+          throw e;
+        }
+      }
+      if (!completion) throw lastErr || new Error('Ningún modelo disponible. Configura OPENAI_MODEL en Vercel.');
 
       const msg = completion.choices?.[0]?.message;
       if (!msg) break;
