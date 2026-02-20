@@ -3498,6 +3498,192 @@ app.get('/api/admin/analytics/faq', authenticateToken, isAdmin, async (req, res)
   }
 });
 
+// ========== ASISTENTE IA ADMIN (SOLO LECTURA) ==========
+// Permite a administradores hacer consultas sobre la plataforma y descargar reportes.
+// NO permite modificar nada - únicamente preguntar y exportar datos.
+
+const getPlatformContextForAI = async () => {
+  if (!db) return {};
+  try {
+    const [usersSnap, childrenSnap, communitiesSnap, postsSnap, listsSnap, recSnap, categoriesSnap] = await Promise.all([
+      db.collection('users').get(),
+      db.collection('children').get(),
+      db.collection('communities').get(),
+      db.collection('posts').get(),
+      db.collection('lists').get(),
+      db.collection('recommendations').where('isActive', '==', true).get(),
+      db.collection('categories').get()
+    ]);
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const users = usersSnap.docs;
+    const activeUsers = users.filter(d => {
+      const d2 = d.data();
+      return d2.lastLoginAt && d2.lastLoginAt.toDate && d2.lastLoginAt.toDate() > thirtyDaysAgo;
+    }).length;
+    const newUsersLast7 = users.filter(d => {
+      const d2 = d.data();
+      return d2.createdAt && d2.createdAt.toDate && d2.createdAt.toDate() > sevenDaysAgo;
+    }).length;
+
+    const posts = postsSnap.docs;
+    const recentPosts = posts.filter(d => {
+      const d2 = d.data();
+      return d2.createdAt && d2.createdAt.toDate && d2.createdAt.toDate() > sevenDaysAgo;
+    }).length;
+
+    return {
+      resumen: {
+        usuarios: { total: usersSnap.size, activos30d: activeUsers, nuevos7d: newUsersLast7 },
+        hijos: { total: childrenSnap.size },
+        comunidades: { total: communitiesSnap.size },
+        posts: { total: postsSnap.size, ultimos7d: recentPosts },
+        listas: { total: listsSnap.size },
+        recomendados: { total: recSnap.size },
+        categorias: { total: categoriesSnap.size }
+      },
+      colecciones: ['users', 'children', 'communities', 'posts', 'lists', 'recommendations', 'categories', 'recommendationReviews', 'banners', 'milestoneCategories', 'milestones', 'faq_history', 'countries', 'cities']
+    };
+  } catch (err) {
+    console.error('❌ [AI-ADMIN] Error obteniendo contexto:', err.message);
+    return {};
+  }
+};
+
+const ADMIN_AI_SYSTEM_PROMPT = `Eres un asistente de consultas para administradores de la plataforma Munpa (app de maternidad y crianza).
+REGLAS ESTRICTAS:
+- Solo puedes CONSULTAR y RESPONDER preguntas. NUNCA sugerir, ejecutar o permitir modificaciones a la base de datos.
+- Si te piden modificar, eliminar o crear datos, responde que no tienes permisos de escritura.
+- Responde en español de forma clara y concisa.
+- Usa los datos del contexto proporcionado para responder. Si no tienes la información, dilo.
+- Para descargar datos, indica que usen el endpoint de exportación: GET /api/admin/ai-assistant/export?report=X&format=json`;
+
+// POST - Hacer consultas al asistente IA (solo lectura)
+app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'OpenAI no está configurado. Configura OPENAI_API_KEY en las variables de entorno.'
+      });
+    }
+
+    const { question } = req.body || {};
+    if (!question || !String(question).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El campo "question" es requerido'
+      });
+    }
+
+    const context = await getPlatformContextForAI();
+    const contextStr = JSON.stringify(context, null, 2);
+
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: ADMIN_AI_SYSTEM_PROMPT },
+        { role: 'user', content: `Contexto actual de la plataforma (solo lectura):\n${contextStr}\n\nPregunta del administrador: ${String(question).trim()}` }
+      ],
+      max_tokens: 1500,
+      temperature: 0.3
+    });
+
+    const answer = completion.choices?.[0]?.message?.content || 'No se pudo generar respuesta.';
+
+    res.json({
+      success: true,
+      data: {
+        question: String(question).trim(),
+        answer,
+        contextDate: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ [AI-ADMIN] Error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error procesando la consulta',
+      error: error.message
+    });
+  }
+});
+
+// GET - Descargar reportes de la BD (solo lectura, exportación)
+app.get('/api/admin/ai-assistant/export', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { report, format = 'json', limit = 500 } = req.query;
+    const limitNum = Math.min(Math.max(parseInt(limit) || 500, 1), 2000);
+
+    const reports = {
+      users: { collection: 'users', fields: ['email', 'displayName', 'createdAt', 'lastLoginAt', 'isActive', 'role'] },
+      children: { collection: 'children', fields: ['name', 'birthDate', 'parentId', 'createdAt'] },
+      communities: { collection: 'communities', fields: ['name', 'description', 'memberCount', 'createdAt'] },
+      posts: { collection: 'posts', fields: ['title', 'content', 'authorId', 'communityId', 'createdAt'] },
+      lists: { collection: 'lists', fields: ['name', 'description', 'createdAt'] },
+      recommendations: { collection: 'recommendations', fields: ['name', 'address', 'cityId', 'countryId', 'totalReviews', 'averageRating', 'isActive'] },
+      categories: { collection: 'categories', fields: ['name', 'icon', 'order', 'isActive'] }
+    };
+
+    if (!report || !reports[report]) {
+      return res.status(400).json({
+        success: false,
+        message: 'Parámetro "report" requerido. Valores: ' + Object.keys(reports).join(', ')
+      });
+    }
+
+    const config = reports[report];
+    let query = db.collection(config.collection).limit(limitNum);
+    const snapshot = await query.get();
+
+    const rows = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const row = { id: doc.id };
+      config.fields.forEach(f => {
+        let v = data[f];
+        if (v && typeof v.toDate === 'function') v = v.toDate().toISOString();
+        row[f] = v;
+      });
+      return row;
+    });
+
+    if (format === 'csv') {
+      if (rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'No hay datos para exportar' });
+      }
+      const headers = ['id', ...config.fields];
+      const csvLines = [headers.join(',')];
+      rows.forEach(r => {
+        csvLines.push(headers.map(h => {
+          const v = r[h];
+          const s = String(v == null ? '' : v);
+          return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+        }).join(','));
+      });
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${report}-${new Date().toISOString().slice(0, 10)}.csv"`);
+      return res.send('\ufeff' + csvLines.join('\n'));
+    }
+
+    res.json({
+      success: true,
+      data: rows,
+      meta: { report, total: rows.length, limit: limitNum }
+    });
+  } catch (error) {
+    console.error('❌ [AI-ADMIN] Error exportando:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error exportando datos',
+      error: error.message
+    });
+  }
+});
+
 // ========== GESTIÓN DE USUARIOS ==========
 
 // Obtener todos los usuarios (con paginación)
