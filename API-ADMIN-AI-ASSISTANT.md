@@ -1,6 +1,6 @@
 # API Asistente IA para Administradores
 
-API de **solo lectura** que permite a las administradoras hacer consultas sobre la plataforma Munpa y descargar reportes de la base de datos usando OpenAI. **No permite modificar nada.**
+API de **solo lectura** que permite a las administradoras hacer **cualquier tipo de pregunta** sobre la plataforma Munpa y **descargar los datos** cuando la respuesta involucre información exportable. Usa OpenAI. **No permite modificar nada.**
 
 ## Requisitos
 
@@ -33,18 +33,27 @@ Content-Type: application/json
 {
   "success": true,
   "data": {
-    "question": "¿Cuántos usuarios activos hay en los últimos 30 días?",
-    "answer": "Según los datos actuales, hay X usuarios activos en los últimos 30 días...",
-    "contextDate": "2025-02-19T..."
+    "question": "¿Cuántas usuarias embarazadas hay? Quiero descargar la lista.",
+    "answer": "Hay 45 usuarias embarazadas registradas. Puedes descargar la lista usando el enlace de exportación.",
+    "contextDate": "2025-02-19T...",
+    "suggestedExport": {
+      "url": "/api/admin/ai-assistant/export?report=pregnant_users&format=csv",
+      "params": "report=pregnant_users&format=csv"
+    }
   }
 }
 ```
 
-**Ejemplos de preguntas:**
-- ¿Cuántos usuarios se registraron esta semana?
-- ¿Cuántos posts hay en total?
-- Resumen de la plataforma
-- ¿Cuántas comunidades activas hay?
+Cuando la respuesta involucra datos exportables, se incluye `suggestedExport` con la URL para descargar. El frontend puede mostrar un botón "Descargar" que haga GET a la URL completa (ej: `https://munpa.online/api/admin/ai-assistant/export?report=pregnant_users&format=csv`) con el token en el header.
+
+**Ejemplos de preguntas (cualquier tipo):**
+- ¿Cuántos usuarios hay por género?
+- ¿Cuántas usuarias embarazadas hay en los últimos 30 días? Quiero descargar la lista
+- ¿Cuántos hijos hay por nacer vs nacidos?
+- Resumen completo de la plataforma
+- ¿Cuántos recomendados tienen rating alto?
+- Dame la lista de comunidades para descargar
+- ¿Cuántos usuarios nuevos esta semana?
 
 **Limitaciones:** El asistente **nunca** ejecutará ni sugerirá modificaciones. Solo responde con la información disponible.
 
@@ -83,6 +92,12 @@ GET /api/admin/ai-assistant/export?report=posts&limit=100
 
 # Recomendados en CSV
 GET /api/admin/ai-assistant/export?report=recommendations&format=csv
+
+# Usuarias embarazadas (todas)
+GET /api/admin/ai-assistant/export?report=pregnant_users&format=json
+
+# Usuarias embarazadas de los últimos 30 días (descarga)
+GET /api/admin/ai-assistant/export?report=pregnant_users&format=csv&days=30
 ```
 
 **Reportes disponibles:**
@@ -90,12 +105,15 @@ GET /api/admin/ai-assistant/export?report=recommendations&format=csv
 | report | Colección | Campos exportados |
 |--------|-----------|-------------------|
 | users | users | email, displayName, createdAt, lastLoginAt, isActive, role |
+| **pregnant_users** | users | email, displayName, gender, isPregnant, gestationWeeks, childrenCount, createdAt, lastLoginAt, cityName, countryName. Usar `&days=30` para filtrar últimas 30 días |
 | children | children | name, birthDate, parentId, createdAt |
 | communities | communities | name, description, memberCount, createdAt |
 | posts | posts | title, content, authorId, communityId, createdAt |
 | lists | lists | name, description, createdAt |
-| recommendations | recommendations | name, address, cityId, countryId, totalReviews, averageRating, isActive |
+| recommendations | recommendations | name, address, cityId, countryId, totalReviews, averageRating, isActive, categoryId |
 | categories | categories | name, icon, order, isActive |
+| countries | countries | name, isActive |
+| cities | cities | name, countryId, isActive |
 
 **Respuesta JSON:**
 ```json

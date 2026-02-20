@@ -3530,22 +3530,76 @@ const getPlatformContextForAI = async () => {
       return d2.createdAt && d2.createdAt.toDate && d2.createdAt.toDate() > sevenDaysAgo;
     }).length;
 
+    const pregnantUsers = users.filter(d => d.data().isPregnant === true);
+    const pregnantLast30 = pregnantUsers.filter(d => {
+      const d2 = d.data();
+      const created = d2.createdAt && d2.createdAt.toDate ? d2.createdAt.toDate() : null;
+      const lastLogin = d2.lastLoginAt && d2.lastLoginAt.toDate ? d2.lastLoginAt.toDate() : null;
+      return (created && created > thirtyDaysAgo) || (lastLogin && lastLogin > thirtyDaysAgo);
+    }).length;
+
+    const usersByGender = { M: 0, F: 0, otro: 0 };
+    users.forEach(d => {
+      const g = (d.data().gender || '').toUpperCase();
+      if (g === 'M') usersByGender.M++;
+      else if (g === 'F') usersByGender.F++;
+      else usersByGender.otro++;
+    });
+
+    const newUsersLast30 = users.filter(d => {
+      const d2 = d.data();
+      return d2.createdAt && d2.createdAt.toDate && d2.createdAt.toDate() > thirtyDaysAgo;
+    }).length;
+
     const posts = postsSnap.docs;
     const recentPosts = posts.filter(d => {
       const d2 = d.data();
       return d2.createdAt && d2.createdAt.toDate && d2.createdAt.toDate() > sevenDaysAgo;
     }).length;
 
+    const children = childrenSnap.docs;
+    const childrenUnborn = children.filter(d => d.data().isUnborn === true).length;
+    const childrenBorn = children.length - childrenUnborn;
+
+    const recs = recSnap.docs;
+    const recsByRating = recs.filter(d => (d.data().averageRating || 0) >= 4).length;
+
     return {
+      esquemaBD: {
+        users: 'email, displayName, gender, isPregnant, gestationWeeks, childrenCount, createdAt, lastLoginAt, cityName, countryName',
+        children: 'name, birthDate, parentId, isUnborn, gestationWeeks, ageInMonths',
+        communities: 'name, description, memberCount',
+        posts: 'title, content, authorId, communityId',
+        recommendations: 'name, address, cityId, countryId, totalReviews, averageRating'
+      },
       resumen: {
-        usuarios: { total: usersSnap.size, activos30d: activeUsers, nuevos7d: newUsersLast7 },
-        hijos: { total: childrenSnap.size },
+        usuarios: {
+          total: usersSnap.size,
+          activos30d: activeUsers,
+          nuevos7d: newUsersLast7,
+          nuevos30d: newUsersLast30,
+          porGenero: usersByGender
+        },
+        usuariosEmbarazadas: { total: pregnantUsers.length, ultimos30d: pregnantLast30 },
+        hijos: { total: childrenSnap.size, porNacer: childrenUnborn, nacidos: childrenBorn },
         comunidades: { total: communitiesSnap.size },
         posts: { total: postsSnap.size, ultimos7d: recentPosts },
         listas: { total: listsSnap.size },
-        recomendados: { total: recSnap.size },
+        recomendados: { total: recSnap.size, conRatingAlto: recsByRating },
         categorias: { total: categoriesSnap.size }
       },
+      reportesDescargables: [
+        { report: 'users', desc: 'Usuarios' },
+        { report: 'pregnant_users', desc: 'Usuarias embarazadas (&days=30 para últimos 30 días)' },
+        { report: 'children', desc: 'Hijos' },
+        { report: 'communities', desc: 'Comunidades' },
+        { report: 'posts', desc: 'Posts' },
+        { report: 'lists', desc: 'Listas' },
+        { report: 'recommendations', desc: 'Recomendados' },
+        { report: 'categories', desc: 'Categorías' },
+        { report: 'countries', desc: 'Países' },
+        { report: 'cities', desc: 'Ciudades' }
+      ],
       colecciones: ['users', 'children', 'communities', 'posts', 'lists', 'recommendations', 'categories', 'recommendationReviews', 'banners', 'milestoneCategories', 'milestones', 'faq_history', 'countries', 'cities']
     };
   } catch (err) {
@@ -3554,24 +3608,25 @@ const getPlatformContextForAI = async () => {
   }
 };
 
-const ADMIN_AI_SYSTEM_PROMPT = `Eres un asistente de consultas para administradores de la plataforma Munpa (app de maternidad y crianza).
-REGLAS ESTRICTAS:
-- Solo puedes CONSULTAR y RESPONDER preguntas. NUNCA sugerir, ejecutar o permitir modificaciones a la base de datos.
-- Si te piden modificar, eliminar o crear datos, responde que no tienes permisos de escritura.
-- Responde en español de forma clara y concisa.
-- Usa los datos del contexto proporcionado para responder. Si no tienes la información, dilo.
-- Para descargar datos, indica que usen el endpoint de exportación: GET /api/admin/ai-assistant/export?report=X&format=json`;
+const ADMIN_AI_SYSTEM_PROMPT = `Eres un asistente de consultas para administradores de la plataforma Munpa. Tienes acceso a los datos de la base de datos porque te los pasamos en el contexto.
+
+CONOCIMIENTO DE LA BASE DE DATOS:
+- "esquemaBD" describe los campos de cada colección (users tiene isPregnant, gestationWeeks, etc.).
+- "resumen" contiene los números REALES ya consultados de Firestore.
+- Tienes toda la información. Responde SIEMPRE con los números exactos del resumen.
+
+PROHIBIDO:
+- NUNCA digas "use el endpoint", "consulte el endpoint", "necesitarías acceder a la BD" o "utiliza el reporte de exportación para obtener los datos".
+- NUNCA pidas al usuario que consulte algo para saber la respuesta. La respuesta está en el contexto.
+- Responde directamente: "Hay X usuarias embarazadas" (con el número de resumen.usuariosEmbarazadas.total).
+
+RESPUESTA:
+- Da la respuesta con los números. Ejemplo: "Hay 45 usuarias embarazadas en total, 12 en los últimos 30 días."
+- Si hay datos exportables, al final añade en una línea: EXPORT:report=pregnant_users&format=csv (para ofrecer descarga, no para obtener la respuesta).`;
 
 // POST - Hacer consultas al asistente IA (solo lectura)
 app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res) => {
   try {
-    if (!openai) {
-      return res.status(503).json({
-        success: false,
-        message: 'OpenAI no está configurado. Configura OPENAI_API_KEY en las variables de entorno.'
-      });
-    }
-
     const { question } = req.body || {};
     if (!question || !String(question).trim()) {
       return res.status(400).json({
@@ -3581,26 +3636,47 @@ app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res)
     }
 
     const context = await getPlatformContextForAI();
-    const contextStr = JSON.stringify(context, null, 2);
 
+    if (!openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'OpenAI no está configurado. Para preguntas generales, configura OPENAI_API_KEY.'
+      });
+    }
+
+    const r = context.resumen || {};
+    const numerosTexto = `NÚMEROS DE LA BD (usa estos): Usuarias embarazadas: ${r.usuariosEmbarazadas?.total ?? 0} total, ${r.usuariosEmbarazadas?.ultimos30d ?? 0} últimos 30 días. Usuarios: ${r.usuarios?.total ?? 0} total. Hijos: ${r.hijos?.total ?? 0}. Comunidades: ${r.comunidades?.total ?? 0}. Posts: ${r.posts?.total ?? 0}. Recomendados: ${r.recomendados?.total ?? 0}.`;
+    const contextStr = JSON.stringify(context, null, 2);
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: [
         { role: 'system', content: ADMIN_AI_SYSTEM_PROMPT },
-        { role: 'user', content: `Contexto actual de la plataforma (solo lectura):\n${contextStr}\n\nPregunta del administrador: ${String(question).trim()}` }
+        { role: 'user', content: `${numerosTexto}\n\nContexto completo:\n${contextStr}\n\nPregunta: ${String(question).trim()}\n\nResponde con los números de arriba. No pidas consultar ningún endpoint.` }
       ],
       max_tokens: 1500,
       temperature: 0.3
     });
 
-    const answer = completion.choices?.[0]?.message?.content || 'No se pudo generar respuesta.';
+    let answer = completion.choices?.[0]?.message?.content || 'No se pudo generar respuesta.';
+
+    let suggestedExport = null;
+    const exportMatch = answer.match(/EXPORT:([^\n]+)/);
+    if (exportMatch) {
+      const params = exportMatch[1].trim();
+      answer = answer.replace(/\n?EXPORT:[^\n]+/g, '').trim();
+      suggestedExport = {
+        url: `/api/admin/ai-assistant/export?${params}`,
+        params
+      };
+    }
 
     res.json({
       success: true,
       data: {
         question: String(question).trim(),
         answer,
-        contextDate: new Date().toISOString()
+        contextDate: new Date().toISOString(),
+        ...(suggestedExport && { suggestedExport })
       }
     });
   } catch (error) {
@@ -3616,17 +3692,21 @@ app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res)
 // GET - Descargar reportes de la BD (solo lectura, exportación)
 app.get('/api/admin/ai-assistant/export', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { report, format = 'json', limit = 500 } = req.query;
+    const { report, format = 'json', limit = 500, days } = req.query;
     const limitNum = Math.min(Math.max(parseInt(limit) || 500, 1), 2000);
+    const daysNum = days ? parseInt(days) : null;
 
     const reports = {
-      users: { collection: 'users', fields: ['email', 'displayName', 'createdAt', 'lastLoginAt', 'isActive', 'role'] },
-      children: { collection: 'children', fields: ['name', 'birthDate', 'parentId', 'createdAt'] },
+      users: { collection: 'users', fields: ['email', 'displayName', 'gender', 'childrenCount', 'isPregnant', 'createdAt', 'lastLoginAt', 'isActive', 'role', 'cityName', 'countryName'] },
+      pregnant_users: { collection: 'users', fields: ['email', 'displayName', 'gender', 'isPregnant', 'gestationWeeks', 'childrenCount', 'createdAt', 'lastLoginAt', 'cityName', 'countryName'], filter: { isPregnant: true }, filterByDays: true },
+      children: { collection: 'children', fields: ['name', 'birthDate', 'parentId', 'isUnborn', 'gestationWeeks', 'ageInMonths', 'createdAt'] },
       communities: { collection: 'communities', fields: ['name', 'description', 'memberCount', 'createdAt'] },
       posts: { collection: 'posts', fields: ['title', 'content', 'authorId', 'communityId', 'createdAt'] },
       lists: { collection: 'lists', fields: ['name', 'description', 'createdAt'] },
-      recommendations: { collection: 'recommendations', fields: ['name', 'address', 'cityId', 'countryId', 'totalReviews', 'averageRating', 'isActive'] },
-      categories: { collection: 'categories', fields: ['name', 'icon', 'order', 'isActive'] }
+      recommendations: { collection: 'recommendations', fields: ['name', 'address', 'cityId', 'countryId', 'totalReviews', 'averageRating', 'isActive', 'categoryId'] },
+      categories: { collection: 'categories', fields: ['name', 'icon', 'order', 'isActive'] },
+      countries: { collection: 'countries', fields: ['name', 'isActive'] },
+      cities: { collection: 'cities', fields: ['name', 'countryId', 'isActive'] }
     };
 
     if (!report || !reports[report]) {
@@ -3637,10 +3717,17 @@ app.get('/api/admin/ai-assistant/export', authenticateToken, isAdmin, async (req
     }
 
     const config = reports[report];
-    let query = db.collection(config.collection).limit(limitNum);
-    const snapshot = await query.get();
+    let snapshot;
 
-    const rows = snapshot.docs.map(doc => {
+    if (config.filter) {
+      let query = db.collection(config.collection);
+      Object.keys(config.filter).forEach(k => { query = query.where(k, '==', config.filter[k]); });
+      snapshot = await query.limit(5000).get();
+    } else {
+      snapshot = await db.collection(config.collection).limit(limitNum).get();
+    }
+
+    let rows = snapshot.docs.map(doc => {
       const data = doc.data();
       const row = { id: doc.id };
       config.fields.forEach(f => {
@@ -3650,6 +3737,18 @@ app.get('/api/admin/ai-assistant/export', authenticateToken, isAdmin, async (req
       });
       return row;
     });
+
+    if (config.filterByDays && daysNum && daysNum > 0) {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - daysNum);
+      rows = rows.filter(r => {
+        const created = r.createdAt ? new Date(r.createdAt) : null;
+        const lastLogin = r.lastLoginAt ? new Date(r.lastLoginAt) : null;
+        return (created && created >= cutoff) || (lastLogin && lastLogin >= cutoff);
+      }).slice(0, limitNum);
+    } else if (config.filterByDays && daysNum) {
+      rows = rows.slice(0, limitNum);
+    }
 
     if (format === 'csv') {
       if (rows.length === 0) {
