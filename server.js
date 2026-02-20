@@ -3499,8 +3499,10 @@ app.get('/api/admin/analytics/faq', authenticateToken, isAdmin, async (req, res)
 });
 
 // ========== ASISTENTE IA ADMIN (SOLO LECTURA) ==========
-// Permite a administradores hacer consultas sobre la plataforma y descargar reportes.
+// Usa herramientas (tools) con count() y limit() - NUNCA consultas abiertas.
 // NO permite modificar nada - únicamente preguntar y exportar datos.
+
+const { toolsFactory, buildToolsForOpenAI, executeTool } = require('./admin-ai-tools');
 
 const getPlatformContextForAI = async () => {
   if (!db) return {};
@@ -3537,6 +3539,11 @@ const getPlatformContextForAI = async () => {
       const lastLogin = d2.lastLoginAt && d2.lastLoginAt.toDate ? d2.lastLoginAt.toDate() : null;
       return (created && created > thirtyDaysAgo) || (lastLogin && lastLogin > thirtyDaysAgo);
     }).length;
+
+    const listaEmbarazadas = pregnantUsers.slice(0, 200).map(d => {
+      const data = d.data();
+      return { email: data.email || '(sin email)', displayName: data.displayName || '(sin nombre)' };
+    });
 
     const usersByGender = { M: 0, F: 0, otro: 0 };
     users.forEach(d => {
@@ -3580,7 +3587,7 @@ const getPlatformContextForAI = async () => {
           nuevos30d: newUsersLast30,
           porGenero: usersByGender
         },
-        usuariosEmbarazadas: { total: pregnantUsers.length, ultimos30d: pregnantLast30 },
+        usuariosEmbarazadas: { total: pregnantUsers.length, ultimos30d: pregnantLast30, lista: listaEmbarazadas },
         hijos: { total: childrenSnap.size, porNacer: childrenUnborn, nacidos: childrenBorn },
         comunidades: { total: communitiesSnap.size },
         posts: { total: postsSnap.size, ultimos7d: recentPosts },
@@ -3608,23 +3615,22 @@ const getPlatformContextForAI = async () => {
   }
 };
 
-const ADMIN_AI_SYSTEM_PROMPT = `Eres un asistente de consultas para administradores de la plataforma Munpa. Tienes acceso a los datos de la base de datos porque te los pasamos en el contexto.
+const ADMIN_AI_SYSTEM_PROMPT = `Eres un asistente de consultas para administradores de la plataforma Munpa (app de maternidad y crianza).
 
-CONOCIMIENTO DE LA BASE DE DATOS:
-- "esquemaBD" describe los campos de cada colección (users tiene isPregnant, gestationWeeks, etc.).
-- "resumen" contiene los números REALES ya consultados de Firestore.
-- Tienes toda la información. Responde SIEMPRE con los números exactos del resumen.
+Tienes HERRAMIENTAS que consultan Firestore. Úsalas para responder:
+- contar_usuarios: total de usuarios
+- contar_usuarias_embarazadas: total de embarazadas
+- listar_usuarias_embarazadas: lista con emails (usa cuando pidan "dame los emails" o "lista")
+- contar_coleccion: cuenta users, children, communities, posts, etc.
+- listar_usuarios: lista de usuarios
 
-PROHIBIDO:
-- NUNCA digas "use el endpoint", "consulte el endpoint", "necesitarías acceder a la BD" o "utiliza el reporte de exportación para obtener los datos".
-- NUNCA pidas al usuario que consulte algo para saber la respuesta. La respuesta está en el contexto.
-- Responde directamente: "Hay X usuarias embarazadas" (con el número de resumen.usuariosEmbarazadas.total).
+REGLAS:
+- USA las herramientas para obtener datos. No inventes números.
+- Si piden emails de embarazadas: llama listar_usuarias_embarazadas y lista los emails en tu respuesta.
+- NUNCA digas "no puedo" o "consulte el endpoint" - usa las herramientas.
+- Al final, si hay datos exportables, añade: EXPORT:report=pregnant_users&format=csv`;
 
-RESPUESTA:
-- Da la respuesta con los números. Ejemplo: "Hay 45 usuarias embarazadas en total, 12 en los últimos 30 días."
-- Si hay datos exportables, al final añade en una línea: EXPORT:report=pregnant_users&format=csv (para ofrecer descarga, no para obtener la respuesta).`;
-
-// POST - Hacer consultas al asistente IA (solo lectura)
+// POST - Hacer consultas al asistente IA con herramientas (tools)
 app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { question } = req.body || {};
@@ -3635,29 +3641,64 @@ app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res)
       });
     }
 
-    const context = await getPlatformContextForAI();
-
-    if (!openai) {
+    if (!openai || !db) {
       return res.status(503).json({
         success: false,
-        message: 'OpenAI no está configurado. Para preguntas generales, configura OPENAI_API_KEY.'
+        message: 'OpenAI o Firebase no está configurado.'
       });
     }
 
-    const r = context.resumen || {};
-    const numerosTexto = `NÚMEROS DE LA BD (usa estos): Usuarias embarazadas: ${r.usuariosEmbarazadas?.total ?? 0} total, ${r.usuariosEmbarazadas?.ultimos30d ?? 0} últimos 30 días. Usuarios: ${r.usuarios?.total ?? 0} total. Hijos: ${r.hijos?.total ?? 0}. Comunidades: ${r.comunidades?.total ?? 0}. Posts: ${r.posts?.total ?? 0}. Recomendados: ${r.recomendados?.total ?? 0}.`;
-    const contextStr = JSON.stringify(context, null, 2);
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-      messages: [
-        { role: 'system', content: ADMIN_AI_SYSTEM_PROMPT },
-        { role: 'user', content: `${numerosTexto}\n\nContexto completo:\n${contextStr}\n\nPregunta: ${String(question).trim()}\n\nResponde con los números de arriba. No pidas consultar ningún endpoint.` }
-      ],
-      max_tokens: 1500,
-      temperature: 0.3
-    });
+    const tools = toolsFactory(db);
+    const openaiTools = buildToolsForOpenAI(tools);
+    const messages = [
+      { role: 'system', content: ADMIN_AI_SYSTEM_PROMPT },
+      { role: 'user', content: String(question).trim() }
+    ];
 
-    let answer = completion.choices?.[0]?.message?.content || 'No se pudo generar respuesta.';
+    let maxIterations = 5;
+    let lastContent = '';
+
+    while (maxIterations-- > 0) {
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        messages,
+        tools: openaiTools,
+        tool_choice: 'auto',
+        max_tokens: 2500,
+        temperature: 0.3
+      });
+
+      const msg = completion.choices?.[0]?.message;
+      if (!msg) break;
+
+      if (msg.content) lastContent = msg.content;
+
+      if (!msg.tool_calls || msg.tool_calls.length === 0) {
+        break;
+      }
+
+      messages.push({
+        role: 'assistant',
+        content: msg.content || null,
+        tool_calls: msg.tool_calls
+      });
+
+      for (const tc of msg.tool_calls) {
+        const name = tc.function?.name;
+        let args = {};
+        try {
+          args = tc.function?.arguments ? JSON.parse(tc.function.arguments) : {};
+        } catch (_) {}
+        const result = await executeTool(tools, name, args);
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: JSON.stringify(result)
+        });
+      }
+    }
+
+    let answer = lastContent || 'No se pudo generar respuesta.';
 
     let suggestedExport = null;
     const exportMatch = answer.match(/EXPORT:([^\n]+)/);

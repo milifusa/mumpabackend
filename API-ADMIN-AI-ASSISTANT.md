@@ -1,11 +1,25 @@
 # API Asistente IA para Administradores
 
-API de **solo lectura** que permite a las administradoras hacer **cualquier tipo de pregunta** sobre la plataforma Munpa y **descargar los datos** cuando la respuesta involucre información exportable. Usa OpenAI. **No permite modificar nada.**
+API de **solo lectura** que usa **herramientas (tools)** de OpenAI para consultar Firestore. La IA ejecuta funciones que usan `count()` para estadísticas (1 lectura) y `limit(50)` para listas. **Nunca consultas abiertas.** Filtra datos sensibles. **No permite modificar nada.**
 
 ## Requisitos
 
 - Usuario autenticado con rol **admin** (JWT del dashboard)
 - Variable de entorno `OPENAI_API_KEY` configurada
+
+## Herramientas (tools)
+
+La IA usa funciones que consultan Firestore de forma eficiente:
+
+| Herramienta | Uso | Firestore |
+|-------------|-----|-----------|
+| `contar_usuarios` | Total de usuarios | `count()` - 1 lectura |
+| `contar_usuarias_embarazadas` | Total embarazadas | `count()` - 1 lectura |
+| `listar_usuarias_embarazadas` | Emails y nombres | `limit(50)` |
+| `contar_coleccion` | users, children, posts, etc. | `count()` |
+| `listar_usuarios` | Lista de usuarios | `limit(50)` |
+
+Datos sensibles (passwordHash, tokens, etc.) se filtran antes de enviar a la IA.
 
 ## Endpoints
 
