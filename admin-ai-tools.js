@@ -2,9 +2,17 @@
  * Herramientas (tools) para el agente IA de administración.
  * Usa count() para estadísticas y limit() para listas - NUNCA consultas abiertas.
  * Filtra datos sensibles antes de devolver a la IA.
+ * Puede consultar CUALQUIER colección permitida.
  */
 
 const CAMPOS_SENSIBLES = ['passwordHash', 'password', 'tokens', 'refreshToken', 'customToken'];
+
+const COLECCIONES_PERMITIDAS = [
+  'users', 'children', 'communities', 'posts', 'lists', 'recommendations', 'categories',
+  'countries', 'cities', 'recommendationReviews', 'banners', 'milestoneCategories', 'milestones',
+  'faq_history', 'doula_conversations', 'notifications', 'childInvitations', 'marketplace_products',
+  'articles', 'consultations', 'vendor_orders'
+];
 
 const sanitize = (obj) => {
   if (!obj || typeof obj !== 'object') return obj;
@@ -99,21 +107,28 @@ const toolsFactory = (db) => {
       type: 'function',
       function: {
         name: 'contar_coleccion',
-        description: 'Cuenta documentos en una colección. Usa count(). Colecciones: users, children, communities, posts, lists, recommendations, categories.',
+        description: 'Cuenta documentos en CUALQUIER colección. Usa count(). Colecciones: users, children, communities, posts, lists, recommendations, categories, countries, cities, recommendationReviews, banners, milestones, faq_history, etc.',
         parameters: {
           type: 'object',
           properties: {
-            coleccion: { type: 'string', enum: ['users', 'children', 'communities', 'posts', 'lists', 'recommendations', 'categories'], description: 'Nombre de la colección' }
+            coleccion: { type: 'string', description: 'Nombre de la colección (users, children, posts, recommendations, etc.)' },
+            filtro_campo: { type: 'string', description: 'Opcional: campo para filtrar (ej: isPregnant, isActive)' },
+            filtro_valor: { type: 'string', description: 'Opcional: valor del filtro (ej: true)' }
           },
           required: ['coleccion']
         }
       },
       handler: async (args = {}) => {
         try {
-          const coleccion = args?.coleccion;
-          if (!coleccion) return { error: 'coleccion requerida' };
+          const coleccion = String(args?.coleccion || '').trim().toLowerCase();
+          if (!COLECCIONES_PERMITIDAS.includes(coleccion)) {
+            return { error: `Colección no permitida. Disponibles: ${COLECCIONES_PERMITIDAS.join(', ')}` };
+          }
           let query = db.collection(coleccion);
-          if (coleccion === 'recommendations') {
+          if (args?.filtro_campo && args?.filtro_valor !== undefined) {
+            const val = args.filtro_valor === 'true' ? true : args.filtro_valor === 'false' ? false : args.filtro_valor;
+            query = query.where(args.filtro_campo, '==', val);
+          } else if (coleccion === 'recommendations') {
             query = query.where('isActive', '==', true);
           }
           const snapshot = await query.count().get();
@@ -122,6 +137,55 @@ const toolsFactory = (db) => {
         } catch (e) {
           return { error: e.message };
         }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'listar_coleccion',
+        description: 'Lista documentos de CUALQUIER colección. Siempre limit(50). Para ver datos de users, children, posts, recommendations, communities, etc.',
+        parameters: {
+          type: 'object',
+          properties: {
+            coleccion: { type: 'string', description: 'Nombre de la colección (users, children, posts, recommendations, communities, etc.)' },
+            limit: { type: 'number', description: 'Máximo de registros (default 50, máx 50)' },
+            filtro_campo: { type: 'string', description: 'Opcional: filtrar por campo (ej: isPregnant)' },
+            filtro_valor: { type: 'string', description: 'Opcional: valor del filtro (ej: true)' }
+          },
+          required: ['coleccion']
+        }
+      },
+      handler: async (args = {}) => {
+        try {
+          const coleccion = String(args?.coleccion || '').trim().toLowerCase();
+          if (!COLECCIONES_PERMITIDAS.includes(coleccion)) {
+            return { error: `Colección no permitida. Disponibles: ${COLECCIONES_PERMITIDAS.join(', ')}` };
+          }
+          const limit = Math.min(Math.max(parseInt(args.limit) || 50, 1), 50);
+          let query = db.collection(coleccion);
+          if (args?.filtro_campo && args?.filtro_valor !== undefined) {
+            const val = args.filtro_valor === 'true' ? true : args.filtro_valor === 'false' ? false : args.filtro_valor;
+            query = query.where(args.filtro_campo, '==', val);
+          } else if (coleccion === 'recommendations') {
+            query = query.where('isActive', '==', true);
+          }
+          const snapshot = await query.limit(limit).get();
+          const lista = snapshot.docs.map(doc => sanitize({ id: doc.id, ...doc.data() }));
+          return { coleccion, total: lista.length, lista };
+        } catch (e) {
+          return { error: e.message };
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'colecciones_disponibles',
+        description: 'Devuelve la lista de colecciones que se pueden consultar. Útil cuando el usuario pregunta qué datos hay o qué puede consultar.',
+        parameters: { type: 'object', properties: {}, required: [] }
+      },
+      handler: async () => {
+        return { colecciones: COLECCIONES_PERMITIDAS };
       }
     },
     {

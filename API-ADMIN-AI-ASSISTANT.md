@@ -24,11 +24,15 @@ La IA usa funciones que consultan Firestore de forma eficiente:
 
 | Herramienta | Uso | Firestore |
 |-------------|-----|-----------|
-| `contar_usuarios` | Total de usuarios | `count()` - 1 lectura |
-| `contar_usuarias_embarazadas` | Total embarazadas | `count()` - 1 lectura |
-| `listar_usuarias_embarazadas` | Emails y nombres | `limit(50)` |
-| `contar_coleccion` | users, children, posts, etc. | `count()` |
+| `contar_coleccion` | Cuenta en **cualquier** colección (con filtro opcional) | `count()` |
+| `listar_coleccion` | Lista documentos de **cualquier** colección | `limit(50)` |
+| `colecciones_disponibles` | Lista colecciones que se pueden consultar | - |
+| `contar_usuarios` | Total de usuarios | `count()` |
+| `contar_usuarias_embarazadas` | Total embarazadas | `count()` |
+| `listar_usuarias_embarazadas` | Emails de embarazadas | `limit(50)` |
 | `listar_usuarios` | Lista de usuarios | `limit(50)` |
+
+**Colecciones disponibles:** users, children, communities, posts, lists, recommendations, categories, countries, cities, recommendationReviews, banners, milestones, faq_history, doula_conversations, notifications, childInvitations, marketplace_products, articles, consultations, vendor_orders
 
 Datos sensibles (passwordHash, tokens, etc.) se filtran antes de enviar a la IA.
 
