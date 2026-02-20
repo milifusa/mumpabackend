@@ -7,6 +7,17 @@ API de **solo lectura** que usa **herramientas (tools)** de OpenAI para consulta
 - Usuario autenticado con rol **admin** (JWT del dashboard)
 - Variable de entorno `OPENAI_API_KEY` configurada
 
+## Listar modelos OpenAI
+
+**GET** `/api/admin/openai-models`
+
+Devuelve los modelos disponibles en tu cuenta de OpenAI (usa las variables de Vercel).
+
+```bash
+GET https://munpa.online/api/admin/openai-models
+Authorization: Bearer <JWT_ADMIN>
+```
+
 ## Herramientas (tools)
 
 La IA usa funciones que consultan Firestore de forma eficiente:

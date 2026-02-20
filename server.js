@@ -3630,6 +3630,35 @@ REGLAS:
 - NUNCA digas "no puedo" o "consulte el endpoint" - usa las herramientas.
 - Al final, si hay datos exportables, añade: EXPORT:report=pregnant_users&format=csv`;
 
+// GET - Listar modelos disponibles de OpenAI (ejecuta en Vercel con las env vars)
+app.get('/api/admin/openai-models', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    if (!openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'OpenAI no está configurado. Configura OPENAI_API_KEY en Vercel.'
+      });
+    }
+    const response = await openai.models.list();
+    const ids = response.data?.map(m => m.id) ?? [];
+    res.json({
+      success: true,
+      data: {
+        total: ids.length,
+        ids,
+        raw: response
+      }
+    });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando modelos OpenAI:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Error listando modelos',
+      error: error.message
+    });
+  }
+});
+
 // POST - Hacer consultas al asistente IA con herramientas (tools)
 app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res) => {
   try {
