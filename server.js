@@ -3660,7 +3660,7 @@ app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res)
 
     while (maxIterations-- > 0) {
       const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
         messages,
         tools: openaiTools,
         tool_choice: 'auto',
