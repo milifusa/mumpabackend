@@ -1611,7 +1611,7 @@ Responde como Douli, tu asistente de Munpa, con amor, sabiduría y el corazón d
       console.log('🤖 [DOULA] Enviando a OpenAI...');
       
       const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: message }
@@ -3688,7 +3688,7 @@ app.post('/api/admin/ai-assistant', authenticateToken, isAdmin, async (req, res)
 
     while (maxIterations-- > 0) {
       const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages,
         tools: openaiTools,
         tool_choice: 'auto',
@@ -14704,7 +14704,7 @@ Usa principalmente los ingredientes que el usuario indicó. Puedes sugerir 1-2 i
     let content = '';
     try {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -15254,7 +15254,7 @@ FORMATO REQUERIDO:
     const userPrompt = `Dame 4 bullets de información importante sobre el embarazo en la semana ${gestationWeeks} para ${babyName}.`;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
@@ -15338,7 +15338,7 @@ Requisitos:
     const userPrompt = `Crea la guía de hoy. ${context} ${displayName}`;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
@@ -15390,7 +15390,7 @@ Requisitos:
       : `Contexto: bebé nacido. Nombre: ${childName || 'mi bebé'}. ${ageLabel ? `Edad: ${ageLabel}.` : ''}`;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: `Crea 4 preguntas frecuentes. ${context}` }
@@ -15551,7 +15551,7 @@ ${previousResponses.length > 0 ? 'IMPORTANTE: NO repitas ningún concepto, tema 
       const userPrompt = `Proporciona 3 bullets de información ÚNICA sobre el desarrollo fetal de ${childName} a las ${gestationWeeks} semanas de gestación.`;
 
       const response = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -15644,7 +15644,7 @@ ${previousResponses.length > 0 ? 'IMPORTANTE: NO repitas ningún concepto, tema 
       const userPrompt = `Proporciona 3 bullets de información ÚNICA sobre el desarrollo de ${childName} a los ${ageInMonths} meses de edad.`;
 
       const response = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -16258,7 +16258,7 @@ ${tipType === 'embarazo' && isPregnant ? `\n- Específico para ${currentGestatio
 Genera el tip ahora:`;
 
         const completion = await openai.chat.completions.create({
-          model: "gpt-3.5-turbo",
+          model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
           messages: [
             {
               role: "system",
@@ -33959,7 +33959,7 @@ No uses comillas ni puntos finales innecesarios.`;
     if (!prompt) return null;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: [
         {
           role: "system",
@@ -33992,7 +33992,7 @@ No uses comillas ni puntos finales innecesarios.`;
              '👶 Consejo del día',
       message: cleanedMessage,
       generatedBy: 'chatgpt',
-      model: 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       prompt: prompt
     };
 
@@ -40446,7 +40446,7 @@ Genera ${mealTypes.length === 1 ? '2' : '6'} recetas en total (${mealTypes.lengt
 Devuelve SOLO el JSON, sin texto adicional.`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
       messages: [
         {
           role: 'system',
