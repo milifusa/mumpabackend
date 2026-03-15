@@ -1983,7 +1983,8 @@ app.post('/api/auth/login', async (req, res) => {
       gender: userProfile?.gender || null,
       childrenCount: userProfile?.childrenCount || 0,
       isPregnant: userProfile?.isPregnant || false,
-      gestationWeeks: userProfile?.gestationWeeks || null
+      gestationWeeks: userProfile?.gestationWeeks || null,
+      professionalProfile: userProfile?.professionalProfile || null
     };
 
     res.json({
@@ -1998,7 +1999,8 @@ app.post('/api/auth/login', async (req, res) => {
         gestationWeeks: safeProfile.gestationWeeks,
         childrenCount: safeProfile.childrenCount,
         gender: safeProfile.gender,
-        profile: safeProfile
+        profile: safeProfile,
+        professionalProfile: safeProfile.professionalProfile || null
       }
     });
 
@@ -2387,7 +2389,8 @@ app.post('/api/auth/google-login', async (req, res) => {
       gender: userProfile?.gender || null,
       childrenCount: userProfile?.childrenCount || 0,
       isPregnant: userProfile?.isPregnant || false,
-      gestationWeeks: userProfile?.gestationWeeks || null
+      gestationWeeks: userProfile?.gestationWeeks || null,
+      professionalProfile: userProfile?.professionalProfile || null
     };
 
     res.json({
@@ -2405,7 +2408,8 @@ app.post('/api/auth/google-login', async (req, res) => {
         gestationWeeks: safeProfile.gestationWeeks,
         childrenCount: safeProfile.childrenCount,
         gender: safeProfile.gender,
-        profile: safeProfile
+        profile: safeProfile,
+        professionalProfile: safeProfile.professionalProfile || null
       }
     });
 
@@ -2582,7 +2586,8 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
       gender: userProfile?.gender || null,
       childrenCount: userProfile?.childrenCount || 0,
       isPregnant: userProfile?.isPregnant || false,
-      gestationWeeks: userProfile?.gestationWeeks || null
+      gestationWeeks: userProfile?.gestationWeeks || null,
+      professionalProfile: userProfile?.professionalProfile || null
     };
 
     res.json({
@@ -2600,7 +2605,8 @@ app.post('/api/auth/google-login-simple', async (req, res) => {
         gestationWeeks: safeProfile.gestationWeeks,
         childrenCount: safeProfile.childrenCount,
         gender: safeProfile.gender,
-        profile: safeProfile
+        profile: safeProfile,
+        professionalProfile: safeProfile.professionalProfile || null
       }
     });
 
@@ -2791,7 +2797,8 @@ app.post('/api/auth/apple-login', async (req, res) => {
       gender: userProfile?.gender || null,
       childrenCount: userProfile?.childrenCount || 0,
       isPregnant: userProfile?.isPregnant || false,
-      gestationWeeks: userProfile?.gestationWeeks || null
+      gestationWeeks: userProfile?.gestationWeeks || null,
+      professionalProfile: userProfile?.professionalProfile || null
     };
 
     res.json({
@@ -2809,7 +2816,8 @@ app.post('/api/auth/apple-login', async (req, res) => {
         gestationWeeks: safeProfile.gestationWeeks,
         childrenCount: safeProfile.childrenCount,
         gender: safeProfile.gender,
-        profile: safeProfile
+        profile: safeProfile,
+        professionalProfile: safeProfile.professionalProfile || null
       }
     });
 
