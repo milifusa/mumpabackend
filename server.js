@@ -233,7 +233,7 @@ const getMonthsFromChildData = (child) => {
   if (child.isUnborn) return null;
   if (child.birthDate) {
     const birthDate = child.birthDate.toDate ? child.birthDate.toDate() : child.birthDate;
-    return calculateMonthsFromBirthDate(birthDate);
+    return calculateAgeFromBirthDate(birthDate);
   }
   if (typeof child.ageInMonths === 'number') {
     return Math.max(0, Math.floor(child.ageInMonths));
@@ -6463,7 +6463,101 @@ app.get('/api/categories/:categoryId', authenticateToken, async (req, res) => {
       error: error.message
     });
   }
+
+// Obtener productos/servicios ofrecidos por un recomendado (para la app de usuario)
+app.get('/api/recommendations/:recommendationId/products', authenticateToken, async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const { serviceType, limit: limitParam = 20 } = req.query;
+
+    console.log('🛍️ [APP] Obteniendo productos del recomendado:', recommendationId);
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    // Verificar que el recomendado existe y está activo
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Recomendado no encontrado' });
+    }
+
+    const recData = recDoc.data();
+    if (!recData.isActive) {
+      return res.status(404).json({ success: false, message: 'Recomendado no disponible' });
+    }
+
+    // Verificar que tiene un profesional vinculado
+    const professionalId = recData.professionalId;
+    if (!professionalId) {
+      return res.json({ success: true, data: [], total: 0, hasProfessional: false });
+    }
+
+    // Obtener el perfil del profesional
+    const profDoc = await db.collection('professionals').doc(professionalId).get();
+    if (!profDoc.exists || profDoc.data().status !== 'active') {
+      return res.json({ success: true, data: [], total: 0, hasProfessional: false });
+    }
+
+    const profData = profDoc.data();
+
+    // Construir query de productos
+    let productsQuery = db.collection('marketplace_products')
+      .where('userId', '==', profData.userId)
+      .where('isProfessionalService', '==', true)
+      .where('status', '!=', 'eliminado');
+
+    if (serviceType) {
+      productsQuery = productsQuery.where('serviceType', '==', serviceType);
+    }
+
+    const productsSnapshot = await productsQuery
+      .orderBy('status')
+      .orderBy('createdAt', 'desc')
+      .limit(parseInt(limitParam))
+      .get();
+
+    const products = productsSnapshot.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        title: d.title,
+        description: d.description,
+        serviceType: d.serviceType,
+        duration: d.duration || null,
+        isVirtual: d.isVirtual || false,
+        maxParticipants: d.maxParticipants || null,
+        price: d.price || null,
+        type: d.type,
+        tradeFor: d.tradeFor || null,
+        photos: d.photos || [],
+        status: d.status,
+        category: d.category || null,
+        location: d.location || null,
+        createdAt: d.createdAt?.toDate() || null
+      };
+    });
+
+    res.json({
+      success: true,
+      data: products,
+      total: products.length,
+      hasProfessional: true,
+      professional: {
+        id: professionalId,
+        name: profData.name,
+        headline: profData.headline || null,
+        specialty: profData.specialty || null,
+        photoUrl: profData.photoUrl || null
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [APP] Error obteniendo productos del recomendado:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo productos', error: error.message });
+  }
 });
+
 
 // ===== ENDPOINTS ADMIN (CRUD COMPLETO) =====
 
@@ -35093,6 +35187,312 @@ app.post('/api/notifications/test-daily-reminder', authenticateToken, async (req
   }
 });
 
+// Endpoint para probar push de receta (envía ahora, sin validar hora)
+app.post('/api/notifications/test-recipe-reminder', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, regenerate = false } = req.body;
+
+    if (!db || !openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'Servicio no disponible'
+      });
+    }
+
+    const userDoc = await db.collection('users').doc(uid).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    const userData = userDoc.data();
+    if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No tienes tokens FCM. Abre la app en tu dispositivo para registrar notificaciones.'
+      });
+    }
+
+    const childrenSnapshot = await db.collection('children').where('parentId', '==', uid).get();
+    const sharedSnapshot = await db.collection('children').where('sharedWith', 'array-contains', uid).get();
+    const allChildren = [...childrenSnapshot.docs, ...sharedSnapshot.docs];
+
+    let child = null;
+    if (childId) {
+      const childDoc = allChildren.find(d => d.id === childId);
+      if (childDoc) {
+        const d = childDoc.data();
+        const birthDate = d.birthDate?.toDate?.() || new Date(d.birthDate);
+        const ageMonths = Math.floor((new Date() - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+        if (ageMonths >= 6) child = { id: childDoc.id, ...d, ageMonths };
+      }
+    }
+    if (!child) {
+      for (const childDoc of allChildren) {
+        const d = childDoc.data();
+        const birthDate = d.birthDate?.toDate?.() || new Date(d.birthDate);
+        const ageMonths = Math.floor((new Date() - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+        if (ageMonths >= 6) {
+          child = { id: childDoc.id, ...d, ageMonths };
+          break;
+        }
+      }
+    }
+
+    if (!child) {
+      return res.status(400).json({
+        success: false,
+        message: 'No tienes hijos de 6+ meses para enviar receta de prueba'
+      });
+    }
+
+    const mealType = 'lunch';
+    const childName = child.name || 'tu bebé';
+    let recipe = null;
+
+    if (!regenerate) {
+    try {
+      const now = new Date();
+      const cacheCutoff = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      const cachedSnapshot = await db.collection('homeRecipeCache')
+        .where('childId', '==', child.id)
+        .where('mealType', '==', mealType)
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .get();
+      if (!cachedSnapshot.empty) {
+        const cached = cachedSnapshot.docs[0].data();
+        const cachedAt = cached.createdAt?.toDate?.() || new Date(cached.createdAt);
+        if (cachedAt >= cacheCutoff) recipe = cached.recipe;
+      }
+    } catch (cacheErr) {
+      // Índice puede no existir; continuar sin caché
+    }
+    }
+
+    if (!recipe) {
+      const ageYears = Math.floor(child.ageMonths / 12);
+      const remainingMonths = child.ageMonths % 12;
+      let ageContext = child.ageMonths < 12
+        ? `Bebé de ${child.ageMonths} meses en alimentación complementaria.`
+        : child.ageMonths < 24
+          ? `Niño de ${ageYears > 0 ? ageYears + ' año' : child.ageMonths + ' meses'}.`
+          : `Niño de ${ageYears} años.`;
+      const prompt = `Genera UNA receta de almuerzo para: ${ageContext} Devuelve SOLO JSON: {"recipes":[{"name":"Nombre receta","mealType":"lunch","description":"...","prepTime":10,"cookTime":15,"servings":2,"difficulty":"fácil","ingredients":[{"item":"x","quantity":"1"}],"instructions":["Paso 1"],"nutritionalInfo":{},"tips":[],"allergens":[]}]}`;
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: 'Responde solo JSON válido.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.8,
+        max_tokens: 800
+      });
+      const text = completion.choices[0]?.message?.content;
+      if (text) {
+        try {
+          const data = JSON.parse(text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+          const raw = data.recipes?.[0];
+          if (raw) {
+            recipe = {
+              name: raw.name || 'Receta del día',
+              mealType: 'lunch',
+              description: raw.description || '',
+              prepTime: parseInt(raw.prepTime, 10) || 0,
+              cookTime: parseInt(raw.cookTime, 10) || 0,
+              servings: parseInt(raw.servings, 10) || 2,
+              difficulty: raw.difficulty || 'fácil',
+              ingredients: Array.isArray(raw.ingredients) ? raw.ingredients : [],
+              instructions: Array.isArray(raw.instructions) ? raw.instructions : [],
+              nutritionalInfo: raw.nutritionalInfo && typeof raw.nutritionalInfo === 'object' ? raw.nutritionalInfo : {},
+              tips: Array.isArray(raw.tips) ? raw.tips : [],
+              allergens: Array.isArray(raw.allergens) ? raw.allergens : []
+            };
+            const recipeRef = await db.collection('recipes').add({
+              userId: uid,
+              childId: child.id,
+              childName,
+              mealType,
+              ageMonths: child.ageMonths,
+              ...recipe,
+              source: 'test',
+              createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            recipe.id = recipeRef.id;
+            await db.collection('homeRecipeCache').add({
+              childId: child.id,
+              mealType,
+              recipe: { ...recipe, childId: child.id, childName, ageMonths: child.ageMonths, generatedAt: new Date().toISOString() },
+              ageMonths: child.ageMonths,
+              createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        } catch (_) {}
+      }
+    }
+
+    const recipeName = recipe?.name || 'la receta del día';
+    const title = `¿Ya le preparaste ${recipeName} a ${childName}?`;
+    const body = `Receta del día para ${childName}`;
+
+    let recipeId = recipe?.id || '';
+    if (!recipeId && recipe) {
+      try {
+        const recipeRef = await db.collection('recipes').add({
+          userId: uid,
+          childId: child.id,
+          childName,
+          mealType: 'lunch',
+          ageMonths: child.ageMonths,
+          name: recipe.name,
+          description: recipe.description || '',
+          prepTime: recipe.prepTime || 0,
+          cookTime: recipe.cookTime || 0,
+          servings: recipe.servings || 2,
+          difficulty: recipe.difficulty || 'fácil',
+          ingredients: recipe.ingredients || [],
+          instructions: recipe.instructions || [],
+          nutritionalInfo: recipe.nutritionalInfo || {},
+          tips: recipe.tips || [],
+          allergens: recipe.allergens || [],
+          source: 'test',
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        recipeId = recipeRef.id;
+      } catch (_) {}
+    }
+
+    await sendPushNotification(
+      userData.fcmTokens,
+      { title, body },
+      {
+        type: 'recipe_daily_reminder',
+        recipeId,
+        childId: child.id,
+        childName,
+        recipeName,
+        screen: 'RecipeDetail',
+        screenParams: recipeId,
+        test: true
+      }
+    );
+
+    await db.collection('notifications').add({
+      userId: uid,
+      type: 'recipe_daily_reminder',
+      title,
+      body,
+      data: { childId: child.id, childName, recipeName, recipeId },
+      read: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      message: 'Push de receta enviado',
+      data: { title, body, childName, recipeName, recipeId }
+    });
+  } catch (error) {
+    console.error('❌ [TEST] Error push receta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando push de prueba',
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para probar push de medicamento (envía ahora)
+app.post('/api/notifications/test-medication-reminder', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    if (!db) {
+      return res.status(503).json({ success: false, message: 'Servicio no disponible' });
+    }
+
+    const userDoc = await db.collection('users').doc(uid).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+    const userData = userDoc.data();
+    if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No tienes tokens FCM. Abre la app para registrar notificaciones.'
+      });
+    }
+
+    let notif = null;
+    try {
+      const snapshot = await db.collection('scheduled_med_notifications')
+        .where('userId', '==', uid)
+        .where('sent', '==', false)
+        .limit(5)
+        .get();
+      if (!snapshot.empty) {
+        notif = snapshot.docs[0].data();
+        notif.id = snapshot.docs[0].id;
+      }
+    } catch (qErr) {
+      console.warn('[TEST] Error consultando scheduled_med_notifications:', qErr.message);
+    }
+
+    if (!notif) {
+      const medsSnapshot = await db.collection('medications')
+        .where('userId', '==', uid)
+        .where('active', '==', true)
+        .limit(1)
+        .get();
+      if (medsSnapshot.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'No tienes medicamentos activos ni recordatorios pendientes'
+        });
+      }
+      const med = medsSnapshot.docs[0].data();
+      const childDoc = await db.collection('children').doc(med.childId).get();
+      const childName = childDoc.exists ? (childDoc.data().name || 'tu bebé') : 'tu bebé';
+      notif = {
+        medicationName: med.name || 'Medicamento',
+        dose: med.dose || '',
+        doseUnit: med.doseUnit || '',
+        childName,
+        title: `💊 Momento de ${med.name || 'medicamento'}`,
+        body: `Es hora de ${med.name || 'medicamento'}: ${med.dose || ''} ${med.doseUnit || ''} para ${childName}.`
+      };
+    }
+
+    const title = notif.title || `💊 Momento de ${notif.medicationName}`;
+    const body = notif.body || `Es hora de ${notif.medicationName}: ${notif.dose || ''} ${notif.doseUnit || ''} para ${notif.childName}.`;
+
+    await sendPushNotification(
+      userData.fcmTokens,
+      { title, body },
+      {
+        type: 'medication_reminder',
+        childId: notif.childId || '',
+        medicationId: notif.medicationId || '',
+        medicationName: notif.medicationName || '',
+        screen: 'MedicationScreen',
+        test: true
+      }
+    );
+
+    res.json({
+      success: true,
+      message: 'Push de medicamento enviado',
+      data: { title, body, medicationName: notif.medicationName, childName: notif.childName }
+    });
+  } catch (error) {
+    console.error('❌ [TEST] Error push medicamento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error enviando push de medicamento',
+      error: error.message
+    });
+  }
+});
+
 // ============================================================================
 // 🎛️ ADMINISTRACIÓN DE RECORDATORIOS - Dashboard
 // ============================================================================
@@ -35459,8 +35859,9 @@ app.get('/api/sleep/notifications/process-scheduled', (req, res) => {
 // ============== CRON: PROCESAR NOTIFICACIONES DE MEDICAMENTOS ==============
 app.get('/api/cron/process-medication-notifications', async (req, res) => {
   try {
-    // Verificar que viene del cron de Vercel
+    // Verificar que viene del cron de Vercel (Bearer o x-cron-secret)
     const authHeader = req.headers.authorization;
+    const cronSecretHeader = req.headers['x-cron-secret'];
     const expectedSecret = process.env.CRON_SECRET;
     
     if (!expectedSecret) {
@@ -35471,7 +35872,8 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
       });
     }
     
-    if (authHeader !== `Bearer ${expectedSecret}`) {
+    const isValidAuth = authHeader === `Bearer ${expectedSecret}` || cronSecretHeader === expectedSecret;
+    if (!isValidAuth) {
       console.log('⚠️ [CRON] Intento de acceso no autorizado');
       return res.status(401).json({ 
         success: false, 
@@ -35483,12 +35885,12 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
     
     const now = new Date();
     const twentyMinutesFromNow = new Date(now.getTime() + 20 * 60 * 1000);
+    const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
     
-    // Buscar notificaciones que deben enviarse en los próximos 20 minutos
-    // y que no han sido enviadas
+    // Buscar notificaciones pendientes: desde 30 min atrás (recuperar vencidas) hasta 20 min adelante
     const pendingSnapshot = await db
       .collection('scheduled_med_notifications')
-      .where('scheduledFor', '>=', now)
+      .where('scheduledFor', '>=', thirtyMinutesAgo)
       .where('scheduledFor', '<=', twentyMinutesFromNow)
       .where('sent', '==', false)
       .limit(100)
@@ -35589,45 +35991,20 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
             continue;
           }
 
-          // Enviar notificación push
+          // Enviar notificación push (usa sendPushNotification para soportar Expo + FCM)
           try {
-            const messaging = admin.messaging();
-            const promises = tokens.map(token =>
-              messaging.send({
-                token,
-                notification: {
-                  title: notif.title,
-                  body: notif.body
-                },
-                data: Object.entries(notif.data || {}).reduce((acc, [key, val]) => {
-                  acc[key] = String(val);
-                  return acc;
-                }, {}),
-                android: {
-                  priority: 'high',
-                  notification: {
-                    sound: 'default',
-                    channelId: 'medication_reminders',
-                    priority: 'high'
-                  }
-                },
-                apns: {
-                  headers: { 'apns-priority': '10' },
-                  payload: {
-                    aps: {
-                      sound: 'default',
-                      badge: 1,
-                      'content-available': 1
-                    }
-                  }
-                }
-              }).catch(err => {
-                console.error(`❌ [CRON] Error enviando a token ${token.substring(0, 20)}...`, err.message);
-                return null;
-              })
-            );
+            const data = Object.entries(notif.data || {}).reduce((acc, [key, val]) => {
+              acc[key] = String(val);
+              return acc;
+            }, {});
+            const pushResult = await sendPushNotification(tokens, {
+              title: notif.title,
+              body: notif.body
+            }, data);
 
-            await Promise.all(promises);
+            if (!pushResult.success || (pushResult.successCount || 0) === 0) {
+              throw new Error(pushResult.message || pushResult.error || 'No se pudo enviar a ningún dispositivo');
+            }
 
             // Guardar en historial de notificaciones
             await db.collection('notifications').add({
@@ -35643,14 +36020,15 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
             });
 
             // Marcar como enviado
+            const deliveredCount = pushResult.successCount || 0;
             await doc.ref.update({ 
               sent: true, 
               sentAt: now,
-              sentToTokens: tokens.length
+              sentToTokens: deliveredCount
             });
             
             sentCount++;
-            console.log(`✅ [CRON] Notificación enviada a ${tokens.length} dispositivo(s)`);
+            console.log(`✅ [CRON] Notificación enviada a ${deliveredCount}/${tokens.length} dispositivo(s)`);
 
             // Programar follow-up si aplica
             if (notif.type === 'medication_reminder' && notif.followUpMinutes) {
@@ -35696,6 +36074,262 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
 
   } catch (error) {
     console.error('❌ [CRON] Error general procesando medicamentos:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ============== CRON: PUSH DIARIO DE RECETA ==============
+/**
+ * Envía push diario a mamás: "¿Ya le preparaste [receta] a [niño]?"
+ * Respeta la hora local del usuario (11:00 AM en su timezone)
+ * El cron corre cada hora; solo envía a usuarios cuya hora local sea 11:00
+ */
+app.get('/api/cron/recipe-daily-reminder', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const cronSecretHeader = req.headers['x-cron-secret'];
+    const expectedSecret = process.env.CRON_SECRET;
+
+    if (!expectedSecret) {
+      return res.status(500).json({ success: false, message: 'CRON_SECRET not configured' });
+    }
+    if (authHeader !== `Bearer ${expectedSecret}` && cronSecretHeader !== expectedSecret) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!db || !openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'Servicio no disponible (db o OpenAI)'
+      });
+    }
+
+    const TimezoneHelper = require('./utils/timezoneHelper');
+    const RECIPE_PUSH_HOUR = 11; // 11:00 AM hora local del usuario
+
+    console.log('🍽️ [CRON] Iniciando push diario de recetas (respeta timezone usuario)...');
+    const now = new Date();
+    const mealType = 'lunch';
+    const mealTypeNames = { breakfast: 'desayuno', lunch: 'almuerzo', dinner: 'cena' };
+    const mealName = mealTypeNames[mealType];
+    // No usar caché en el cron: siempre generar receta nueva cada día para variedad
+    const USE_CACHE_FOR_CRON = false;
+
+    let sent = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    const usersSnapshot = await db.collection('users').get();
+
+    for (const userDoc of usersSnapshot.docs) {
+      try {
+        const userData = userDoc.data();
+        const userId = userDoc.id;
+        if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+          skipped++;
+          continue;
+        }
+
+        const childrenSnapshot = await db.collection('children')
+          .where('parentId', '==', userId)
+          .get();
+        const sharedSnapshot = await db.collection('children')
+          .where('sharedWith', 'array-contains', userId)
+          .get();
+        const allChildren = [...childrenSnapshot.docs, ...sharedSnapshot.docs];
+
+        const eligibleChildren = [];
+        for (const childDoc of allChildren) {
+          const childData = childDoc.data();
+          const birthDateRaw = childData.birthDate;
+          if (!birthDateRaw) continue;
+          const birthDate = birthDateRaw.toDate ? birthDateRaw.toDate() : new Date(birthDateRaw);
+          const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+          if (ageMonths >= 6) {
+            eligibleChildren.push({
+              id: childDoc.id,
+              ...childData,
+              ageMonths
+            });
+          }
+        }
+
+        if (eligibleChildren.length === 0) {
+          skipped++;
+          continue;
+        }
+
+        const child = eligibleChildren[0];
+        const userTimezone = child.timezone || userData.timezone || 'America/Mexico_City';
+        const nowInUserTZ = TimezoneHelper.getNowInUserTimezone(userTimezone);
+        const userLocalHour = nowInUserTZ.getHours();
+
+        if (userLocalHour !== RECIPE_PUSH_HOUR) {
+          skipped++;
+          continue; // No es 11:00 en la zona horaria del usuario
+        }
+        const childId = child.id;
+        const childName = child.name || 'tu bebé';
+        const ageMonths = child.ageMonths;
+        const ageYears = Math.floor(ageMonths / 12);
+        const remainingMonths = ageMonths % 12;
+
+        let recipe = null;
+        if (USE_CACHE_FOR_CRON) {
+          try {
+            const cacheCutoff = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+            const cachedSnapshot = await db.collection('homeRecipeCache')
+              .where('childId', '==', childId)
+              .where('mealType', '==', mealType)
+              .orderBy('createdAt', 'desc')
+              .limit(1)
+              .get();
+            if (!cachedSnapshot.empty) {
+              const cached = cachedSnapshot.docs[0].data();
+              const cachedAt = cached.createdAt?.toDate?.() || new Date(cached.createdAt);
+              const todayStr = TimezoneHelper.formatInUserTimezone(now, userTimezone, 'yyyy-MM-dd');
+              const cachedDayStr = TimezoneHelper.formatInUserTimezone(cachedAt, userTimezone, 'yyyy-MM-dd');
+              if (cachedAt >= cacheCutoff && cachedDayStr === todayStr) {
+                recipe = cached.recipe;
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (!recipe) {
+          let ageContext = '';
+          if (ageMonths < 12) {
+            ageContext = `Bebé de ${ageMonths} meses en alimentación complementaria. Papillas, purés suaves. Sin sal, sin azúcar, sin miel.`;
+          } else if (ageMonths < 24) {
+            ageContext = `Niño de ${ageYears > 0 ? ageYears + ' año' + (remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : '') : ageMonths + ' meses'}. Alimentos más sólidos, comida picada. Baja sal.`;
+          } else if (ageMonths < 36) {
+            ageContext = `Niño de ${ageYears} años. Porciones pequeñas.`;
+          } else {
+            ageContext = `Niño de ${ageYears} años. Alimentación saludable.`;
+          }
+
+          const todayStr = TimezoneHelper.formatInUserTimezone(now, userTimezone, 'yyyy-MM-dd');
+          const prompt = `Eres un nutricionista pediátrico. Genera UNA receta de ${mealName} para: ${ageContext}
+
+IMPORTANTE: Genera una receta DIFERENTE y variada. Varía los ingredientes, evita repetir siempre puré de verduras o papilla de avena. Sé creativo (ej: crema de brócoli, pollo con zanahoria, tortilla de espinaca, etc.). Fecha de hoy: ${todayStr}.
+
+Devuelve SOLO JSON: {"recipes":[{"mealType":"${mealType}","name":"Nombre","description":"...","prepTime":10,"cookTime":15,"servings":2,"difficulty":"fácil","ingredients":[{"item":"x","quantity":"1"}],"instructions":["Paso 1"],"nutritionalInfo":{"calories":"-","protein":"-","carbs":"-","fat":"-"},"tips":[],"allergens":[]}]}`;
+
+          const completion = await openai.chat.completions.create({
+            model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+            messages: [
+              { role: 'system', content: 'Responde solo JSON válido. Varía las recetas cada vez.' },
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.95,
+            max_tokens: 800
+          });
+
+          const responseText = completion.choices[0]?.message?.content;
+          if (!responseText) continue;
+
+          let recipesData;
+          try {
+            const cleaned = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            recipesData = JSON.parse(cleaned);
+          } catch {
+            continue;
+          }
+
+          const raw = recipesData.recipes?.[0];
+          if (!raw) continue;
+
+          recipe = {
+            name: raw.name || 'Receta',
+            mealType: raw.mealType || mealType,
+            description: raw.description || '',
+            prepTime: parseInt(raw.prepTime, 10) || 0,
+            cookTime: parseInt(raw.cookTime, 10) || 0,
+            servings: parseInt(raw.servings, 10) || 2,
+            difficulty: raw.difficulty || 'fácil',
+            ingredients: Array.isArray(raw.ingredients)
+              ? raw.ingredients.map(ing => typeof ing === 'string' ? { item: ing, quantity: '' } : { item: String(ing?.item || ing?.name || ''), quantity: String(ing?.quantity || '') })
+              : [],
+            instructions: Array.isArray(raw.instructions) ? raw.instructions : (raw.instructions ? [raw.instructions] : []),
+            nutritionalInfo: raw.nutritionalInfo && typeof raw.nutritionalInfo === 'object'
+              ? { calories: String(raw.nutritionalInfo.calories || '-'), protein: String(raw.nutritionalInfo.protein || '-'), carbs: String(raw.nutritionalInfo.carbs || '-'), fat: String(raw.nutritionalInfo.fat || '-') }
+              : { calories: '-', protein: '-', carbs: '-', fat: '-' },
+            tips: Array.isArray(raw.tips) ? raw.tips : [],
+            allergens: Array.isArray(raw.allergens) ? raw.allergens : []
+          };
+
+          const recipeRef = await db.collection('recipes').add({
+            userId,
+            childId,
+            childName,
+            mealType,
+            ageMonths,
+            ...recipe,
+            source: 'daily_push',
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          recipe.id = recipeRef.id;
+
+          await db.collection('homeRecipeCache').add({
+            childId,
+            mealType,
+            recipe: { ...recipe, childId, childName, ageMonths, generatedAt: new Date().toISOString() },
+            ageMonths,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        const recipeName = recipe?.name || 'la receta del día';
+        const recipeId = recipe?.id || '';
+        const title = `¿Ya le preparaste ${recipeName} a ${childName}?`;
+        const body = `Receta del día para ${childName}`;
+
+        await sendPushNotification(
+          userData.fcmTokens,
+          { title, body },
+          {
+            type: 'recipe_daily_reminder',
+            recipeId,
+            childId,
+            childName,
+            recipeName,
+            screen: 'RecipeDetail',
+            screenParams: recipeId
+          }
+        );
+
+        await db.collection('notifications').add({
+          userId,
+          type: 'recipe_daily_reminder',
+          title,
+          body,
+          data: { childId, childName, recipeName, recipeId },
+          read: false,
+          createdAt: new Date()
+        });
+
+        sent++;
+        console.log(`✅ [CRON] Push receta enviado a ${userId} (${childName}: ${recipeName})`);
+      } catch (err) {
+        console.error(`❌ [CRON] Error usuario ${userDoc.id}:`, err.message);
+        errors++;
+      }
+    }
+
+    console.log(`🍽️ [CRON] Recetas: ${sent} enviados, ${skipped} omitidos, ${errors} errores`);
+    res.json({
+      success: true,
+      sent,
+      skipped,
+      errors,
+      timestamp: now.toISOString()
+    });
+  } catch (error) {
+    console.error('❌ [CRON] Error push recetas:', error);
     res.status(500).json({
       success: false,
       error: error.message,
@@ -37571,7 +38205,7 @@ app.put('/api/admin/professionals/requests/:id', authenticateToken, isAdmin, asy
 app.patch('/api/admin/professionals/requests/:id/status', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, notes } = req.body || {};
+    const { status, notes, recommendationAction, existingRecommendationId } = req.body || {};
     if (!['pending', 'approved', 'rejected'].includes(status)) {
       return res.status(400).json({ success: false, message: 'status inválido' });
     }
@@ -37587,12 +38221,57 @@ app.patch('/api/admin/professionals/requests/:id/status', authenticateToken, isA
 
     let professionalId = requestData.professionalId || null;
     let professionalPayload = null;
+    let recommendationId = null;
+
     if (status === 'approved') {
       if (professionalId) {
         return res.status(400).json({
           success: false,
           message: 'La solicitud ya tiene un perfil asociado',
           professionalId
+        });
+      }
+
+      // Validar acción de recomendado
+      if (recommendationAction === 'assign_existing') {
+        if (!existingRecommendationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Debe proporcionar existingRecommendationId cuando recommendationAction es "assign_existing"'
+          });
+        }
+
+        // Verificar que el recomendado existe
+        const existingRecDoc = await db.collection('recommendations').doc(existingRecommendationId).get();
+        if (!existingRecDoc.exists) {
+          return res.status(404).json({
+            success: false,
+            message: 'El recomendado especificado no existe'
+          });
+        }
+
+        // Verificar que no esté ya asignado a otro profesional
+        const existingRecData = existingRecDoc.data();
+        if (existingRecData.professionalId) {
+          return res.status(400).json({
+            success: false,
+            message: 'El recomendado ya está asignado a otro profesional'
+          });
+        }
+
+        recommendationId = existingRecommendationId;
+        console.log('✅ [PRO-REQ] Asignando recomendado existente:', recommendationId);
+
+      } else if (recommendationAction === 'create_new' || !recommendationAction) {
+        // Lógica existente para crear nuevo recomendado
+        console.log('🏢 [PRO-REQ] Creando nuevo recomendado para profesional');
+      } else if (recommendationAction === 'none') {
+        // No crear ni asignar recomendado
+        console.log('ℹ️ [PRO-REQ] No se creará recomendado para este profesional');
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'recommendationAction inválido. Use: "create_new", "assign_existing", o "none"'
         });
       }
       const missingFields = [];
@@ -37663,6 +38342,108 @@ app.patch('/api/admin/professionals/requests/:id/status', authenticateToken, isA
       });
       const createdRef = await db.collection('professionals').add(payload);
       professionalId = createdRef.id;
+
+      // Manejar la creación/asignación del recomendado
+      if (recommendationAction === 'create_new' || !recommendationAction) {
+        // Crear automáticamente un recomendado para el profesional aprobado
+        try {
+          console.log('🏢 [PRO-REQ] Creando recomendado para profesional:', professionalId);
+
+          // Buscar o crear categoría de recomendación basada en la categoría del perfil profesional
+          let recommendationCategoryId = null;
+          const profileCategory = categoryData;
+
+          // Buscar si ya existe una categoría de recomendación con el mismo nombre
+          const existingRecCategory = await db.collection('categories')
+            .where('name', '==', profileCategory.name)
+            .limit(1)
+            .get();
+
+          if (!existingRecCategory.empty) {
+            recommendationCategoryId = existingRecCategory.docs[0].id;
+          } else {
+            // Crear nueva categoría de recomendación
+            const recCategoryData = {
+              name: profileCategory.name,
+              icon: profileCategory.logoUrl ? 'professional' : 'service',
+              order: 999,
+              isActive: true,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            };
+            const recCategoryRef = await db.collection('categories').add(recCategoryData);
+            recommendationCategoryId = recCategoryRef.id;
+            console.log('✅ [PRO-REQ] Nueva categoría de recomendación creada:', recommendationCategoryId);
+          }
+
+          // Crear el recomendado
+          const recommendationData = {
+            categoryId: recommendationCategoryId,
+            name: requestData.businessName,
+            description: requestData.summary,
+            address: requestData.address,
+            latitude: parseFloat(requestData.latitude),
+            longitude: parseFloat(requestData.longitude),
+            phone: '', // Los profesionales pueden actualizarlo después
+            email: '', // Los profesionales pueden actualizarlo después
+            website: requestData.website || '',
+            facebook: '',
+            instagram: requestData.instagram || '',
+            twitter: '',
+            whatsapp: requestData.whatsappLink || '',
+            imageUrl: requestData.logoUrl,
+            countryId: requestData.countryId,
+            countryName: requestData.countryName,
+            cityId: requestData.cityId,
+            cityName: requestData.cityName,
+            isActive: true,
+            verified: false, // Los admins pueden verificar después
+            badges: [],
+            features: {
+              hasChangingTable: false,
+              hasNursingRoom: false,
+              hasParking: false,
+              isStrollerAccessible: false,
+              acceptsEmergencies: false,
+              is24Hours: false
+            },
+            professionalId: professionalId, // Vincular con el perfil profesional
+            createdAt: new Date(),
+            updatedAt: new Date()
+          };
+
+          const recRef = await db.collection('recommendations').add(recommendationData);
+          recommendationId = recRef.id;
+
+          console.log('✅ [PRO-REQ] Recomendado creado para profesional:', recommendationId);
+
+        } catch (recError) {
+          console.error('⚠️ [PRO-REQ] Error creando recomendado, pero profesional aprobado:', recError);
+          // No fallar la aprobación si falla la creación del recomendado
+        }
+
+      } else if (recommendationAction === 'assign_existing') {
+        // Asignar el recomendado existente al profesional
+        try {
+          await db.collection('recommendations').doc(existingRecommendationId).update({
+            professionalId: professionalId,
+            updatedAt: new Date()
+          });
+          recommendationId = existingRecommendationId;
+          console.log('✅ [PRO-REQ] Recomendado existente asignado:', recommendationId);
+        } catch (assignError) {
+          console.error('⚠️ [PRO-REQ] Error asignando recomendado existente:', assignError);
+          // No fallar la aprobación si falla la asignación
+        }
+      }
+
+      // Actualizar el perfil profesional con el ID del recomendado (si existe)
+      if (recommendationId) {
+        await createdRef.update({
+          recommendationId: recommendationId,
+          updatedAt: new Date()
+        });
+      }
     }
 
     await requestRef.update(stripUndefined({
@@ -37672,7 +38453,7 @@ app.patch('/api/admin/professionals/requests/:id/status', authenticateToken, isA
       updatedAt: new Date()
     }));
 
-    res.json({ success: true, data: { id, status, professionalId: professionalId || null } });
+    res.json({ success: true, data: { id, status, professionalId: professionalId || null, recommendationId: recommendationId || null } });
   } catch (error) {
     console.error('❌ [PRO-REQ] Error actualizando solicitud:', error);
     res.status(500).json({ success: false, message: 'Error actualizando solicitud', error: error.message });
@@ -38841,8 +39622,777 @@ app.delete('/api/professionals/me/packages/:packageId', authenticateToken, async
 });
 
 
-// ============================================================================
-// 📊 HITOS DEL DESARROLLO INFANTIL
+// ==========================================
+// GESTIÓN DE RECOMENDADO PROPIO (Profesionales)
+// ==========================================
+
+// Obtener mi recomendado
+app.get('/api/professionals/me/recommendation', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    // Buscar el perfil profesional del usuario
+    const profSnapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    if (profSnapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+    }
+
+    const profData = profSnapshot.docs[0].data();
+    const recommendationId = profData.recommendationId;
+
+    if (!recommendationId) {
+      return res.status(404).json({ success: false, message: 'No tienes un recomendado asignado' });
+    }
+
+    // Obtener el recomendado
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Recomendado no encontrado' });
+    }
+
+    // Obtener información de la categoría
+    const recData = recDoc.data();
+    let categoryData = null;
+    if (recData.categoryId) {
+      const catDoc = await db.collection('categories').doc(recData.categoryId).get();
+      if (catDoc.exists) {
+        categoryData = { id: catDoc.id, ...catDoc.data() };
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: recDoc.id,
+        ...recData,
+        category: categoryData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [PRO] Error obteniendo recomendado propio:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo recomendado', error: error.message });
+  }
+});
+
+// Actualizar mi recomendado
+app.put('/api/professionals/me/recommendation', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    // Buscar el perfil profesional del usuario
+    const profSnapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    if (profSnapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+    }
+
+    const profData = profSnapshot.docs[0].data();
+    const recommendationId = profData.recommendationId;
+
+    if (!recommendationId) {
+      return res.status(404).json({ success: false, message: 'No tienes un recomendado asignado' });
+    }
+
+    // Verificar que el recomendado existe
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Recomendado no encontrado' });
+    }
+
+    const {
+      name,
+      description,
+      address,
+      latitude,
+      longitude,
+      phone,
+      email,
+      website,
+      facebook,
+      instagram,
+      twitter,
+      whatsapp,
+      imageUrl,
+      countryId,
+      cityId
+    } = req.body;
+
+    // Resolver ubicación si se proporciona
+    let locationData = {};
+    if (countryId || cityId) {
+      try {
+        locationData = await resolveCountryCity(countryId, cityId);
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    // Preparar datos de actualización
+    const updateData = stripUndefined({
+      name: name ? name.trim() : undefined,
+      description: description ? description.trim() : undefined,
+      address: address ? address.trim() : undefined,
+      latitude: latitude ? parseFloat(latitude) : undefined,
+      longitude: longitude ? parseFloat(longitude) : undefined,
+      phone: phone ? phone.trim() : undefined,
+      email: email ? email.trim() : undefined,
+      website: website ? website.trim() : undefined,
+      facebook: facebook ? facebook.trim() : undefined,
+      instagram: instagram ? instagram.trim() : undefined,
+      twitter: twitter ? twitter.trim() : undefined,
+      whatsapp: whatsapp ? whatsapp.trim() : undefined,
+      imageUrl: imageUrl || undefined,
+      countryId: locationData.countryId || undefined,
+      countryName: locationData.countryName || undefined,
+      cityId: locationData.cityId || undefined,
+      cityName: locationData.cityName || undefined,
+      updatedAt: new Date()
+    });
+
+    // Actualizar el recomendado
+    await db.collection('recommendations').doc(recommendationId).update(updateData);
+
+    console.log('✅ [PRO] Recomendado propio actualizado:', recommendationId);
+
+    res.json({
+      success: true,
+      message: 'Recomendado actualizado exitosamente',
+      data: {
+        id: recommendationId,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando recomendado propio:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando recomendado', error: error.message });
+  }
+});
+
+
+// ==========================================
+// GESTIÓN DE RECOMENDADO POR ADMIN
+// ==========================================
+
+// Cambiar o asignar recomendado a un profesional (Admin)
+app.patch('/api/admin/professionals/:professionalId/recommendation', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { professionalId } = req.params;
+    const { action, recommendationId } = req.body;
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    // Verificar que el profesional existe
+    const profDoc = await db.collection('professionals').doc(professionalId).get();
+    if (!profDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Profesional no encontrado' });
+    }
+
+    const profData = profDoc.data();
+    const currentRecommendationId = profData.recommendationId;
+
+    if (action === 'assign') {
+      // Asignar un recomendado existente
+      if (!recommendationId) {
+        return res.status(400).json({ success: false, message: 'recommendationId es requerido para action=assign' });
+      }
+
+      // Verificar que el recomendado existe
+      const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+      if (!recDoc.exists) {
+        return res.status(404).json({ success: false, message: 'Recomendado no encontrado' });
+      }
+
+      // Verificar que no esté asignado a otro profesional
+      const recData = recDoc.data();
+      if (recData.professionalId && recData.professionalId !== professionalId) {
+        return res.status(400).json({ success: false, message: 'El recomendado ya está asignado a otro profesional' });
+      }
+
+      // Desvincular el recomendado anterior si existe
+      if (currentRecommendationId) {
+        await db.collection('recommendations').doc(currentRecommendationId).update({
+          professionalId: null,
+          updatedAt: new Date()
+        });
+      }
+
+      // Asignar el nuevo recomendado
+      await db.collection('recommendations').doc(recommendationId).update({
+        professionalId: professionalId,
+        updatedAt: new Date()
+      });
+
+      // Actualizar el profesional
+      await db.collection('professionals').doc(professionalId).update({
+        recommendationId: recommendationId,
+        updatedAt: new Date()
+      });
+
+      console.log('✅ [ADMIN] Recomendado asignado:', recommendationId, 'a profesional:', professionalId);
+
+    } else if (action === 'unlink') {
+      // Desvincular el recomendado actual
+      if (currentRecommendationId) {
+        await db.collection('recommendations').doc(currentRecommendationId).update({
+          professionalId: null,
+          updatedAt: new Date()
+        });
+      }
+
+      // Actualizar el profesional
+      await db.collection('professionals').doc(professionalId).update({
+        recommendationId: null,
+        updatedAt: new Date()
+      });
+
+      console.log('✅ [ADMIN] Recomendado desvinculado del profesional:', professionalId);
+
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'action inválido. Use: "assign" o "unlink"'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Recomendado ${action === 'assign' ? 'asignado' : 'desvinculado'} exitosamente`,
+      data: {
+        professionalId,
+        recommendationId: action === 'assign' ? recommendationId : null
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error gestionando recomendado del profesional:', error);
+    res.status(500).json({ success: false, message: 'Error gestionando recomendado', error: error.message });
+  }
+});
+
+
+// ==========================================
+// GESTIÓN DE PRODUCTOS POR PROFESIONALES
+// ==========================================
+
+// Obtener productos del profesional
+app.get('/api/professionals/me/products', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    // Buscar el perfil profesional del usuario
+    const profSnapshot = await db.collection('professionals')
+      .where('userId', '==', req.user.uid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    if (profSnapshot.empty) {
+      return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+    }
+
+    const profData = profSnapshot.docs[0].data();
+    const professionalId = profSnapshot.docs[0].id;
+
+    // Obtener productos del usuario que están marcados como relacionados con servicios profesionales
+    const productsSnapshot = await db.collection('marketplace_products')
+      .where('userId', '==', req.user.uid)
+      .where('isProfessionalService', '==', true)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const products = productsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      professionalId: professionalId,
+      professionalName: profData.name,
+      professionalHeadline: profData.headline
+    }));
+
+    res.json({
+      success: true,
+      data: products,
+      total: products.length
+    });
+
+  } catch (error) {
+    console.error('❌ [PRO] Error obteniendo productos del profesional:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo productos', error: error.message });
+  }
+});
+
+// Crear producto como profesional
+app.post('/api/professionals/me/products', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+
+    // Verificar que el usuario tiene un perfil profesional activo
+    const profSnapshot = await db.collection('professionals')
+      .where('userId', '==', uid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    if (profSnapshot.empty) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes tener un perfil profesional activo para crear productos de servicios'
+      });
+    }
+
+    const profData = profSnapshot.docs[0].data();
+    const professionalId = profSnapshot.docs[0].id;
+
+    const {
+      title,
+      description,
+      category,
+      condition,
+      photos,
+      type,
+      price,
+      tradeFor,
+      location,
+      cityId,
+      countryId,
+      serviceType, // Nuevo campo: tipo de servicio (consulta, taller, producto, etc.)
+      duration, // Duración en minutos
+      isVirtual, // Si es servicio virtual
+      maxParticipants // Para talleres/grupos
+    } = req.body;
+
+    // Validaciones básicas del marketplace
+    if (!title || title.trim().length < 10 || title.trim().length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'El título debe tener entre 10 y 100 caracteres'
+      });
+    }
+
+    if (!description || description.trim().length < 20 || description.trim().length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: 'La descripción debe tener entre 20 y 1000 caracteres'
+      });
+    }
+
+    // Validar categoría
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría es requerida'
+      });
+    }
+
+    let categoryDoc;
+    let categoryId;
+
+    categoryDoc = await db.collection('marketplace_categories').doc(category).get();
+
+    if (categoryDoc.exists) {
+      categoryId = categoryDoc.id;
+    } else {
+      const categoryQuery = await db.collection('marketplace_categories')
+        .where('slug', '==', category.toLowerCase())
+        .limit(1)
+        .get();
+
+      if (categoryQuery.empty) {
+        return res.status(400).json({
+          success: false,
+          message: 'Categoría inválida o no existe'
+        });
+      }
+
+      categoryDoc = categoryQuery.docs[0];
+      categoryId = categoryDoc.id;
+    }
+
+    const categoryData = categoryDoc.data();
+    if (!categoryData.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'La categoría no está disponible'
+      });
+    }
+
+    // Validaciones específicas para productos de profesionales
+    if (!serviceType || !['consulta', 'taller', 'producto', 'servicio', 'asesoria'].includes(serviceType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de servicio inválido. Use: consulta, taller, producto, servicio, asesoria'
+      });
+    }
+
+    if (serviceType === 'consulta' || serviceType === 'taller') {
+      if (!duration || duration < 30 || duration > 480) {
+        return res.status(400).json({
+          success: false,
+          message: 'La duración debe estar entre 30 y 480 minutos'
+        });
+      }
+    }
+
+    if (serviceType === 'taller' && (!maxParticipants || maxParticipants < 1 || maxParticipants > 50)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El número máximo de participantes debe estar entre 1 y 50'
+      });
+    }
+
+    // Validaciones del marketplace estándar
+    if (!condition || !PRODUCT_CONDITIONS.includes(condition)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Condición del producto inválida'
+      });
+    }
+
+    if (!photos || !Array.isArray(photos) || photos.length === 0 || photos.length > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Debes subir entre 1 y 5 fotos'
+      });
+    }
+
+    if (!type || !TRANSACTION_TYPES.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tipo de transacción inválido'
+      });
+    }
+
+    if (type === 'venta') {
+      if (!price || price <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'El precio es requerido para ventas y debe ser mayor a 0'
+        });
+      }
+    }
+
+    if (type === 'trueque') {
+      if (!tradeFor || tradeFor.trim().length < 5) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debes especificar qué buscas a cambio'
+        });
+      }
+    }
+
+    // Resolver ubicación
+    let locationData = { countryId: null, countryName: null, cityId: null, cityName: null };
+    if (!cityId && !countryId) {
+      locationData = await getDefaultUserLocation();
+    } else {
+      try {
+        locationData = await resolveCountryCity(countryId, cityId);
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message
+        });
+      }
+    }
+
+    let normalizedLocation = {
+      city: locationData.cityName || '',
+      state: '',
+      country: locationData.countryName || null
+    };
+    if (location && typeof location === 'object') {
+      const hasLat = location.latitude !== undefined && location.latitude !== null;
+      const hasLng = location.longitude !== undefined && location.longitude !== null;
+      normalizedLocation.city = location.city || locationData.cityName || '';
+      normalizedLocation.state = location.state || '';
+      normalizedLocation.country = location.country || locationData.countryName || null;
+      if (hasLat || hasLng) {
+        const lat = parseFloat(location.latitude);
+        const lng = parseFloat(location.longitude);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          normalizedLocation.latitude = lat;
+          normalizedLocation.longitude = lng;
+        }
+      }
+    }
+
+    // Obtener información del usuario
+    const userDoc = await db.collection('users').doc(uid).get();
+    const userData = userDoc.data();
+
+    // Crear producto con información profesional
+    const now = new Date();
+    const productData = {
+      userId: uid,
+      userName: userData?.displayName || userData?.name || 'Usuario',
+      userPhoto: userData?.photoUrl || null,
+
+      // Información del profesional
+      professionalId: professionalId,
+      professionalName: profData.name,
+      professionalHeadline: profData.headline,
+      professionalPhoto: profData.photoUrl,
+      professionalCategory: profData.profileCategory?.name || 'Profesional',
+
+      title: title.trim(),
+      description: description.trim(),
+      category: categoryId,
+      categoryName: categoryData.name,
+      categorySlug: categoryData.slug,
+      condition,
+      photos,
+
+      type,
+      price: type === 'venta' ? parseFloat(price) : null,
+      tradeFor: type === 'trueque' ? tradeFor.trim() : null,
+
+      location: normalizedLocation,
+      countryId: locationData.countryId,
+      countryName: locationData.countryName,
+      cityId: locationData.cityId,
+      cityName: locationData.cityName,
+
+      // Campos específicos de servicios profesionales
+      isProfessionalService: true,
+      serviceType: serviceType,
+      duration: duration || null,
+      isVirtual: isVirtual === true,
+      maxParticipants: maxParticipants || null,
+
+      status: 'disponible',
+
+      views: 0,
+      favorites: 0,
+      messages: 0,
+
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: now,
+      soldAt: null,
+
+      isApproved: true,
+      isReported: false,
+      reportCount: 0
+    };
+
+    const productRef = await db.collection('marketplace_products').add(productData);
+
+    console.log('✅ [PRO] Producto de servicio profesional creado:', productRef.id);
+
+    res.json({
+      success: true,
+      message: 'Producto de servicio profesional publicado exitosamente',
+      data: {
+        id: productRef.id,
+        ...productData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [PRO] Error creando producto de servicio profesional:', error);
+    res.status(500).json({ success: false, message: 'Error creando producto', error: error.message });
+  }
+});
+
+// Actualizar producto del profesional
+app.put('/api/professionals/me/products/:productId', authenticateToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { uid } = req.user;
+
+    // Verificar que el usuario tiene un perfil profesional
+    const profSnapshot = await db.collection('professionals')
+      .where('userId', '==', uid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    if (profSnapshot.empty) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes tener un perfil profesional activo'
+      });
+    }
+
+    // Verificar que el producto existe y pertenece al usuario
+    const productDoc = await db.collection('marketplace_products').doc(productId).get();
+    if (!productDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    }
+
+    const productData = productDoc.data();
+    if (productData.userId !== uid) {
+      return res.status(403).json({ success: false, message: 'No tienes permiso para editar este producto' });
+    }
+
+    if (!productData.isProfessionalService) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este producto no es un servicio profesional'
+      });
+    }
+
+    // Preparar campos actualizables
+    const {
+      title,
+      description,
+      condition,
+      photos,
+      type,
+      price,
+      tradeFor,
+      location,
+      cityId,
+      countryId,
+      serviceType,
+      duration,
+      isVirtual,
+      maxParticipants
+    } = req.body;
+
+    const updateData = stripUndefined({
+      title: title ? title.trim() : undefined,
+      description: description ? description.trim() : undefined,
+      condition: condition && PRODUCT_CONDITIONS.includes(condition) ? condition : undefined,
+      photos: photos && Array.isArray(photos) && photos.length >= 1 && photos.length <= 5 ? photos : undefined,
+      type: type && TRANSACTION_TYPES.includes(type) ? type : undefined,
+      price: (type === 'venta' && price && price > 0) ? parseFloat(price) : undefined,
+      tradeFor: (type === 'trueque' && tradeFor) ? tradeFor.trim() : undefined,
+      serviceType: serviceType && ['consulta', 'taller', 'producto', 'servicio', 'asesoria'].includes(serviceType) ? serviceType : undefined,
+      duration: duration && duration >= 30 && duration <= 480 ? duration : undefined,
+      isVirtual: isVirtual !== undefined ? Boolean(isVirtual) : undefined,
+      maxParticipants: maxParticipants && maxParticipants >= 1 && maxParticipants <= 50 ? maxParticipants : undefined,
+      updatedAt: new Date()
+    });
+
+    // Actualizar ubicación si se proporciona
+    if (cityId || countryId) {
+      try {
+        const locationData = await resolveCountryCity(countryId, cityId);
+        updateData.countryId = locationData.countryId;
+        updateData.countryName = locationData.countryName;
+        updateData.cityId = locationData.cityId;
+        updateData.cityName = locationData.cityName;
+
+        let normalizedLocation = {
+          city: locationData.cityName || '',
+          state: '',
+          country: locationData.countryName || null
+        };
+        if (location && typeof location === 'object') {
+          normalizedLocation.city = location.city || locationData.cityName || '';
+          normalizedLocation.state = location.state || '';
+          normalizedLocation.country = location.country || locationData.countryName || null;
+          if (location.latitude !== undefined && location.longitude !== undefined) {
+            const lat = parseFloat(location.latitude);
+            const lng = parseFloat(location.longitude);
+            if (!isNaN(lat) && !isNaN(lng)) {
+              normalizedLocation.latitude = lat;
+              normalizedLocation.longitude = lng;
+            }
+          }
+        }
+        updateData.location = normalizedLocation;
+      } catch (err) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+    }
+
+    await db.collection('marketplace_products').doc(productId).update(updateData);
+
+    console.log('✅ [PRO] Producto de servicio profesional actualizado:', productId);
+
+    res.json({
+      success: true,
+      message: 'Producto actualizado exitosamente',
+      data: {
+        id: productId,
+        ...updateData
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [PRO] Error actualizando producto de servicio profesional:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando producto', error: error.message });
+  }
+});
+
+// Eliminar producto del profesional
+app.delete('/api/professionals/me/products/:productId', authenticateToken, async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { uid } = req.user;
+
+    // Verificar que el usuario tiene un perfil profesional
+    const profSnapshot = await db.collection('professionals')
+      .where('userId', '==', uid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+
+    if (profSnapshot.empty) {
+      return res.status(403).json({
+        success: false,
+        message: 'Debes tener un perfil profesional activo'
+      });
+    }
+
+    // Verificar que el producto existe y pertenece al usuario
+    const productDoc = await db.collection('marketplace_products').doc(productId).get();
+    if (!productDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    }
+
+    const productData = productDoc.data();
+    if (productData.userId !== uid) {
+      return res.status(403).json({ success: false, message: 'No tienes permiso para eliminar este producto' });
+    }
+
+    if (!productData.isProfessionalService) {
+      return res.status(400).json({
+        success: false,
+        message: 'Este producto no es un servicio profesional'
+      });
+    }
+
+    // Marcar como vendido/eliminar en lugar de borrar físicamente
+    await db.collection('marketplace_products').doc(productId).update({
+      status: 'eliminado',
+      updatedAt: new Date()
+    });
+
+    console.log('✅ [PRO] Producto de servicio profesional eliminado:', productId);
+
+    res.json({
+      success: true,
+      message: 'Producto eliminado exitosamente'
+    });
+
+  } catch (error) {
+    console.error('❌ [PRO] Error eliminando producto de servicio profesional:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando producto', error: error.message });
+  }
+});
+
+
 // ============================================================================
 
 // ==========================================
@@ -40275,6 +41825,375 @@ app.get('/api/children/:childId/milestones/progress-report', authenticateToken, 
     res.status(500).json({
       success: false,
       message: 'Error generando reporte',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// HOME - RECETA CON IA (desayuno, almuerzo o cena según consulta)
+// ============================================================================
+
+/**
+ * GET /api/home/recipe
+ * Genera una receta con IA acorde a la edad del bebé.
+ * Query: childId (requerido), mealType (requerido: breakfast | lunch | dinner)
+ */
+app.get('/api/home/recipe', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId, mealType } = req.query;
+
+    if (!childId || !mealType) {
+      return res.status(400).json({
+        success: false,
+        message: 'childId y mealType son requeridos. mealType: breakfast, lunch o dinner'
+      });
+    }
+
+    const validMealTypes = ['breakfast', 'lunch', 'dinner'];
+    const mealTypeLower = String(mealType).toLowerCase();
+    if (!validMealTypes.includes(mealTypeLower)) {
+      return res.status(400).json({
+        success: false,
+        message: 'mealType debe ser: breakfast, lunch o dinner'
+      });
+    }
+
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        message: 'Base de datos no disponible'
+      });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Niño no encontrado'
+      });
+    }
+
+    const childData = childDoc.data();
+    const isParent = childData.parentId === uid;
+    const hasSharedAccess = childData.sharedWith && Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid);
+
+    if (!isParent && !hasSharedAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para acceder a este niño'
+      });
+    }
+
+    const mealTypeNames = { breakfast: 'desayuno', lunch: 'almuerzo', dinner: 'cena' };
+    const birthDateRaw = childData.birthDate;
+    if (!birthDateRaw) {
+      return res.status(400).json({
+        success: false,
+        message: 'El niño no tiene fecha de nacimiento registrada'
+      });
+    }
+    const birthDate = birthDateRaw.toDate ? birthDateRaw.toDate() : new Date(birthDateRaw);
+    const now = new Date();
+    const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+    const ageYears = Math.floor(ageMonths / 12);
+    const remainingMonths = ageMonths % 12;
+    const childName = childData.name || 'tu bebé';
+
+    if (ageMonths < 6) {
+      return res.json({
+        success: true,
+        data: null,
+        message: `${childName} está en periodo de lactancia exclusiva. Las recetas recomendadas son leche materna o fórmula según indicación.`,
+        metadata: {
+          childAge: { months: ageMonths, displayAge: `${ageMonths} meses` },
+          mealType: mealTypeLower
+        }
+      });
+    }
+
+    // Cache de 4 horas para reducir consultas a OpenAI
+    const CACHE_HOURS = 4;
+    const regenerate = req.query.regenerate === 'true';
+    if (!regenerate) {
+      const cacheCutoff = new Date(now.getTime() - CACHE_HOURS * 60 * 60 * 1000);
+      const cachedSnapshot = await db.collection('homeRecipeCache')
+        .where('childId', '==', childId)
+        .where('mealType', '==', mealTypeLower)
+        .orderBy('createdAt', 'desc')
+        .limit(1)
+        .get();
+
+      if (!cachedSnapshot.empty) {
+        const cached = cachedSnapshot.docs[0].data();
+        const cachedAt = cached.createdAt?.toDate?.() || new Date(cached.createdAt);
+        if (cachedAt >= cacheCutoff) {
+          const cacheAgeHours = (now - cachedAt) / (1000 * 60 * 60);
+          console.log(`✅ [HOME] Receta desde caché (${cacheAgeHours.toFixed(1)}h)`);
+          return res.json({
+            success: true,
+            data: cached.recipe,
+            metadata: {
+              childAge: {
+                months: ageMonths,
+                years: ageYears,
+                remainingMonths: remainingMonths,
+                displayAge: ageYears > 0
+                  ? `${ageYears} ${ageYears === 1 ? 'año' : 'años'}${remainingMonths > 0 ? ` y ${remainingMonths} meses` : ''}`
+                  : `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+              },
+              mealType: mealTypeLower,
+              mealName: mealTypeNames[mealTypeLower] || mealTypeLower,
+              cached: true,
+              cacheAgeHours: Math.round(cacheAgeHours * 10) / 10
+            }
+          });
+        }
+      }
+    }
+
+    if (!openai) {
+      return res.status(503).json({
+        success: false,
+        message: 'Servicio de generación de recetas no disponible',
+        error: 'OpenAI no configurado'
+      });
+    }
+
+    const mealName = mealTypeNames[mealTypeLower];
+
+    let ageContext = '';
+    if (ageMonths < 12) {
+      ageContext = `Bebé de ${ageMonths} meses en alimentación complementaria. Papillas, purés suaves, alimentos machacados. Sin sal, sin azúcar, sin miel.`;
+    } else if (ageMonths < 24) {
+      ageContext = `Niño de ${ageYears > 0 ? ageYears + ' año' + (remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : '') : ageMonths + ' meses'}. Alimentos más sólidos, texturas variadas, comida picada. Baja sal, sin azúcar añadido.`;
+    } else if (ageMonths < 36) {
+      ageContext = `Niño de ${ageYears} años${remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : ''}. Puede comer casi como adultos pero en porciones pequeñas.`;
+    } else {
+      ageContext = `Niño de ${ageYears} años${remainingMonths > 0 ? ' y ' + remainingMonths + ' meses' : ''}. Alimentación normal saludable.`;
+    }
+
+    const prompt = `Eres un nutricionista pediátrico experto. Genera UNA receta de ${mealName} para:
+
+${ageContext}
+
+IMPORTANTE: Receta nutritiva, balanceada, ingredientes fáciles de conseguir, preparación sencilla.
+
+Devuelve SOLO un JSON con esta estructura EXACTA:
+{
+  "recipes": [
+    {
+      "mealType": "${mealTypeLower}",
+      "name": "Nombre atractivo de la receta",
+      "description": "Breve descripción (1-2 líneas)",
+      "ageAppropriate": true,
+      "prepTime": número en minutos,
+      "cookTime": número en minutos,
+      "servings": número de porciones,
+      "difficulty": "fácil",
+      "ingredients": [
+        { "item": "ingrediente", "quantity": "cantidad con unidad" }
+      ],
+      "instructions": [
+        "Paso 1 detallado",
+        "Paso 2 detallado",
+        "etc..."
+      ],
+      "nutritionalInfo": {
+        "calories": "aproximado por porción",
+        "protein": "gramos aproximados",
+        "carbs": "gramos aproximados",
+        "fat": "gramos aproximados"
+      },
+      "tips": ["Consejo útil 1", "Consejo útil 2"],
+      "allergens": ["posibles alérgenos presentes"]
+    }
+  ]
+}
+
+Genera exactamente 1 receta. Devuelve SOLO el JSON, sin texto adicional.`;
+
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: 'Eres un nutricionista pediátrico experto. Siempre respondes en formato JSON válido.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.8,
+      max_tokens: 1500
+    });
+
+    const responseText = completion.choices[0]?.message?.content;
+    if (!responseText) {
+      throw new Error('OpenAI no devolvió respuesta');
+    }
+
+    console.log(`✅ [HOME] Receta de ${mealName} generada para ${childName} (${ageMonths} meses)`);
+
+    let recipesData;
+    try {
+      const cleanedResponse = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      recipesData = JSON.parse(cleanedResponse);
+    } catch (parseError) {
+      console.error('❌ [HOME] Error parseando JSON:', parseError.message);
+      throw new Error('Error procesando respuesta de IA');
+    }
+
+    const rawRecipe = recipesData.recipes?.[0];
+    if (!rawRecipe) {
+      throw new Error('Formato de respuesta inválido');
+    }
+
+    const recipe = {
+      id: `recipe_home_${Date.now()}`,
+      mealType: rawRecipe.mealType || mealTypeLower,
+      name: rawRecipe.name || 'Receta',
+      description: rawRecipe.description || '',
+      ageAppropriate: rawRecipe.ageAppropriate !== false,
+      prepTime: parseInt(rawRecipe.prepTime, 10) || 0,
+      cookTime: parseInt(rawRecipe.cookTime, 10) || 0,
+      servings: parseInt(rawRecipe.servings, 10) || 2,
+      difficulty: rawRecipe.difficulty || 'fácil',
+      ingredients: Array.isArray(rawRecipe.ingredients)
+        ? rawRecipe.ingredients.map(ing => typeof ing === 'string' ? { item: ing, quantity: '' } : { item: String(ing?.item || ing?.name || ''), quantity: String(ing?.quantity || '') })
+        : [],
+      instructions: Array.isArray(rawRecipe.instructions) ? rawRecipe.instructions : (rawRecipe.instructions ? [rawRecipe.instructions] : []),
+      nutritionalInfo: rawRecipe.nutritionalInfo && typeof rawRecipe.nutritionalInfo === 'object'
+        ? { calories: String(rawRecipe.nutritionalInfo.calories || '-'), protein: String(rawRecipe.nutritionalInfo.protein || '-'), carbs: String(rawRecipe.nutritionalInfo.carbs || '-'), fat: String(rawRecipe.nutritionalInfo.fat || '-') }
+        : { calories: '-', protein: '-', carbs: '-', fat: '-' },
+      tips: Array.isArray(rawRecipe.tips) ? rawRecipe.tips : [],
+      allergens: Array.isArray(rawRecipe.allergens) ? rawRecipe.allergens : [],
+      childId,
+      childName,
+      ageMonths,
+      generatedAt: new Date().toISOString()
+    };
+
+    // Guardar en colección recipes (para consultar por ID desde push)
+    let recipeId = recipe.id || '';
+    try {
+      const recipeRef = await db.collection('recipes').add({
+        userId: uid,
+        childId,
+        childName,
+        mealType: mealTypeLower,
+        ageMonths,
+        ...recipe,
+        source: 'home',
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      recipeId = recipeRef.id;
+      recipe.id = recipeId;
+    } catch (saveErr) {
+      console.warn('⚠️ [HOME] Error guardando receta:', saveErr.message);
+    }
+
+    // Guardar en caché (4 horas)
+    try {
+      await db.collection('homeRecipeCache').add({
+        childId,
+        mealType: mealTypeLower,
+        recipe: { ...recipe, id: recipeId },
+        ageMonths,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      console.log(`💾 [HOME] Receta guardada en caché (4h)`);
+    } catch (cacheErr) {
+      console.warn('⚠️ [HOME] Error guardando caché:', cacheErr.message);
+    }
+
+    res.json({
+      success: true,
+      data: { ...recipe, id: recipeId },
+      metadata: {
+        childAge: {
+          months: ageMonths,
+          years: ageYears,
+          remainingMonths: remainingMonths,
+          displayAge: ageYears > 0 
+            ? `${ageYears} ${ageYears === 1 ? 'año' : 'años'}${remainingMonths > 0 ? ` y ${remainingMonths} meses` : ''}`
+            : `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`
+        },
+        mealType: mealTypeLower,
+        mealName,
+        cached: false
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [HOME] Error generando receta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generando receta',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// RECETAS - Obtener por ID (para abrir desde push)
+// ============================================================================
+
+/**
+ * GET /api/recipes/:id
+ * Obtiene una receta guardada por ID. Usado cuando el usuario hace click en el push.
+ */
+app.get('/api/recipes/:id', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { id } = req.params;
+
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Servicio no disponible' });
+    }
+
+    const recipeDoc = await db.collection('recipes').doc(id).get();
+    if (!recipeDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Receta no encontrada'
+      });
+    }
+
+    const data = recipeDoc.data();
+    if (data.userId !== uid) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permiso para ver esta receta'
+      });
+    }
+
+    const recipe = {
+      id: recipeDoc.id,
+      name: data.name,
+      description: data.description || '',
+      mealType: data.mealType || 'lunch',
+      prepTime: data.prepTime || 0,
+      cookTime: data.cookTime || 0,
+      servings: data.servings || 2,
+      difficulty: data.difficulty || 'fácil',
+      ingredients: data.ingredients || [],
+      instructions: data.instructions || [],
+      nutritionalInfo: data.nutritionalInfo || { calories: '-', protein: '-', carbs: '-', fat: '-' },
+      tips: data.tips || [],
+      allergens: data.allergens || [],
+      childId: data.childId,
+      childName: data.childName,
+      ageMonths: data.ageMonths,
+      source: data.source || 'daily_push',
+      createdAt: data.createdAt?.toDate?.()?.toISOString() || data.createdAt
+    };
+
+    res.json({
+      success: true,
+      data: recipe
+    });
+  } catch (error) {
+    console.error('❌ [RECIPES] Error obteniendo receta:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error obteniendo receta',
       error: error.message
     });
   }
