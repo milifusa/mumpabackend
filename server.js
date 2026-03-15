@@ -46228,6 +46228,7 @@ app.get('/api/admin/service-requests', authenticateToken, isAdmin, async (req, r
 app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { requestId } = req.params;
+    const { recommendationId } = req.body; // Opcional: vincular a un recomendado existente
     
     const requestDoc = await db.collection('serviceRequests').doc(requestId).get();
     
@@ -46284,6 +46285,22 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
     
     const professionalRef = await db.collection('professionals').add(professionalData);
     
+    // Vincular recomendado si se proporcionó
+    if (recommendationId) {
+      const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+      if (recDoc.exists) {
+        await db.collection('professionals').doc(professionalRef.id).update({
+          recommendationId: recommendationId,
+          updatedAt: new Date()
+        });
+        await db.collection('recommendations').doc(recommendationId).update({
+          professionalId: professionalRef.id,
+          updatedAt: new Date()
+        });
+        console.log(`✅ [ADMIN] Recomendado ${recommendationId} vinculado al profesional ${professionalRef.id}`);
+      }
+    }
+    
     // Vincular perfil al usuario para que pueda administrar productos desde el app
     await db.collection('users').doc(requestData.userId).update({
       professionalProfile: {
@@ -46300,6 +46317,7 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
     await db.collection('serviceRequests').doc(requestId).update({
       status: 'approved',
       approvedProfessionalId: professionalRef.id,
+      recommendationId: recommendationId || null,
       reviewedAt: new Date(),
       reviewedBy: req.user.email || req.user.uid,
       updatedAt: new Date()
