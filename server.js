@@ -6463,6 +6463,7 @@ app.get('/api/categories/:categoryId', authenticateToken, async (req, res) => {
       error: error.message
     });
   }
+});
 
 // Obtener productos/servicios ofrecidos por un recomendado (para la app de usuario)
 app.get('/api/recommendations/:recommendationId/products', authenticateToken, async (req, res) => {
