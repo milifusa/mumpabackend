@@ -12162,7 +12162,8 @@ app.get('/api/auth/profile', authenticateToken, async (req, res) => {
           cityId: firestoreData.cityId || null,
           cityName: firestoreData.cityName || null,
           // ✨ NUEVO: Perfil profesional si existe
-          professionalProfile: firestoreData.professionalProfile || null
+          professionalProfile: firestoreData.professionalProfile || null,
+          name: firestoreData.displayName || firestoreData.name || null
         };
       }
     }
@@ -14069,8 +14070,18 @@ app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
 
-    // Obtener información del usuario
     const userRecord = await auth.getUser(uid);
+
+    let professionalProfile = null;
+    let firestoreName = null;
+    if (db) {
+      const userDoc = await db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        const d = userDoc.data();
+        professionalProfile = d.professionalProfile || null;
+        firestoreName = d.displayName || d.name || null;
+      }
+    }
 
     res.json({
       success: true,
@@ -14078,8 +14089,10 @@ app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
       data: {
         uid: userRecord.uid,
         email: userRecord.email,
-        displayName: userRecord.displayName,
-        emailVerified: userRecord.emailVerified
+        displayName: userRecord.displayName || firestoreName,
+        name: userRecord.displayName || firestoreName,
+        emailVerified: userRecord.emailVerified,
+        professionalProfile
       }
     });
 
