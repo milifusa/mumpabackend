@@ -14080,6 +14080,24 @@ app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
         const d = userDoc.data();
         professionalProfile = d.professionalProfile || null;
         firestoreName = d.displayName || d.name || null;
+
+        // Sincronizar custom claims si no están seteados o están desactualizados
+        const currentClaims = userRecord.customClaims || {};
+        const hasValidClaim = currentClaims.professionalProfile?.isActive === professionalProfile?.isActive
+          && currentClaims.professionalProfile?.specialistId === professionalProfile?.specialistId;
+
+        if (professionalProfile && !hasValidClaim) {
+          await auth.setCustomUserClaims(uid, {
+            ...currentClaims,
+            professionalProfile: {
+              isActive: professionalProfile.isActive,
+              specialistId: professionalProfile.specialistId,
+              specialistName: professionalProfile.specialistName,
+              accountType: professionalProfile.accountType
+            }
+          });
+          console.log('✅ [VERIFY-TOKEN] Custom claims sincronizados para:', uid);
+        }
       }
     }
 
@@ -46323,16 +46341,28 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
     }
     
     // Vincular perfil al usuario para que pueda administrar productos desde el app
+    const professionalProfileData = {
+      isActive: true,
+      specialistId: professionalRef.id,
+      specialistName: requestData.businessName,
+      accountType: 'service',
+      verifiedAt: new Date()
+    };
     await db.collection('users').doc(requestData.userId).update({
+      professionalProfile: professionalProfileData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Setear custom claim en Firebase Auth para que el app lo reciba en el token
+    await auth.setCustomUserClaims(requestData.userId, {
       professionalProfile: {
         isActive: true,
         specialistId: professionalRef.id,
         specialistName: requestData.businessName,
-        accountType: 'service',
-        verifiedAt: new Date()
-      },
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        accountType: 'service'
+      }
     });
+    console.log('✅ [ADMIN] Custom claim professionalProfile seteado para:', requestData.userId);
     
     // Actualizar solicitud
     await db.collection('serviceRequests').doc(requestId).update({
