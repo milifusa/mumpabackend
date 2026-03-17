@@ -9264,10 +9264,11 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
     if (data.professionalId) {
       const bannersSnap = await db.collection('professional_banners')
         .where('recommendationId', '==', recDoc.id)
-        .where('isActive', '==', true)
-        .orderBy('order', 'asc')
         .get();
-      professionalBanners = bannersSnap.docs.map(doc => {
+      professionalBanners = bannersSnap.docs
+        .filter(doc => doc.data().isActive !== false)
+        .sort((a, b) => (a.data().order || 0) - (b.data().order || 0))
+        .map(doc => {
         const bd = doc.data();
         return {
           id: doc.id,
@@ -40526,7 +40527,7 @@ app.get('/api/professionals/me/products-selector', authenticateToken, async (req
         type: d.type,
         photos: d.photos?.[0] ? [d.photos[0]] : [],
         serviceType: d.serviceType || null,
-        category: d.category || null
+        categoryId: d.category || d.categoryId || null
       };
     });
 
