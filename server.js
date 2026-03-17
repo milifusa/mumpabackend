@@ -9259,6 +9259,26 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
       }
     }
 
+    // Obtener banners del profesional vinculado
+    let professionalBanners = [];
+    if (data.professionalId) {
+      const bannersSnap = await db.collection('professional_banners')
+        .where('recommendationId', '==', recDoc.id)
+        .where('isActive', '==', true)
+        .orderBy('order', 'asc')
+        .get();
+      professionalBanners = bannersSnap.docs.map(doc => ({
+        id: doc.id,
+        title: doc.data().title,
+        description: doc.data().description,
+        imageUrl: doc.data().imageUrl,
+        linkType: doc.data().linkType,
+        productId: doc.data().productId || null,
+        articleId: doc.data().articleId || null,
+        order: doc.data().order
+      }));
+    }
+
     res.json({
       success: true,
       data: {
@@ -9290,7 +9310,10 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
           isStrollerAccessible: false,
           acceptsEmergencies: false,
           is24Hours: false
-        }
+        },
+        // Banners del profesional vinculado
+        banners: professionalBanners,
+        hasBanners: professionalBanners.length > 0
       }
     });
 
@@ -40423,6 +40446,214 @@ app.delete('/api/professionals/me/products/:productId', authenticateToken, async
   } catch (error) {
     console.error('❌ [PRO] Error eliminando producto de servicio profesional:', error);
     res.status(500).json({ success: false, message: 'Error eliminando producto', error: error.message });
+  }
+});
+
+
+// ============================================================================
+// 🖼️ BANNERS DEL PERFIL PROFESIONAL (gestión propia)
+// ============================================================================
+
+// Helper: verificar profesional activo y obtener datos
+async function getProfessionalForUser(uid) {
+  const snap = await db.collection('professionals')
+    .where('userId', '==', uid)
+    .where('status', '==', 'active')
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  return { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+// GET /api/professionals/me/banners — listar banners propios
+app.get('/api/professionals/me/banners', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const snap = await db.collection('professional_banners')
+      .where('professionalId', '==', prof.id)
+      .orderBy('order', 'asc')
+      .get();
+
+    const banners = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, data: banners, total: banners.length });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error listando banners:', error);
+    res.status(500).json({ success: false, message: 'Error listando banners', error: error.message });
+  }
+});
+
+// POST /api/professionals/me/banners — crear banner
+app.post('/api/professionals/me/banners', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    if (!prof.recommendationId) {
+      return res.status(400).json({ success: false, message: 'No tienes un recomendado asignado' });
+    }
+
+    const { title, description, imageUrl, linkType = 'none', productId, articleId, order } = req.body;
+
+    if (!imageUrl) {
+      return res.status(400).json({ success: false, message: 'imageUrl es requerido' });
+    }
+
+    const validLinkTypes = ['product', 'article', 'appointment', 'none'];
+    if (!validLinkTypes.includes(linkType)) {
+      return res.status(400).json({ success: false, message: `linkType debe ser: ${validLinkTypes.join(', ')}` });
+    }
+
+    if (linkType === 'product' && !productId) {
+      return res.status(400).json({ success: false, message: 'productId es requerido cuando linkType es product' });
+    }
+    if (linkType === 'article' && !articleId) {
+      return res.status(400).json({ success: false, message: 'articleId es requerido cuando linkType es article' });
+    }
+    if (linkType === 'appointment' && prof.accountType !== 'medical') {
+      return res.status(400).json({ success: false, message: 'El tipo appointment solo está disponible para perfiles médicos' });
+    }
+
+    // Calcular order automático si no se pasa
+    let bannerOrder = order;
+    if (bannerOrder === undefined || bannerOrder === null) {
+      const countSnap = await db.collection('professional_banners')
+        .where('professionalId', '==', prof.id)
+        .get();
+      bannerOrder = countSnap.size;
+    }
+
+    const bannerData = {
+      professionalId: prof.id,
+      recommendationId: prof.recommendationId,
+      userId: req.user.uid,
+      title: title?.trim() || null,
+      description: description?.trim() || null,
+      imageUrl,
+      linkType,
+      productId: linkType === 'product' ? productId : null,
+      articleId: linkType === 'article' ? articleId : null,
+      order: bannerOrder,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const ref = await db.collection('professional_banners').add(bannerData);
+    console.log('✅ [PRO-BANNER] Banner creado:', ref.id);
+
+    res.json({ success: true, message: 'Banner creado exitosamente', data: { id: ref.id, ...bannerData } });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error creando banner:', error);
+    res.status(500).json({ success: false, message: 'Error creando banner', error: error.message });
+  }
+});
+
+// PUT /api/professionals/me/banners/:bannerId — actualizar banner
+app.put('/api/professionals/me/banners/:bannerId', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const { bannerId } = req.params;
+    const bannerDoc = await db.collection('professional_banners').doc(bannerId).get();
+    if (!bannerDoc.exists || bannerDoc.data().professionalId !== prof.id) {
+      return res.status(404).json({ success: false, message: 'Banner no encontrado' });
+    }
+
+    const { title, description, imageUrl, linkType, productId, articleId, order, isActive } = req.body;
+
+    const updateData = { updatedAt: new Date() };
+    if (title !== undefined) updateData.title = title?.trim() || null;
+    if (description !== undefined) updateData.description = description?.trim() || null;
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (order !== undefined) updateData.order = order;
+    if (isActive !== undefined) updateData.isActive = isActive;
+
+    if (linkType !== undefined) {
+      const validLinkTypes = ['product', 'article', 'appointment', 'none'];
+      if (!validLinkTypes.includes(linkType)) {
+        return res.status(400).json({ success: false, message: `linkType debe ser: ${validLinkTypes.join(', ')}` });
+      }
+      updateData.linkType = linkType;
+      updateData.productId = linkType === 'product' ? (productId || bannerDoc.data().productId) : null;
+      updateData.articleId = linkType === 'article' ? (articleId || bannerDoc.data().articleId) : null;
+    }
+
+    await db.collection('professional_banners').doc(bannerId).update(updateData);
+    res.json({ success: true, message: 'Banner actualizado', data: { id: bannerId, ...updateData } });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error actualizando banner:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando banner', error: error.message });
+  }
+});
+
+// DELETE /api/professionals/me/banners/:bannerId — eliminar banner
+app.delete('/api/professionals/me/banners/:bannerId', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const { bannerId } = req.params;
+    const bannerDoc = await db.collection('professional_banners').doc(bannerId).get();
+    if (!bannerDoc.exists || bannerDoc.data().professionalId !== prof.id) {
+      return res.status(404).json({ success: false, message: 'Banner no encontrado' });
+    }
+
+    await db.collection('professional_banners').doc(bannerId).delete();
+    res.json({ success: true, message: 'Banner eliminado' });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error eliminando banner:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando banner', error: error.message });
+  }
+});
+
+// POST /api/professionals/me/banners/reorder — reordenar banners
+app.post('/api/professionals/me/banners/reorder', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const { order } = req.body; // [{ id: 'bannerId', order: 0 }, ...]
+    if (!Array.isArray(order)) {
+      return res.status(400).json({ success: false, message: 'order debe ser un array [{ id, order }]' });
+    }
+
+    const batch = db.batch();
+    for (const item of order) {
+      const ref = db.collection('professional_banners').doc(item.id);
+      batch.update(ref, { order: item.order, updatedAt: new Date() });
+    }
+    await batch.commit();
+
+    res.json({ success: true, message: 'Orden actualizado' });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error reordenando banners:', error);
+    res.status(500).json({ success: false, message: 'Error reordenando banners', error: error.message });
+  }
+});
+
+// POST /api/professionals/me/banners/upload-image — subir imagen de banner
+app.post('/api/professionals/me/banners/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    if (!req.file) return res.status(400).json({ success: false, message: 'No se recibió imagen' });
+
+    if (!bucket) return res.status(500).json({ success: false, message: 'Storage no disponible' });
+
+    const fileName = `professional_banners/${prof.id}/${Date.now()}_${req.file.originalname}`;
+    const file = bucket.file(fileName);
+    await file.save(req.file.buffer, { metadata: { contentType: req.file.mimetype } });
+    await file.makePublic();
+    const imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+    res.json({ success: true, imageUrl, storagePath: fileName });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error subiendo imagen:', error);
+    res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
   }
 });
 
