@@ -40642,6 +40642,7 @@ app.post('/api/professionals/me/banners/upload-image', authenticateToken, upload
 
     if (!req.file) return res.status(400).json({ success: false, message: 'No se recibió imagen' });
 
+    const bucket = admin.storage().bucket();
     if (!bucket) return res.status(500).json({ success: false, message: 'Storage no disponible' });
 
     const fileName = `professional_banners/${prof.id}/${Date.now()}_${req.file.originalname}`;
