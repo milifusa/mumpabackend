@@ -40465,6 +40465,40 @@ async function getProfessionalForUser(uid) {
   return { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
 
+
+// GET /api/professionals/me/articles — artículos disponibles para vincular en banners
+app.get('/api/professionals/me/articles', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const { limit: limitParam = 50, categoryId } = req.query;
+
+    let query = db.collection('articles').where('status', '==', 'published');
+    if (categoryId) query = query.where('categoryId', '==', categoryId);
+
+    const snap = await query.orderBy('publishedAt', 'desc').limit(parseInt(limitParam)).get();
+
+    const articles = snap.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        title: d.title,
+        summary: d.summary || null,
+        imageUrl: d.imageUrl || null,
+        categoryId: d.categoryId || null,
+        categoryName: d.categoryName || null,
+        publishedAt: d.publishedAt?.toDate() || null
+      };
+    });
+
+    res.json({ success: true, data: articles, total: articles.length });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error obteniendo artículos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo artículos', error: error.message });
+  }
+});
+
 // GET /api/professionals/me/banners — listar banners propios
 app.get('/api/professionals/me/banners', authenticateToken, async (req, res) => {
   try {
