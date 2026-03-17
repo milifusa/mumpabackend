@@ -6510,21 +6510,14 @@ app.get('/api/recommendations/:recommendationId/products', authenticateToken, as
 
     const profData = profDoc.data();
 
-    // Construir query de productos
+    // Construir query de productos (simple para evitar índices compuestos)
     let productsQuery = db.collection('marketplace_products')
       .where('userId', '==', profData.userId)
-      .where('isProfessionalService', '==', true)
-      .where('status', '!=', 'eliminado');
-
-    if (serviceType) {
-      productsQuery = productsQuery.where('serviceType', '==', serviceType);
-    }
-
-    const productsSnapshot = await productsQuery
-      .orderBy('status')
+      .where('status', '==', 'disponible')
       .orderBy('createdAt', 'desc')
-      .limit(parseInt(limitParam))
-      .get();
+      .limit(parseInt(limitParam));
+
+    const productsSnapshot = await productsQuery.get();
 
     const products = productsSnapshot.docs.map(doc => {
       const d = doc.data();
@@ -6554,6 +6547,7 @@ app.get('/api/recommendations/:recommendationId/products', authenticateToken, as
       hasProfessional: true,
       professional: {
         id: professionalId,
+        userId: profData.userId,
         name: profData.name,
         headline: profData.headline || null,
         specialty: profData.specialty || null,
