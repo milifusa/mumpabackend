@@ -9267,16 +9267,21 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
         .where('isActive', '==', true)
         .orderBy('order', 'asc')
         .get();
-      professionalBanners = bannersSnap.docs.map(doc => ({
-        id: doc.id,
-        title: doc.data().title,
-        description: doc.data().description,
-        imageUrl: doc.data().imageUrl,
-        linkType: doc.data().linkType,
-        productId: doc.data().productId || null,
-        articleId: doc.data().articleId || null,
-        order: doc.data().order
-      }));
+      professionalBanners = bannersSnap.docs.map(doc => {
+        const bd = doc.data();
+        return {
+          id: doc.id,
+          title: bd.title,
+          description: bd.description,
+          imageUrl: bd.imageUrl,
+          linkType: bd.linkType,
+          productId: bd.productId || null,
+          productIds: bd.productIds || null,
+          productCategoryId: bd.productCategoryId || null,
+          articleId: bd.articleId || null,
+          order: bd.order
+        };
+      });
     }
 
     res.json({
@@ -40499,6 +40504,64 @@ app.get('/api/professionals/me/articles', authenticateToken, async (req, res) =>
   }
 });
 
+
+// GET /api/professionals/me/products-selector — mis productos para vincular en banners
+app.get('/api/professionals/me/products-selector', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const snap = await db.collection('marketplace_products')
+      .where('userId', '==', req.user.uid)
+      .where('status', '==', 'disponible')
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const products = snap.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        title: d.title,
+        price: d.price || null,
+        type: d.type,
+        photos: d.photos?.[0] ? [d.photos[0]] : [],
+        serviceType: d.serviceType || null,
+        category: d.category || null
+      };
+    });
+
+    res.json({ success: true, data: products, total: products.length });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error obteniendo productos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo productos', error: error.message });
+  }
+});
+
+// GET /api/professionals/me/product-categories — categorías de marketplace para vincular en banners
+app.get('/api/professionals/me/product-categories', authenticateToken, async (req, res) => {
+  try {
+    const prof = await getProfessionalForUser(req.user.uid);
+    if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
+
+    const snap = await db.collection('marketplace_categories')
+      .where('isActive', '==', true)
+      .orderBy('order', 'asc')
+      .get();
+
+    const categories = snap.docs.map(doc => ({
+      id: doc.id,
+      name: doc.data().name,
+      slug: doc.data().slug || null,
+      imageUrl: doc.data().imageUrl || null
+    }));
+
+    res.json({ success: true, data: categories, total: categories.length });
+  } catch (error) {
+    console.error('❌ [PRO-BANNER] Error obteniendo categorías:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo categorías', error: error.message });
+  }
+});
+
 // GET /api/professionals/me/banners — listar banners propios
 app.get('/api/professionals/me/banners', authenticateToken, async (req, res) => {
   try {
@@ -40528,19 +40591,25 @@ app.post('/api/professionals/me/banners', authenticateToken, async (req, res) =>
       return res.status(400).json({ success: false, message: 'No tienes un recomendado asignado' });
     }
 
-    const { title, description, imageUrl, linkType = 'none', productId, articleId, order } = req.body;
+    const { title, description, imageUrl, linkType = 'none', productId, productIds, productCategoryId, articleId, order } = req.body;
 
     if (!imageUrl) {
       return res.status(400).json({ success: false, message: 'imageUrl es requerido' });
     }
 
-    const validLinkTypes = ['product', 'article', 'appointment', 'none'];
+    const validLinkTypes = ['product', 'products', 'product-category', 'article', 'appointment', 'none'];
     if (!validLinkTypes.includes(linkType)) {
       return res.status(400).json({ success: false, message: `linkType debe ser: ${validLinkTypes.join(', ')}` });
     }
 
     if (linkType === 'product' && !productId) {
       return res.status(400).json({ success: false, message: 'productId es requerido cuando linkType es product' });
+    }
+    if (linkType === 'products' && (!productIds || !Array.isArray(productIds) || productIds.length === 0)) {
+      return res.status(400).json({ success: false, message: 'productIds (array) es requerido cuando linkType es products' });
+    }
+    if (linkType === 'product-category' && !productCategoryId) {
+      return res.status(400).json({ success: false, message: 'productCategoryId es requerido cuando linkType es product-category' });
     }
     if (linkType === 'article' && !articleId) {
       return res.status(400).json({ success: false, message: 'articleId es requerido cuando linkType es article' });
@@ -40567,6 +40636,8 @@ app.post('/api/professionals/me/banners', authenticateToken, async (req, res) =>
       imageUrl,
       linkType,
       productId: linkType === 'product' ? productId : null,
+      productIds: linkType === 'products' ? productIds : null,
+      productCategoryId: linkType === 'product-category' ? productCategoryId : null,
       articleId: linkType === 'article' ? articleId : null,
       order: bannerOrder,
       isActive: true,
@@ -40596,7 +40667,7 @@ app.put('/api/professionals/me/banners/:bannerId', authenticateToken, async (req
       return res.status(404).json({ success: false, message: 'Banner no encontrado' });
     }
 
-    const { title, description, imageUrl, linkType, productId, articleId, order, isActive } = req.body;
+    const { title, description, imageUrl, linkType, productId, productIds, productCategoryId, articleId, order, isActive } = req.body;
 
     const updateData = { updatedAt: new Date() };
     if (title !== undefined) updateData.title = title?.trim() || null;
@@ -40606,12 +40677,14 @@ app.put('/api/professionals/me/banners/:bannerId', authenticateToken, async (req
     if (isActive !== undefined) updateData.isActive = isActive;
 
     if (linkType !== undefined) {
-      const validLinkTypes = ['product', 'article', 'appointment', 'none'];
+      const validLinkTypes = ['product', 'products', 'product-category', 'article', 'appointment', 'none'];
       if (!validLinkTypes.includes(linkType)) {
         return res.status(400).json({ success: false, message: `linkType debe ser: ${validLinkTypes.join(', ')}` });
       }
       updateData.linkType = linkType;
       updateData.productId = linkType === 'product' ? (productId || bannerDoc.data().productId) : null;
+      updateData.productIds = linkType === 'products' ? (productIds || bannerDoc.data().productIds || []) : null;
+      updateData.productCategoryId = linkType === 'product-category' ? (productCategoryId || bannerDoc.data().productCategoryId) : null;
       updateData.articleId = linkType === 'article' ? (articleId || bannerDoc.data().articleId) : null;
     }
 
