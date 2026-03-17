@@ -9265,11 +9265,76 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
       const bannersSnap = await db.collection('professional_banners')
         .where('recommendationId', '==', recDoc.id)
         .get();
-      professionalBanners = bannersSnap.docs
+      const activeBannerDocs = bannersSnap.docs
         .filter(doc => doc.data().isActive !== false)
-        .sort((a, b) => (a.data().order || 0) - (b.data().order || 0))
-        .map(doc => {
+        .sort((a, b) => (a.data().order || 0) - (b.data().order || 0));
+
+      // Recolectar IDs de productos y categorías para fetch en batch
+      const allProductIds = new Set();
+      const categoryIdsNeeded = new Set();
+      activeBannerDocs.forEach(doc => {
         const bd = doc.data();
+        if (bd.linkType === 'products' && Array.isArray(bd.productIds)) {
+          bd.productIds.forEach(id => allProductIds.add(id));
+        }
+        if (bd.linkType === 'product' && bd.productId) {
+          allProductIds.add(bd.productId);
+        }
+        if (bd.linkType === 'product-category' && bd.productCategoryId) {
+          categoryIdsNeeded.add(bd.productCategoryId);
+        }
+      });
+
+      // Fetch productos individuales
+      const productsMap = new Map();
+      if (allProductIds.size > 0) {
+        const productSnaps = await Promise.all(
+          Array.from(allProductIds).map(id => db.collection('marketplace_products').doc(id).get())
+        );
+        productSnaps.forEach(snap => {
+          if (snap.exists) {
+            const d = snap.data();
+            productsMap.set(snap.id, {
+              id: snap.id, title: d.title, price: d.price || null,
+              type: d.type, photos: d.photos || [], status: d.status,
+              categoryId: d.category || d.categoryId || null
+            });
+          }
+        });
+      }
+
+      // Fetch productos por categoría
+      const categoryProductsMap = new Map();
+      if (categoryIdsNeeded.size > 0) {
+        await Promise.all(Array.from(categoryIdsNeeded).map(async catId => {
+          const catSnap = await db.collection('marketplace_products')
+            .where('category', '==', catId)
+            .where('status', '==', 'disponible')
+            .orderBy('createdAt', 'desc')
+            .limit(20)
+            .get();
+          categoryProductsMap.set(catId, catSnap.docs.map(doc => {
+            const d = doc.data();
+            return {
+              id: doc.id, title: d.title, price: d.price || null,
+              type: d.type, photos: d.photos || [], status: d.status,
+              categoryId: d.category || d.categoryId || null
+            };
+          }));
+        }));
+      }
+
+      professionalBanners = activeBannerDocs.map(doc => {
+        const bd = doc.data();
+        let products = null;
+        if (bd.linkType === 'product' && bd.productId) {
+          const p = productsMap.get(bd.productId);
+          products = p ? [p] : [];
+        } else if (bd.linkType === 'products' && Array.isArray(bd.productIds)) {
+          products = bd.productIds.map(id => productsMap.get(id)).filter(Boolean);
+        } else if (bd.linkType === 'product-category' && bd.productCategoryId) {
+          products = categoryProductsMap.get(bd.productCategoryId) || [];
+        }
         return {
           id: doc.id,
           title: bd.title,
@@ -9280,7 +9345,8 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
           productIds: bd.productIds || null,
           productCategoryId: bd.productCategoryId || null,
           articleId: bd.articleId || null,
-          order: bd.order
+          order: bd.order,
+          products
         };
       });
     }
