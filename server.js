@@ -47536,19 +47536,62 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
     
     const professionalRef = await db.collection('professionals').add(professionalData);
     
-    // Vincular recomendado si se proporcionó
+    // Vincular o auto-crear recomendado
+    let linkedRecommendationId = null;
     if (recommendationId) {
+      // Vincular recomendado existente proporcionado por el admin
       const recDoc = await db.collection('recommendations').doc(recommendationId).get();
       if (recDoc.exists) {
-        await db.collection('professionals').doc(professionalRef.id).update({
-          recommendationId: recommendationId,
-          updatedAt: new Date()
-        });
-        await db.collection('recommendations').doc(recommendationId).update({
+        await db.collection('professionals').doc(professionalRef.id).update({ recommendationId, updatedAt: new Date() });
+        await db.collection('recommendations').doc(recommendationId).update({ professionalId: professionalRef.id, updatedAt: new Date() });
+        linkedRecommendationId = recommendationId;
+        console.log(`✅ [ADMIN] Recomendado existente ${recommendationId} vinculado al profesional ${professionalRef.id}`);
+      }
+    } else {
+      // Auto-crear recomendado para el servicio aprobado
+      try {
+        // Buscar o crear categoría de recomendación
+        let recCategoryId = null;
+        const categoryName = requestData.profileCategory?.name || requestData.businessName;
+        const existingCat = await db.collection('categories').where('name', '==', categoryName).limit(1).get();
+        if (!existingCat.empty) {
+          recCategoryId = existingCat.docs[0].id;
+        } else {
+          const catRef = await db.collection('categories').add({ name: categoryName, icon: 'service', order: 999, isActive: true, createdAt: new Date(), updatedAt: new Date() });
+          recCategoryId = catRef.id;
+        }
+
+        const autoRecData = {
+          categoryId: recCategoryId,
+          name: requestData.businessName,
+          description: requestData.summary || requestData.extraInfo || '',
+          address: requestData.address || '',
+          latitude: parseFloat(requestData.latitude) || 0,
+          longitude: parseFloat(requestData.longitude) || 0,
+          phone: requestData.whatsappLink || '',
+          email: requestData.userEmail || '',
+          website: requestData.website || '',
+          instagram: requestData.instagram || '',
+          whatsapp: requestData.whatsappLink || '',
+          imageUrl: requestData.logoUrl || null,
+          countryId: requestData.countryId,
+          countryName: requestData.countryName || null,
+          cityId: requestData.cityId,
+          cityName: requestData.cityName || null,
+          isActive: true,
+          verified: false,
+          badges: [],
+          features: { hasChangingTable: false, hasNursingRoom: false, hasParking: false, isStrollerAccessible: false, acceptsEmergencies: false, is24Hours: false },
           professionalId: professionalRef.id,
+          createdAt: new Date(),
           updatedAt: new Date()
-        });
-        console.log(`✅ [ADMIN] Recomendado ${recommendationId} vinculado al profesional ${professionalRef.id}`);
+        };
+        const recRef = await db.collection('recommendations').add(autoRecData);
+        linkedRecommendationId = recRef.id;
+        await db.collection('professionals').doc(professionalRef.id).update({ recommendationId: linkedRecommendationId, updatedAt: new Date() });
+        console.log(`✅ [ADMIN] Recomendado auto-creado ${linkedRecommendationId} para profesional ${professionalRef.id}`);
+      } catch (recErr) {
+        console.error('⚠️ [ADMIN] Error auto-creando recomendado (profesional igual aprobado):', recErr.message);
       }
     }
     
@@ -47580,7 +47623,7 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
     await db.collection('serviceRequests').doc(requestId).update({
       status: 'approved',
       approvedProfessionalId: professionalRef.id,
-      recommendationId: recommendationId || null,
+      recommendationId: linkedRecommendationId || null,
       reviewedAt: new Date(),
       reviewedBy: req.user.email || req.user.uid,
       updatedAt: new Date()
@@ -47593,7 +47636,8 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
       message: 'Solicitud aprobada y servicio publicado',
       data: {
         requestId,
-        professionalId: professionalRef.id
+        professionalId: professionalRef.id,
+        recommendationId: linkedRecommendationId || null
       }
     });
     
