@@ -15123,6 +15123,19 @@ app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) =>
       });
     }
 
+    // Fetch recetas para sponsors con ctaType === 'recipe'
+    const recipeSponsorDocs = sponsorDocs.filter(d => d.data().ctaType === 'recipe');
+    const recipesBySponsor = new Map();
+    for (const doc of recipeSponsorDocs) {
+      const ids = Array.isArray(doc.data().ctaRecipeIds) ? doc.data().ctaRecipeIds : [];
+      if (ids.length > 0) {
+        const recipeSnaps = await Promise.all(ids.map(rid => db.collection('nutrition_sponsor_recipes').doc(rid).get()));
+        recipesBySponsor.set(doc.id, recipeSnaps.filter(s => s.exists).map(s => ({ id: s.id, ...s.data() })));
+      } else {
+        recipesBySponsor.set(doc.id, []);
+      }
+    }
+
     const sponsors = sponsorDocs.map(doc => {
       const data = doc.data();
       const ctaType = ['external', 'product', 'article', 'recipe'].includes(data.ctaType) ? data.ctaType : 'external';
@@ -15140,6 +15153,7 @@ app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) =>
         ctaType,
         ctaUrl: data.ctaUrl || null,
         ctaRecipeIds: ctaType === 'recipe' ? (Array.isArray(data.ctaRecipeIds) ? data.ctaRecipeIds : []) : [],
+        recipes: ctaType === 'recipe' ? (recipesBySponsor.get(doc.id) || []) : [],
         products: ctaType !== 'recipe' ? (productsBySponsors.get(doc.id) || []) : [],
         active: true
       };
