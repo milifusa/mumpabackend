@@ -15036,9 +15036,15 @@ Usa principalmente los ingredientes que el usuario indicó. Puedes sugerir 1-2 i
       generatedAt: new Date().toISOString()
     };
 
+    // Aplicar sponsor si hay keywords que coincidan
+    const { sponsor, recipe: finalRecipe } = await matchSponsorToRecipe(enrichedRecipe, userId);
+    if (sponsor) finalRecipe.sponsor = sponsor;
+
+    console.log('📦 [RECIPES FROM INGREDIENTS] Resultado:', JSON.stringify([finalRecipe], null, 2));
+
     res.json({
       success: true,
-      data: [enrichedRecipe],
+      data: [finalRecipe],
       metadata: {
         childName: childName || null,
         ageMonths
