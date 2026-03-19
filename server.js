@@ -31786,6 +31786,7 @@ app.post('/api/admin/banners', authenticateToken, isAdmin, async (req, res) => {
       'medicacion',
       'vacunas',
       'solicitud-servicio',
+      'nutricion',
       'none'
     ];
     let resolvedLinkType = linkType;
@@ -32002,6 +32003,7 @@ app.put('/api/admin/banners/:id', authenticateToken, isAdmin, async (req, res) =
       'medicacion',
       'vacunas',
       'solicitud-servicio',
+      'nutricion',
       'none'
     ];
     if (linkType !== undefined) {
