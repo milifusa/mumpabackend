@@ -15094,19 +15094,20 @@ app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) =>
     }
     sponsorDocs.sort((a, b) => (a.data().brandName || '').localeCompare(b.data().brandName || ''));
 
-    // Fetch productos activos de cada sponsor en paralelo
+    // Fetch productos activos solo para sponsors con ctaType !== 'recipe'
     const sponsorIds = sponsorDocs.map(d => d.id);
+    const productSponsorIds = sponsorDocs.filter(d => d.data().ctaType !== 'recipe').map(d => d.id);
     const productsBySponsors = new Map();
-    if (sponsorIds.length > 0) {
+    if (productSponsorIds.length > 0) {
       const productSnaps = await Promise.all(
-        sponsorIds.map(sid =>
+        productSponsorIds.map(sid =>
           db.collection('nutrition_sponsor_products')
             .where('sponsorId', '==', sid)
             .where('active', '==', true)
             .get()
         )
       );
-      sponsorIds.forEach((sid, i) => {
+      productSponsorIds.forEach((sid, i) => {
         let docs = productSnaps[i].docs;
         // Filtrar por país y ciudad en memoria (sin countryId = global)
         if (userCountryId) {
@@ -15138,8 +15139,8 @@ app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) =>
         ctaLabel: data.ctaLabel || null,
         ctaType,
         ctaUrl: data.ctaUrl || null,
-        ctaRecipeIds: Array.isArray(data.ctaRecipeIds) ? data.ctaRecipeIds : [],
-        products: productsBySponsors.get(doc.id) || [],
+        ctaRecipeIds: ctaType === 'recipe' ? (Array.isArray(data.ctaRecipeIds) ? data.ctaRecipeIds : []) : [],
+        products: ctaType !== 'recipe' ? (productsBySponsors.get(doc.id) || []) : [],
         active: true
       };
 
