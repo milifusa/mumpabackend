@@ -43360,7 +43360,7 @@ async function matchSponsorToRecipe(recipe, userId) {
 
     // Reemplazar keywords en el texto de la receta con el nombre de la marca
     // Reemplazar todos los keywords en un solo pase para evitar doble sustitución
-    const escapedKws = keywords.map(kw => kw.replace(/[.*+?^${}()|[\]\]/g, '\\$&'));
+    const escapedKws = keywords.map(kw => kw.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'));
     const kwPattern = escapedKws.length > 0 ? new RegExp(escapedKws.join('|'), 'gi') : null;
     const rep = (text) => {
       if (!text || !brandName || !kwPattern) return text;
