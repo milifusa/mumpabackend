@@ -15636,6 +15636,23 @@ app.delete('/api/admin/nutrition/sponsor-products/:productId', authenticateToken
 // ADMIN: Recetas de sponsors de nutrición (nutrition_sponsor_recipes)
 // ============================================================================
 
+// Subir imagen de receta de sponsor
+app.post('/api/admin/nutrition/sponsor-recipes/upload-image', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No se envió imagen' });
+    const bucket = admin.storage().bucket();
+    const fileName = `nutrition-sponsor-recipes/${Date.now()}_${req.file.originalname.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    const file = bucket.file(fileName);
+    await file.save(req.file.buffer, { metadata: { contentType: req.file.mimetype } });
+    await file.makePublic();
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    res.json({ success: true, url: publicUrl });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error subiendo imagen de sponsor recipe:', error);
+    res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+  }
+});
+
 // Listar recetas de sponsor (admin)
 app.get('/api/admin/nutrition/sponsor-recipes', authenticateToken, isAdmin, async (req, res) => {
   try {
@@ -15692,7 +15709,8 @@ app.post('/api/admin/nutrition/sponsor-recipes', authenticateToken, isAdmin, asy
       nutritionalInfo,
       tips,
       allergens,
-      active = true
+      active = true,
+      imageUrl
     } = req.body;
 
     if (!sponsorId || !name || !mealType) {
@@ -15727,6 +15745,7 @@ app.post('/api/admin/nutrition/sponsor-recipes', authenticateToken, isAdmin, asy
       } : { calories: '-', protein: '-', carbs: '-', fat: '-' },
       tips: Array.isArray(tips) ? tips : [],
       allergens: Array.isArray(allergens) ? allergens : [],
+      imageUrl: imageUrl || null,
       active: Boolean(active),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -15751,7 +15770,7 @@ app.put('/api/admin/nutrition/sponsor-recipes/:recipeId', authenticateToken, isA
     const {
       name, description, mealType, ageAppropriate, prepTime, cookTime,
       servings, difficulty, ingredients, instructions, nutritionalInfo,
-      tips, allergens, active
+      tips, allergens, active, imageUrl
     } = req.body;
 
     if (mealType && !['breakfast', 'lunch', 'dinner', 'snack'].includes(mealType)) {
@@ -15773,6 +15792,7 @@ app.put('/api/admin/nutrition/sponsor-recipes/:recipeId', authenticateToken, isA
     if (tips !== undefined) updateData.tips = Array.isArray(tips) ? tips : [];
     if (allergens !== undefined) updateData.allergens = Array.isArray(allergens) ? allergens : [];
     if (active !== undefined) updateData.active = Boolean(active);
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl || null;
 
     await ref.update(updateData);
     const updated = await ref.get();
