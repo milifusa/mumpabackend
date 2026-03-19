@@ -15124,7 +15124,7 @@ app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) =>
 
     const sponsors = sponsorDocs.map(doc => {
       const data = doc.data();
-      const ctaType = ['external', 'product', 'article'].includes(data.ctaType) ? data.ctaType : 'external';
+      const ctaType = ['external', 'product', 'article', 'recipe'].includes(data.ctaType) ? data.ctaType : 'external';
 
       const sponsor = {
         id: doc.id,
@@ -15138,6 +15138,7 @@ app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) =>
         ctaLabel: data.ctaLabel || null,
         ctaType,
         ctaUrl: data.ctaUrl || null,
+        ctaRecipeIds: Array.isArray(data.ctaRecipeIds) ? data.ctaRecipeIds : [],
         products: productsBySponsors.get(doc.id) || [],
         active: true
       };
@@ -15215,6 +15216,7 @@ app.post('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req
       ctaUrl,
       ctaProductId,
       ctaArticleId,
+      ctaRecipeIds,
       active = true,
       startDate,
       endDate,
@@ -15231,7 +15233,7 @@ app.post('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req
       return res.status(400).json({ success: false, message: 'countryId es requerido' });
     }
 
-    if (!['external', 'product', 'article'].includes(ctaType)) {
+    if (!['external', 'product', 'article', 'recipe'].includes(ctaType)) {
       return res.status(400).json({ success: false, message: 'ctaType inválido' });
     }
 
@@ -15295,6 +15297,7 @@ app.post('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req
       ctaUrl: ctaUrl || null,
       ctaProductId: ctaType === 'product' ? ctaProductId : null,
       ctaArticleId: ctaType === 'article' ? ctaArticleId : null,
+      ctaRecipeIds: ctaType === 'recipe' ? (Array.isArray(ctaRecipeIds) ? ctaRecipeIds : []) : [],
       countryId,
       countryName,
       cityId: cityId || null,
@@ -15353,13 +15356,14 @@ app.put('/api/admin/nutrition/sponsors/:sponsorId', authenticateToken, isAdmin, 
       ctaUrl,
       ctaProductId,
       ctaArticleId,
+      ctaRecipeIds,
       active,
       startDate,
       endDate,
       recipeIds
     } = req.body;
 
-    if (ctaType && !['external', 'product', 'article'].includes(ctaType)) {
+    if (ctaType && !['external', 'product', 'article', 'recipe'].includes(ctaType)) {
       return res.status(400).json({ success: false, message: 'ctaType inválido' });
     }
 
@@ -15412,12 +15416,19 @@ app.put('/api/admin/nutrition/sponsors/:sponsorId', authenticateToken, isAdmin, 
       if (ctaType === 'product') {
         updateData.ctaProductId = ctaProductId || null;
         updateData.ctaArticleId = null;
+        updateData.ctaRecipeIds = [];
       } else if (ctaType === 'article') {
         updateData.ctaArticleId = ctaArticleId || null;
         updateData.ctaProductId = null;
+        updateData.ctaRecipeIds = [];
+      } else if (ctaType === 'recipe') {
+        updateData.ctaRecipeIds = Array.isArray(ctaRecipeIds) ? ctaRecipeIds : [];
+        updateData.ctaProductId = null;
+        updateData.ctaArticleId = null;
       } else {
         updateData.ctaProductId = null;
         updateData.ctaArticleId = null;
+        updateData.ctaRecipeIds = [];
       }
     }
     if (ctaUrl !== undefined) updateData.ctaUrl = ctaUrl;
