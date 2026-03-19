@@ -15602,6 +15602,172 @@ app.delete('/api/admin/nutrition/sponsor-products/:productId', authenticateToken
   }
 });
 
+// ============================================================================
+// ADMIN: Recetas de sponsors de nutrición (nutrition_sponsor_recipes)
+// ============================================================================
+
+// Listar recetas de sponsor (admin)
+app.get('/api/admin/nutrition/sponsor-recipes', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { sponsorId, page = 1, limit = 20, search = '' } = req.query;
+    let query = db.collection('nutrition_sponsor_recipes').orderBy('createdAt', 'desc');
+    if (sponsorId) query = db.collection('nutrition_sponsor_recipes').where('sponsorId', '==', sponsorId).orderBy('createdAt', 'desc');
+
+    const snapshot = await query.get();
+    let recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    if (search) {
+      const s = search.toLowerCase();
+      recipes = recipes.filter(r => (r.name || '').toLowerCase().includes(s) || (r.description || '').toLowerCase().includes(s));
+    }
+
+    const total = recipes.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const paginated = recipes.slice(startIndex, startIndex + parseInt(limit));
+
+    res.json({ success: true, data: paginated, pagination: { page: parseInt(page), limit: parseInt(limit), total, totalPages: Math.ceil(total / parseInt(limit)) } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando sponsor recipes:', error);
+    res.status(500).json({ success: false, message: 'Error listando recetas de sponsor', error: error.message });
+  }
+});
+
+// Obtener receta de sponsor por ID (admin)
+app.get('/api/admin/nutrition/sponsor-recipes/:recipeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const doc = await db.collection('nutrition_sponsor_recipes').doc(req.params.recipeId).get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Receta no encontrada' });
+    res.json({ success: true, data: { id: doc.id, ...doc.data() } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo sponsor recipe:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo receta de sponsor', error: error.message });
+  }
+});
+
+// Crear receta de sponsor (admin)
+app.post('/api/admin/nutrition/sponsor-recipes', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      sponsorId,
+      name,
+      description,
+      mealType,
+      ageAppropriate = true,
+      prepTime,
+      cookTime,
+      servings,
+      difficulty,
+      ingredients,
+      instructions,
+      nutritionalInfo,
+      tips,
+      allergens,
+      active = true
+    } = req.body;
+
+    if (!sponsorId || !name || !mealType) {
+      return res.status(400).json({ success: false, message: 'sponsorId, name y mealType son requeridos' });
+    }
+    if (!['breakfast', 'lunch', 'dinner', 'snack'].includes(mealType)) {
+      return res.status(400).json({ success: false, message: 'mealType debe ser: breakfast, lunch, dinner o snack' });
+    }
+
+    const sponsorDoc = await db.collection('nutrition_sponsors').doc(sponsorId).get();
+    if (!sponsorDoc.exists) return res.status(404).json({ success: false, message: 'Sponsor no encontrado' });
+    const sponsorData = sponsorDoc.data();
+
+    const recipeData = {
+      sponsorId,
+      sponsorName: sponsorData.brandName || null,
+      name,
+      description: description || null,
+      mealType,
+      ageAppropriate: Boolean(ageAppropriate),
+      prepTime: parseInt(prepTime, 10) || 0,
+      cookTime: parseInt(cookTime, 10) || 0,
+      servings: parseInt(servings, 10) || 2,
+      difficulty: difficulty || 'fácil',
+      ingredients: Array.isArray(ingredients) ? ingredients.map(i => typeof i === 'string' ? { item: i, quantity: '' } : { item: String(i.item || ''), quantity: String(i.quantity || '') }) : [],
+      instructions: Array.isArray(instructions) ? instructions : [],
+      nutritionalInfo: (nutritionalInfo && typeof nutritionalInfo === 'object') ? {
+        calories: String(nutritionalInfo.calories || '-'),
+        protein: String(nutritionalInfo.protein || '-'),
+        carbs: String(nutritionalInfo.carbs || '-'),
+        fat: String(nutritionalInfo.fat || '-')
+      } : { calories: '-', protein: '-', carbs: '-', fat: '-' },
+      tips: Array.isArray(tips) ? tips : [],
+      allergens: Array.isArray(allergens) ? allergens : [],
+      active: Boolean(active),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const ref = await db.collection('nutrition_sponsor_recipes').add(recipeData);
+    res.json({ success: true, message: 'Receta de sponsor creada', data: { id: ref.id, ...recipeData } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando sponsor recipe:', error);
+    res.status(500).json({ success: false, message: 'Error creando receta de sponsor', error: error.message });
+  }
+});
+
+// Actualizar receta de sponsor (admin)
+app.put('/api/admin/nutrition/sponsor-recipes/:recipeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recipeId } = req.params;
+    const ref = db.collection('nutrition_sponsor_recipes').doc(recipeId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Receta no encontrada' });
+
+    const {
+      name, description, mealType, ageAppropriate, prepTime, cookTime,
+      servings, difficulty, ingredients, instructions, nutritionalInfo,
+      tips, allergens, active
+    } = req.body;
+
+    if (mealType && !['breakfast', 'lunch', 'dinner', 'snack'].includes(mealType)) {
+      return res.status(400).json({ success: false, message: 'mealType debe ser: breakfast, lunch, dinner o snack' });
+    }
+
+    const updateData = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (mealType !== undefined) updateData.mealType = mealType;
+    if (ageAppropriate !== undefined) updateData.ageAppropriate = Boolean(ageAppropriate);
+    if (prepTime !== undefined) updateData.prepTime = parseInt(prepTime, 10) || 0;
+    if (cookTime !== undefined) updateData.cookTime = parseInt(cookTime, 10) || 0;
+    if (servings !== undefined) updateData.servings = parseInt(servings, 10) || 2;
+    if (difficulty !== undefined) updateData.difficulty = difficulty;
+    if (ingredients !== undefined) updateData.ingredients = Array.isArray(ingredients) ? ingredients.map(i => typeof i === 'string' ? { item: i, quantity: '' } : { item: String(i.item || ''), quantity: String(i.quantity || '') }) : [];
+    if (instructions !== undefined) updateData.instructions = Array.isArray(instructions) ? instructions : [];
+    if (nutritionalInfo !== undefined) updateData.nutritionalInfo = (nutritionalInfo && typeof nutritionalInfo === 'object') ? { calories: String(nutritionalInfo.calories || '-'), protein: String(nutritionalInfo.protein || '-'), carbs: String(nutritionalInfo.carbs || '-'), fat: String(nutritionalInfo.fat || '-') } : { calories: '-', protein: '-', carbs: '-', fat: '-' };
+    if (tips !== undefined) updateData.tips = Array.isArray(tips) ? tips : [];
+    if (allergens !== undefined) updateData.allergens = Array.isArray(allergens) ? allergens : [];
+    if (active !== undefined) updateData.active = Boolean(active);
+
+    await ref.update(updateData);
+    const updated = await ref.get();
+    res.json({ success: true, message: 'Receta de sponsor actualizada', data: { id: updated.id, ...updated.data() } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando sponsor recipe:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando receta de sponsor', error: error.message });
+  }
+});
+
+// Eliminar receta de sponsor (admin)
+app.delete('/api/admin/nutrition/sponsor-recipes/:recipeId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { recipeId } = req.params;
+    const ref = db.collection('nutrition_sponsor_recipes').doc(recipeId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Receta no encontrada' });
+    await ref.delete();
+    res.json({ success: true, message: 'Receta de sponsor eliminada' });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando sponsor recipe:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando receta de sponsor', error: error.message });
+  }
+});
+
 // Preguntas frecuentes para mamas (FAQ) con cache 24h
 app.post('/api/faq/moms', authenticateToken, async (req, res) => {
   try {
