@@ -43346,8 +43346,8 @@ async function matchSponsorToRecipe(recipe, userId) {
       const score = kws.filter(kw => recipeText.includes(kw.toLowerCase())).length;
       if (score > bestScore) { bestScore = score; bestMatch = { id: doc.id, ...data }; }
     }
-    // Fallback: primer sponsor si ninguno hace match
-    if (!bestMatch) { const fd = sponsors[0].data(); bestMatch = { id: sponsors[0].id, ...fd }; }
+    // Si ningún keyword hace match, no asignar sponsor
+    if (!bestMatch || bestScore === 0) return { sponsor: null, recipe };
 
     const brandName = bestMatch.brandName || null;
     const keywords = Array.isArray(bestMatch.targetKeywords) ? bestMatch.targetKeywords : [];
