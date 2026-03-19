@@ -6535,6 +6535,7 @@ app.get('/api/recommendations/:recommendationId/products', authenticateToken, as
         photos: d.photos || [],
         status: d.status,
         category: d.category || null,
+        categoryId: d.categoryId || null,
         location: d.location || null,
         createdAt: d.createdAt?.toDate() || null
       };
@@ -9303,24 +9304,30 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
         });
       }
 
-      // Fetch productos por categoría
+      // Fetch categorías y productos por vendor_categories
+      const categoryInfoMap = new Map();
       const categoryProductsMap = new Map();
       if (categoryIdsNeeded.size > 0) {
         await Promise.all(Array.from(categoryIdsNeeded).map(async catId => {
-          const catSnap = await db.collection('marketplace_products')
-            .where('category', '==', catId)
-            .where('status', '==', 'disponible')
-            .orderBy('createdAt', 'desc')
-            .limit(20)
-            .get();
-          categoryProductsMap.set(catId, catSnap.docs.map(doc => {
-            const d = doc.data();
-            return {
-              id: doc.id, title: d.title, price: d.price || null,
-              type: d.type, photos: d.photos || [], status: d.status,
-              categoryId: d.category || d.categoryId || null
-            };
-          }));
+          const [catDoc, catSnap] = await Promise.all([
+            db.collection('vendor_categories').doc(catId).get(),
+            db.collection('marketplace_products')
+              .where('vendorCategoryId', '==', catId)
+              .where('status', '==', 'disponible')
+              .get()
+          ]);
+          categoryInfoMap.set(catId, catDoc.exists ? { name: catDoc.data().name, slug: catDoc.data().slug || null } : null);
+          const products = catSnap.docs
+            .map(doc => {
+              const d = doc.data();
+              return {
+                id: doc.id, title: d.title, price: d.price || null,
+                type: d.type, photos: d.photos || [], status: d.status,
+                vendorCategoryId: d.vendorCategoryId || null
+              };
+            })
+            .slice(0, 20);
+          categoryProductsMap.set(catId, products);
         }));
       }
 
@@ -9335,6 +9342,7 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
         } else if (bd.linkType === 'product-category' && bd.productCategoryId) {
           products = categoryProductsMap.get(bd.productCategoryId) || [];
         }
+        const catInfo = bd.productCategoryId ? categoryInfoMap.get(bd.productCategoryId) : null;
         return {
           id: doc.id,
           title: bd.title,
@@ -9344,6 +9352,7 @@ app.get('/api/recommendations/:recommendationId', authenticateToken, async (req,
           productId: bd.productId || null,
           productIds: bd.productIds || null,
           productCategoryId: bd.productCategoryId || null,
+          productCategoryName: catInfo ? catInfo.name : null,
           articleId: bd.articleId || null,
           order: bd.order,
           products
@@ -15042,6 +15051,548 @@ Usa principalmente los ingredientes que el usuario indicó. Puedes sugerir 1-2 i
       message: err.message || 'Error generando receta',
       error: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
+  }
+});
+
+// Sponsors activos de nutrición
+app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    // Obtener ubicación del usuario
+    const userLocation = await getUserLocationFromProfile(req.user.uid);
+    const userCountryId = userLocation.countryId || null;
+    const userCityId = userLocation.cityId || null;
+
+    const sponsorsSnapshot = await db.collection('nutrition_sponsors').where('active', '==', true).get();
+
+    // Filtrar por país y ciudad en memoria (evita índice compuesto)
+    // Sin countryId = global (se muestra a todos)
+    const today = new Date().toISOString().split('T')[0];
+    let sponsorDocs = sponsorsSnapshot.docs;
+    // Filtrar por rango de fechas
+    sponsorDocs = sponsorDocs.filter(d => {
+      const sd = d.data().startDate;
+      const ed = d.data().endDate;
+      if (sd && today < sd) return false; // No ha comenzado
+      if (ed && today > ed) return false; // Ya venció
+      return true;
+    });
+    if (userCountryId) {
+      sponsorDocs = sponsorDocs.filter(d => !d.data().countryId || d.data().countryId === userCountryId);
+    }
+    if (userCityId) {
+      sponsorDocs = sponsorDocs.filter(d => !d.data().cityId || d.data().cityId === userCityId);
+    }
+    sponsorDocs.sort((a, b) => (a.data().brandName || '').localeCompare(b.data().brandName || ''));
+
+    // Fetch productos activos de cada sponsor en paralelo
+    const sponsorIds = sponsorDocs.map(d => d.id);
+    const productsBySponsors = new Map();
+    if (sponsorIds.length > 0) {
+      const productSnaps = await Promise.all(
+        sponsorIds.map(sid =>
+          db.collection('nutrition_sponsor_products')
+            .where('sponsorId', '==', sid)
+            .where('active', '==', true)
+            .get()
+        )
+      );
+      sponsorIds.forEach((sid, i) => {
+        let docs = productSnaps[i].docs;
+        // Filtrar por país y ciudad en memoria (sin countryId = global)
+        if (userCountryId) {
+          docs = docs.filter(d => !d.data().countryId || d.data().countryId === userCountryId);
+        }
+        if (userCityId) {
+          docs = docs.filter(d => !d.data().cityId || d.data().cityId === userCityId);
+        }
+        productsBySponsors.set(sid, docs.map(doc => {
+          const pd = doc.data();
+          return { id: doc.id, name: pd.name, description: pd.description || null, imageUrl: pd.imageUrl, externalUrl: pd.externalUrl || null, price: pd.price || null };
+        }));
+      });
+    }
+
+    const sponsors = sponsorDocs.map(doc => {
+      const data = doc.data();
+      const ctaType = ['external', 'product', 'article'].includes(data.ctaType) ? data.ctaType : 'external';
+
+      const sponsor = {
+        id: doc.id,
+        brandName: data.brandName || null,
+        logoUrl: data.logoUrl || null,
+        tagline: data.tagline || null,
+        accentColor: data.accentColor || null,
+        sectionTitle: data.sectionTitle || null,
+        sectionTagline: data.sectionTagline || null,
+        targetKeywords: Array.isArray(data.targetKeywords) ? data.targetKeywords : [],
+        ctaLabel: data.ctaLabel || null,
+        ctaType,
+        ctaUrl: data.ctaUrl || null,
+        products: productsBySponsors.get(doc.id) || [],
+        active: true
+      };
+
+      if (ctaType === 'article') {
+        sponsor.ctaArticleId = data.ctaArticleId || null;
+      }
+
+      return sponsor;
+    });
+
+    res.json({ success: true, data: sponsors, total: sponsors.length });
+  } catch (error) {
+    console.error('❌ [NUTRITION] Error obteniendo sponsors:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo sponsors', error: error.message });
+  }
+});
+
+// ADMIN: Gestión de sponsors de nutrición
+app.get('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '' } = req.query;
+
+    const snapshot = await db.collection('nutrition_sponsors')
+      .orderBy('brandName')
+      .get();
+
+    let sponsors = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    if (search) {
+      const searchLower = search.toLowerCase();
+      sponsors = sponsors.filter(s =>
+        (s.brandName || '').toLowerCase().includes(searchLower) ||
+        (s.tagline || '').toLowerCase().includes(searchLower) ||
+        (s.sectionTitle || '').toLowerCase().includes(searchLower)
+      );
+    }
+
+    const total = sponsors.length;
+    const startIndex = (page - 1) * parseInt(limit);
+    const paginated = sponsors.slice(startIndex, startIndex + parseInt(limit));
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error obteniendo sponsors de nutrición:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo sponsors de nutrición', error: error.message });
+  }
+});
+
+app.post('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const {
+      brandName,
+      logoUrl,
+      tagline,
+      accentColor,
+      sectionTitle,
+      sectionTagline,
+      targetKeywords,
+      ctaLabel,
+      ctaType,
+      ctaUrl,
+      ctaProductId,
+      ctaArticleId,
+      active = true,
+      startDate,
+      endDate
+    } = req.body;
+
+    const { countryId, cityId } = req.body;
+
+    if (!brandName || !logoUrl || !ctaLabel || !ctaType) {
+      return res.status(400).json({ success: false, message: 'Campos requeridos faltantes' });
+    }
+
+    if (!countryId) {
+      return res.status(400).json({ success: false, message: 'countryId es requerido' });
+    }
+
+    if (!['external', 'product', 'article'].includes(ctaType)) {
+      return res.status(400).json({ success: false, message: 'ctaType inválido' });
+    }
+
+    if (ctaType === 'product' && !ctaProductId) {
+      return res.status(400).json({ success: false, message: 'ctaProductId es requerido cuando ctaType es product' });
+    }
+
+    if (ctaType === 'article' && !ctaArticleId) {
+      return res.status(400).json({ success: false, message: 'ctaArticleId es requerido cuando ctaType es article' });
+    }
+
+    // Validar fechas
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      return res.status(400).json({ success: false, message: 'startDate debe tener formato YYYY-MM-DD' });
+    }
+    if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      return res.status(400).json({ success: false, message: 'endDate debe tener formato YYYY-MM-DD' });
+    }
+    if (startDate && endDate && startDate > endDate) {
+      return res.status(400).json({ success: false, message: 'startDate no puede ser posterior a endDate' });
+    }
+
+    // Validar que los keywords no se crucen con los de otra marca
+    const newKeywords = Array.isArray(targetKeywords) ? targetKeywords.map(k => k.toLowerCase()) : [];
+    if (newKeywords.length > 0) {
+      const existingSnap = await db.collection('nutrition_sponsors').get();
+      const conflicts = [];
+      existingSnap.docs.forEach(doc => {
+        const existingKws = (doc.data().targetKeywords || []).map(k => k.toLowerCase());
+        const overlap = newKeywords.filter(k => existingKws.includes(k));
+        if (overlap.length > 0) {
+          conflicts.push({ brand: doc.data().brandName, keywords: overlap });
+        }
+      });
+      if (conflicts.length > 0) {
+        const detail = conflicts.map(c => `"${c.brand}": ${c.keywords.join(', ')}`).join('; ');
+        return res.status(409).json({ success: false, message: `Los siguientes keywords ya están en uso por otra marca: ${detail}` });
+      }
+    }
+
+    // Resolver nombres de país y ciudad
+    let countryName = null, cityName = null;
+    const countryDoc = await db.collection('countries').doc(countryId).get();
+    if (!countryDoc.exists) return res.status(400).json({ success: false, message: 'País no encontrado' });
+    countryName = countryDoc.data().name || null;
+    if (cityId) {
+      const cityDoc = await db.collection('cities').doc(cityId).get();
+      if (cityDoc.exists) cityName = cityDoc.data().name || null;
+    }
+
+    const sponsorData = {
+      brandName,
+      logoUrl,
+      tagline: tagline || null,
+      accentColor: accentColor || null,
+      sectionTitle: sectionTitle || null,
+      sectionTagline: sectionTagline || null,
+      targetKeywords: Array.isArray(targetKeywords) ? targetKeywords : [],
+      ctaLabel,
+      ctaType,
+      ctaUrl: ctaUrl || null,
+      ctaProductId: ctaType === 'product' ? ctaProductId : null,
+      ctaArticleId: ctaType === 'article' ? ctaArticleId : null,
+      countryId,
+      countryName,
+      cityId: cityId || null,
+      cityName: cityName || null,
+      active: Boolean(active),
+      startDate: startDate || null,
+      endDate: endDate || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const sponsorRef = await db.collection('nutrition_sponsors').add(sponsorData);
+
+    res.json({ success: true, message: 'Sponsor creado', data: { id: sponsorRef.id, ...sponsorData } });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando sponsor de nutrición:', error);
+    res.status(500).json({ success: false, message: 'Error creando sponsor de nutrición', error: error.message });
+  }
+});
+
+app.put('/api/admin/nutrition/sponsors/:sponsorId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { sponsorId } = req.params;
+    const sponsorRef = db.collection('nutrition_sponsors').doc(sponsorId);
+    const sponsorDoc = await sponsorRef.get();
+
+    if (!sponsorDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Sponsor no encontrado' });
+    }
+
+    const {
+      brandName,
+      logoUrl,
+      tagline,
+      accentColor,
+      sectionTitle,
+      sectionTagline,
+      targetKeywords,
+      ctaLabel,
+      ctaType,
+      ctaUrl,
+      ctaProductId,
+      ctaArticleId,
+      active,
+      startDate,
+      endDate
+    } = req.body;
+
+    if (ctaType && !['external', 'product', 'article'].includes(ctaType)) {
+      return res.status(400).json({ success: false, message: 'ctaType inválido' });
+    }
+
+    // Validar fechas
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      return res.status(400).json({ success: false, message: 'startDate debe tener formato YYYY-MM-DD' });
+    }
+    if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      return res.status(400).json({ success: false, message: 'endDate debe tener formato YYYY-MM-DD' });
+    }
+    const effectiveStart = startDate !== undefined ? startDate : sponsorDoc.data().startDate;
+    const effectiveEnd = endDate !== undefined ? endDate : sponsorDoc.data().endDate;
+    if (effectiveStart && effectiveEnd && effectiveStart > effectiveEnd) {
+      return res.status(400).json({ success: false, message: 'startDate no puede ser posterior a endDate' });
+    }
+
+    // Validar que los keywords no se crucen con los de otra marca (excluyendo el sponsor actual)
+    const newKeywords = targetKeywords !== undefined ? (Array.isArray(targetKeywords) ? targetKeywords.map(k => k.toLowerCase()) : []) : null;
+    if (newKeywords !== null && newKeywords.length > 0) {
+      const existingSnap = await db.collection('nutrition_sponsors').get();
+      const conflicts = [];
+      existingSnap.docs.forEach(doc => {
+        if (doc.id === sponsorId) return; // Excluir el sponsor actual
+        const existingKws = (doc.data().targetKeywords || []).map(k => k.toLowerCase());
+        const overlap = newKeywords.filter(k => existingKws.includes(k));
+        if (overlap.length > 0) {
+          conflicts.push({ brand: doc.data().brandName, keywords: overlap });
+        }
+      });
+      if (conflicts.length > 0) {
+        const detail = conflicts.map(c => `"${c.brand}": ${c.keywords.join(', ')}`).join('; ');
+        return res.status(409).json({ success: false, message: `Los siguientes keywords ya están en uso por otra marca: ${detail}` });
+      }
+    }
+
+    const updateData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (brandName !== undefined) updateData.brandName = brandName;
+    if (logoUrl !== undefined) updateData.logoUrl = logoUrl;
+    if (tagline !== undefined) updateData.tagline = tagline;
+    if (accentColor !== undefined) updateData.accentColor = accentColor;
+    if (sectionTitle !== undefined) updateData.sectionTitle = sectionTitle;
+    if (sectionTagline !== undefined) updateData.sectionTagline = sectionTagline;
+    if (targetKeywords !== undefined) updateData.targetKeywords = Array.isArray(targetKeywords) ? targetKeywords : [];
+    if (ctaLabel !== undefined) updateData.ctaLabel = ctaLabel;
+    if (ctaType !== undefined) {
+      updateData.ctaType = ctaType;
+      if (ctaType === 'product') {
+        updateData.ctaProductId = ctaProductId || null;
+        updateData.ctaArticleId = null;
+      } else if (ctaType === 'article') {
+        updateData.ctaArticleId = ctaArticleId || null;
+        updateData.ctaProductId = null;
+      } else {
+        updateData.ctaProductId = null;
+        updateData.ctaArticleId = null;
+      }
+    }
+    if (ctaUrl !== undefined) updateData.ctaUrl = ctaUrl;
+    if (active !== undefined) updateData.active = Boolean(active);
+    if (startDate !== undefined) updateData.startDate = startDate || null;
+    if (endDate !== undefined) {
+      updateData.endDate = endDate || null;
+      // Si se actualiza endDate y ya pasó, desactivar automáticamente
+      if (endDate) {
+        const today = new Date().toISOString().split('T')[0];
+        if (endDate < today) updateData.active = false;
+      }
+    }
+
+    await sponsorRef.update(updateData);
+    const updatedDoc = await sponsorRef.get();
+
+    res.json({ success: true, message: 'Sponsor actualizado', data: { id: updatedDoc.id, ...updatedDoc.data() } });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando sponsor de nutrición:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando sponsor de nutrición', error: error.message });
+  }
+});
+
+app.delete('/api/admin/nutrition/sponsors/:sponsorId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { sponsorId } = req.params;
+    const sponsorRef = db.collection('nutrition_sponsors').doc(sponsorId);
+    const sponsorDoc = await sponsorRef.get();
+
+    if (!sponsorDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Sponsor no encontrado' });
+    }
+
+    await sponsorRef.delete();
+    res.json({ success: true, message: 'Sponsor eliminado' });
+
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando sponsor de nutrición:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando sponsor de nutrición', error: error.message });
+  }
+});
+
+// ============================================================================
+// ADMIN: Productos de sponsors de nutrición (nutrition_sponsor_products)
+// ============================================================================
+
+// Subir imagen de producto de sponsor
+app.post('/api/admin/nutrition/sponsor-products/upload-image', authenticateToken, isAdmin, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No se envió imagen' });
+    const bucket = admin.storage().bucket();
+    const fileName = `nutrition-sponsor-products/${Date.now()}_${req.file.originalname.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    const file = bucket.file(fileName);
+    await file.save(req.file.buffer, { metadata: { contentType: req.file.mimetype } });
+    await file.makePublic();
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    res.json({ success: true, url: publicUrl });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error subiendo imagen de sponsor product:', error);
+    res.status(500).json({ success: false, message: 'Error subiendo imagen', error: error.message });
+  }
+});
+
+// Listar productos de sponsors (admin) — opcionalmente filtrar por sponsorId
+app.get('/api/admin/nutrition/sponsor-products', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { sponsorId, page = 1, limit = 50, search } = req.query;
+    let query = db.collection('nutrition_sponsor_products');
+    if (sponsorId) query = query.where('sponsorId', '==', sponsorId);
+    const snapshot = await query.orderBy('createdAt', 'desc').get();
+
+    let products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), createdAt: doc.data().createdAt?.toDate?.()?.toISOString() || null, updatedAt: doc.data().updatedAt?.toDate?.()?.toISOString() || null }));
+
+    if (search) {
+      const q = search.toLowerCase();
+      products = products.filter(p => p.name?.toLowerCase().includes(q) || p.description?.toLowerCase().includes(q));
+    }
+
+    const total = products.length;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const paginated = products.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+    res.json({ success: true, data: paginated, pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error listando sponsor products:', error);
+    res.status(500).json({ success: false, message: 'Error listando productos de sponsor', error: error.message });
+  }
+});
+
+// Crear producto de sponsor
+app.post('/api/admin/nutrition/sponsor-products', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { sponsorId, name, description, imageUrl, externalUrl, price, active = true } = req.body;
+
+    const { countryId, cityId } = req.body;
+
+    if (!sponsorId || !name || !imageUrl) {
+      return res.status(400).json({ success: false, message: 'sponsorId, name e imageUrl son requeridos' });
+    }
+
+    if (!countryId) {
+      return res.status(400).json({ success: false, message: 'countryId es requerido' });
+    }
+
+    const sponsorDoc = await db.collection('nutrition_sponsors').doc(sponsorId).get();
+    if (!sponsorDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Sponsor no encontrado' });
+    }
+
+    let countryName = null, cityName = null;
+    const countryDoc = await db.collection('countries').doc(countryId).get();
+    if (!countryDoc.exists) return res.status(400).json({ success: false, message: 'País no encontrado' });
+    countryName = countryDoc.data().name || null;
+    if (cityId) {
+      const cityDoc = await db.collection('cities').doc(cityId).get();
+      if (cityDoc.exists) cityName = cityDoc.data().name || null;
+    }
+
+    const data = {
+      sponsorId,
+      sponsorName: sponsorDoc.data().brandName || null,
+      name,
+      description: description || null,
+      imageUrl,
+      externalUrl: externalUrl || null,
+      price: price != null ? Number(price) : null,
+      countryId,
+      countryName,
+      cityId: cityId || null,
+      cityName: cityName || null,
+      active: Boolean(active),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const ref = await db.collection('nutrition_sponsor_products').add(data);
+    res.status(201).json({ success: true, message: 'Producto creado', data: { id: ref.id, ...data } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error creando sponsor product:', error);
+    res.status(500).json({ success: false, message: 'Error creando producto de sponsor', error: error.message });
+  }
+});
+
+// Actualizar producto de sponsor
+app.put('/api/admin/nutrition/sponsor-products/:productId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const ref = db.collection('nutrition_sponsor_products').doc(productId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+
+    const { name, description, imageUrl, externalUrl, price, active, countryId, cityId } = req.body;
+    const update = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (name !== undefined) update.name = name;
+    if (description !== undefined) update.description = description;
+    if (imageUrl !== undefined) update.imageUrl = imageUrl;
+    if (externalUrl !== undefined) update.externalUrl = externalUrl;
+    if (price !== undefined) update.price = price != null ? Number(price) : null;
+    if (active !== undefined) update.active = Boolean(active);
+    if (countryId !== undefined) {
+      const cDoc = await db.collection('countries').doc(countryId).get();
+      update.countryId = countryId;
+      update.countryName = cDoc.exists ? cDoc.data().name || null : null;
+    }
+    if (cityId !== undefined) {
+      update.cityId = cityId || null;
+      if (cityId) {
+        const ciDoc = await db.collection('cities').doc(cityId).get();
+        update.cityName = ciDoc.exists ? ciDoc.data().name || null : null;
+      } else {
+        update.cityName = null;
+      }
+    }
+
+    await ref.update(update);
+    res.json({ success: true, message: 'Producto actualizado', data: { id: productId, ...doc.data(), ...update } });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error actualizando sponsor product:', error);
+    res.status(500).json({ success: false, message: 'Error actualizando producto de sponsor', error: error.message });
+  }
+});
+
+// Eliminar producto de sponsor
+app.delete('/api/admin/nutrition/sponsor-products/:productId', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const ref = db.collection('nutrition_sponsor_products').doc(productId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Producto no encontrado' });
+    await ref.delete();
+    res.json({ success: true, message: 'Producto eliminado' });
+  } catch (error) {
+    console.error('❌ [ADMIN] Error eliminando sponsor product:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando producto de sponsor', error: error.message });
   }
 });
 
@@ -35985,6 +36536,34 @@ app.get('/api/sleep/notifications/process-scheduled', (req, res) => {
   sleepNotificationsController.processScheduledNotifications(req, res);
 });
 
+
+// ============== CRON: DESACTIVAR SPONSORS VENCIDOS ==============
+app.get('/api/cron/deactivate-expired-sponsors', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const snapshot = await db.collection('nutrition_sponsors')
+      .where('active', '==', true)
+      .get();
+
+    const batch = db.batch();
+    let count = 0;
+    snapshot.docs.forEach(doc => {
+      const endDate = doc.data().endDate;
+      if (endDate && today > endDate) {
+        batch.update(doc.ref, { active: false, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        count++;
+      }
+    });
+
+    if (count > 0) await batch.commit();
+    console.log(`✅ [CRON] Sponsors vencidos desactivados: ${count}`);
+    res.json({ success: true, message: `${count} sponsors desactivados por vencimiento` });
+  } catch (error) {
+    console.error('❌ [CRON] Error desactivando sponsors vencidos:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============== CRON: PROCESAR NOTIFICACIONES DE MEDICAMENTOS ==============
 app.get('/api/cron/process-medication-notifications', async (req, res) => {
   try {
@@ -39296,11 +39875,57 @@ app.patch('/api/admin/professionals/:id/status', authenticateToken, isAdmin, asy
     if (!['pending', 'active', 'suspended'].includes(status)) {
       return res.status(400).json({ success: false, message: 'status inválido' });
     }
+    const proDoc = await db.collection('professionals').doc(id).get();
     await db.collection('professionals').doc(id).update({ status, updatedAt: new Date() });
+
+    // Si se suspende, limpiar perfil profesional del usuario
+    if (status === 'suspended' && proDoc.exists && proDoc.data().userId) {
+      const userId = proDoc.data().userId;
+      await db.collection('users').doc(userId).update({ professionalProfile: admin.firestore.FieldValue.delete(), updatedAt: new Date() });
+      await auth.setCustomUserClaims(userId, { professionalProfile: null });
+      console.log(`🔒 [PRO] Perfil profesional desactivado para user ${userId}`);
+    }
+
     res.json({ success: true, message: 'Estado actualizado', data: { id, status } });
   } catch (error) {
     console.error('❌ [PRO] Error actualizando estado:', error);
     res.status(500).json({ success: false, message: 'Error actualizando estado', error: error.message });
+  }
+});
+
+// Admin: eliminar profesional y revocar perfil profesional del usuario
+app.delete('/api/admin/professionals/:id', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const proDoc = await db.collection('professionals').doc(id).get();
+    if (!proDoc.exists) {
+      return res.status(404).json({ success: false, message: 'Profesional no encontrado' });
+    }
+    const proData = proDoc.data();
+
+    // Limpiar perfil profesional del usuario vinculado
+    if (proData.userId) {
+      await db.collection('users').doc(proData.userId).update({
+        professionalProfile: admin.firestore.FieldValue.delete(),
+        updatedAt: new Date()
+      });
+      await auth.setCustomUserClaims(proData.userId, { professionalProfile: null });
+      console.log(`🔒 [PRO] Perfil profesional revocado para user ${proData.userId}`);
+    }
+
+    // Desactivar recommendation vinculada
+    if (proData.recommendationId) {
+      await db.collection('recommendations').doc(proData.recommendationId).update({
+        isActive: false,
+        updatedAt: new Date()
+      });
+    }
+
+    await db.collection('professionals').doc(id).delete();
+    res.json({ success: true, message: 'Profesional eliminado y perfil revocado' });
+  } catch (error) {
+    console.error('❌ [PRO] Error eliminando profesional:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando profesional', error: error.message });
   }
 });
 
@@ -39762,10 +40387,9 @@ app.get('/api/professionals/me/recommendation', authenticateToken, async (req, r
       return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
     }
 
-    // Buscar el perfil profesional del usuario
+    // Buscar el perfil profesional del usuario (sin filtrar por status para que pueda editar aunque esté suspendido)
     const profSnapshot = await db.collection('professionals')
       .where('userId', '==', req.user.uid)
-      .where('status', '==', 'active')
       .limit(1)
       .get();
 
@@ -39773,8 +40397,22 @@ app.get('/api/professionals/me/recommendation', authenticateToken, async (req, r
       return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
     }
 
-    const profData = profSnapshot.docs[0].data();
-    const recommendationId = profData.recommendationId;
+    const profDoc = profSnapshot.docs[0];
+    const profData = profDoc.data();
+    let recommendationId = profData.recommendationId;
+
+    // Fallback: buscar recomendación que tenga professionalId apuntando a este profesional
+    if (!recommendationId) {
+      const recSnap = await db.collection('recommendations')
+        .where('professionalId', '==', profDoc.id)
+        .limit(1)
+        .get();
+      if (!recSnap.empty) {
+        recommendationId = recSnap.docs[0].id;
+        // Actualizar el profesional con el recommendationId encontrado
+        await db.collection('professionals').doc(profDoc.id).update({ recommendationId, updatedAt: new Date() });
+      }
+    }
 
     if (!recommendationId) {
       return res.status(404).json({ success: false, message: 'No tienes un recomendado asignado' });
@@ -39918,6 +40556,32 @@ app.put('/api/professionals/me/recommendation', authenticateToken, async (req, r
 // ==========================================
 
 // Cambiar o asignar recomendado a un profesional (Admin)
+// Admin: fix-link por email — vincula profesional con recomendado
+app.post('/api/admin/professionals/fix-link-by-email', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { email, recommendationId } = req.body;
+    if (!email || !recommendationId) return res.status(400).json({ success: false, message: 'email y recommendationId requeridos' });
+
+    const userRecord = await auth.getUserByEmail(email.trim());
+    const uid = userRecord.uid;
+
+    const profSnap = await db.collection('professionals').where('userId', '==', uid).limit(1).get();
+    if (profSnap.empty) return res.status(404).json({ success: false, message: 'Profesional no encontrado para ese usuario' });
+    const profDoc = profSnap.docs[0];
+
+    const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+    if (!recDoc.exists) return res.status(404).json({ success: false, message: 'Recomendación no encontrada' });
+
+    await db.collection('professionals').doc(profDoc.id).update({ recommendationId, updatedAt: new Date() });
+    await db.collection('recommendations').doc(recommendationId).update({ professionalId: profDoc.id, updatedAt: new Date() });
+
+    console.log(`✅ [ADMIN FIX] Vinculado professional ${profDoc.id} ↔ recommendation ${recommendationId} (user: ${uid})`);
+    res.json({ success: true, message: 'Vinculado correctamente', data: { uid, professionalId: profDoc.id, recommendationId } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 app.patch('/api/admin/professionals/:professionalId/recommendation', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { professionalId } = req.params;
@@ -40530,7 +41194,6 @@ app.delete('/api/professionals/me/products/:productId', authenticateToken, async
 async function getProfessionalForUser(uid) {
   const snap = await db.collection('professionals')
     .where('userId', '==', uid)
-    .where('status', '==', 'active')
     .limit(1)
     .get();
   if (snap.empty) return null;
@@ -40604,23 +41267,25 @@ app.get('/api/professionals/me/products-selector', authenticateToken, async (req
   }
 });
 
-// GET /api/professionals/me/product-categories — categorías de marketplace para vincular en banners
+// GET /api/professionals/me/product-categories — categorías del vendedor para vincular en banners
 app.get('/api/professionals/me/product-categories', authenticateToken, async (req, res) => {
   try {
     const prof = await getProfessionalForUser(req.user.uid);
     if (!prof) return res.status(404).json({ success: false, message: 'Perfil profesional no encontrado' });
 
-    const snap = await db.collection('marketplace_categories')
-      .where('isActive', '==', true)
-      .orderBy('order', 'asc')
+    const snap = await db.collection('vendor_categories')
+      .where('vendorId', '==', prof.userId)
       .get();
 
-    const categories = snap.docs.map(doc => ({
-      id: doc.id,
-      name: doc.data().name,
-      slug: doc.data().slug || null,
-      imageUrl: doc.data().imageUrl || null
-    }));
+    const categories = snap.docs
+      .filter(doc => doc.data().isActive !== false)
+      .map(doc => ({
+        id: doc.id,
+        name: doc.data().name,
+        slug: doc.data().slug || null,
+        imageUrl: doc.data().imageUrl || null,
+        productCount: doc.data().productCount || 0
+      }));
 
     res.json({ success: true, data: categories, total: categories.length });
   } catch (error) {
@@ -42644,6 +43309,99 @@ app.get('/api/recipes/:id', authenticateToken, async (req, res) => {
 // ============================================================================
 
 // Obtener recetas personalizadas para un niño según su edad
+// Helper: busca el sponsor más relevante para una receta según keywords
+// Aplica sponsors a una receta: reemplaza keywords en el texto y adjunta el sponsor con más match
+async function matchSponsorToRecipe(recipe, userId) {
+  try {
+    const userLocation = await getUserLocationFromProfile(userId);
+    const userCountryId = userLocation.countryId || null;
+    const userCityId = userLocation.cityId || null;
+
+    const sponsorsSnap = await db.collection('nutrition_sponsors').where('active', '==', true).get();
+    const todayStr = new Date().toISOString().split('T')[0];
+    let sponsors = sponsorsSnap.docs.filter(d => {
+      const sd = d.data().startDate;
+      const ed = d.data().endDate;
+      if (sd && todayStr < sd) return false;
+      if (ed && todayStr > ed) return false;
+      return true;
+    });
+    if (userCountryId) sponsors = sponsors.filter(d => !d.data().countryId || d.data().countryId === userCountryId);
+    if (userCityId) sponsors = sponsors.filter(d => !d.data().cityId || d.data().cityId === userCityId);
+    if (!sponsors.length) return { sponsor: null, recipe };
+
+    // Texto completo de la receta para buscar coincidencias
+    const recipeText = [
+      recipe.name || '',
+      recipe.description || '',
+      ...(recipe.ingredients || []).map(i => i.item || '')
+    ].join(' ').toLowerCase();
+
+    // Encontrar el sponsor con más keywords que coincidan
+    let bestMatch = null;
+    let bestScore = 0;
+    for (const doc of sponsors) {
+      const data = doc.data();
+      const kws = Array.isArray(data.targetKeywords) ? data.targetKeywords : [];
+      const score = kws.filter(kw => recipeText.includes(kw.toLowerCase())).length;
+      if (score > bestScore) { bestScore = score; bestMatch = { id: doc.id, ...data }; }
+    }
+    // Fallback: primer sponsor si ninguno hace match
+    if (!bestMatch) { const fd = sponsors[0].data(); bestMatch = { id: sponsors[0].id, ...fd }; }
+
+    const brandName = bestMatch.brandName || null;
+    const keywords = Array.isArray(bestMatch.targetKeywords) ? bestMatch.targetKeywords : [];
+
+    // Reemplazar keywords en el texto de la receta con el nombre de la marca
+    const rep = (text) => {
+      if (!text || !brandName) return text;
+      let r = text;
+      for (const kw of keywords) {
+        r = r.replace(new RegExp(kw, 'gi'), brandName);
+      }
+      return r;
+    };
+
+    const enrichedRecipe = {
+      ...recipe,
+      name: rep(recipe.name),
+      description: rep(recipe.description),
+      ingredients: (recipe.ingredients || []).map(i => ({ ...i, item: rep(i.item) })),
+      instructions: (recipe.instructions || []).map(step => rep(step)),
+      tips: (recipe.tips || []).map(tip => rep(tip))
+    };
+
+    // Cargar productos del sponsor
+    const productsSnap = await db.collection('nutrition_sponsor_products')
+      .where('sponsorId', '==', bestMatch.id)
+      .where('active', '==', true)
+      .get();
+    let productDocs = productsSnap.docs;
+    if (userCountryId) productDocs = productDocs.filter(d => !d.data().countryId || d.data().countryId === userCountryId);
+    if (userCityId) productDocs = productDocs.filter(d => !d.data().cityId || d.data().cityId === userCityId);
+
+    const sponsor = {
+      id: bestMatch.id,
+      brandName,
+      logoUrl: bestMatch.logoUrl || null,
+      tagline: bestMatch.tagline || null,
+      accentColor: bestMatch.accentColor || null,
+      sectionTitle: bestMatch.sectionTitle || null,
+      sectionTagline: bestMatch.sectionTagline || null,
+      ctaLabel: bestMatch.ctaLabel || null,
+      ctaType: bestMatch.ctaType || null,
+      ctaUrl: bestMatch.ctaUrl || null,
+      ctaArticleId: bestMatch.ctaArticleId || null,
+      products: productDocs.map(d => ({ id: d.id, name: d.data().name, description: d.data().description || null, imageUrl: d.data().imageUrl, externalUrl: d.data().externalUrl || null, price: d.data().price || null }))
+    };
+
+    return { sponsor, recipe: enrichedRecipe };
+  } catch (e) {
+    console.error('⚠️ [SPONSOR] Error:', e.message);
+    return { sponsor: null, recipe };
+  }
+}
+
 app.get('/api/children/:childId/nutrition/recipes', authenticateToken, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -42713,9 +43471,16 @@ app.get('/api/children/:childId/nutrition/recipes', authenticateToken, async (re
         // Si el caché tiene menos de 24 horas, usarlo
         if (cacheAge < 24) {
           console.log(`✅ [NUTRITION] Usando recetas en caché (${Math.round(cacheAge)}h)`);
+          // Enriquecer con sponsor
+          const recipesWithSponsor = await Promise.all(
+            (cachedData.recipes || []).map(async (recipe) => {
+              const { sponsor, recipe: enriched } = await matchSponsorToRecipe(recipe, uid);
+              return { ...enriched, sponsor };
+            })
+          );
           return res.json({
             success: true,
-            data: cachedData.recipes,
+            data: recipesWithSponsor,
             metadata: {
               childAge: {
                 months: ageMonths,
@@ -42771,6 +43536,19 @@ app.get('/api/children/:childId/nutrition/recipes', authenticateToken, async (re
 
     console.log(`🤖 [NUTRITION] Generando recetas con OpenAI...`);
 
+    // Obtener keywords de sponsors activos para incluirlos en el prompt
+    let sponsorIngredientHint = '';
+    try {
+      const userLoc = await getUserLocationFromProfile(uid);
+      const spSnap = await db.collection('nutrition_sponsors').where('active', '==', true).get();
+      let spDocs = spSnap.docs;
+      if (userLoc.countryId) spDocs = spDocs.filter(d => !d.data().countryId || d.data().countryId === userLoc.countryId);
+      const allKeywords = [...new Set(spDocs.flatMap(d => Array.isArray(d.data().targetKeywords) ? d.data().targetKeywords : []))];
+      if (allKeywords.length > 0) {
+        sponsorIngredientHint = `\n- Trata de incluir naturalmente alguno de estos ingredientes cuando sea apropiado para la edad: ${allKeywords.join(', ')}`;
+      }
+    } catch(e) { /* no bloquear generación */ }
+
     const prompt = `Eres un nutricionista pediátrico experto. Genera 2 recetas ${mealTypes.length === 1 ? 'de ' + mealTypeNames[mealTypes[0]] : 'para cada tipo de comida (desayuno, almuerzo, cena)'} apropiadas para:
 
 ${ageContext}
@@ -42779,7 +43557,7 @@ IMPORTANTE:
 - Recetas nutritivas, balanceadas y apropiadas para la edad
 - Ingredientes fáciles de conseguir
 - Preparación sencilla para padres ocupados
-- Incluir alérgenos comunes a evitar según la edad
+- Incluir alérgenos comunes a evitar según la edad${sponsorIngredientHint}
 
 Para CADA receta, devuelve un JSON con esta estructura EXACTA:
 {
@@ -42873,7 +43651,7 @@ Devuelve SOLO el JSON, sin texto adicional.`;
 
     console.log(`✅ [NUTRITION] ${enrichedRecipes.length} recetas generadas`);
 
-    // Guardar en caché
+    // Guardar en caché (sin sponsor — se calcula dinámico por usuario)
     try {
       await db.collection('nutritionCache').add({
         childId,
@@ -42885,12 +43663,19 @@ Devuelve SOLO el JSON, sin texto adicional.`;
       console.log(`💾 [NUTRITION] Recetas guardadas en caché`);
     } catch (cacheError) {
       console.error('⚠️ [NUTRITION] Error guardando en caché:', cacheError.message);
-      // No fallar si el caché falla
     }
+
+    // Enriquecer con sponsor
+    const recipesWithSponsor = await Promise.all(
+      enrichedRecipes.map(async (recipe) => {
+        const { sponsor, recipe: enriched } = await matchSponsorToRecipe(recipe, uid);
+        return { ...enriched, sponsor };
+      })
+    );
 
     res.json({
       success: true,
-      data: enrichedRecipes,
+      data: recipesWithSponsor,
       metadata: {
         childAge: {
           months: ageMonths,
@@ -46680,11 +47465,33 @@ app.post('/api/admin/service-requests/:requestId/approve', authenticateToken, is
     
     const requestData = requestDoc.data();
     
-    if (requestData.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: `La solicitud ya fue ${requestData.status === 'approved' ? 'aprobada' : 'rechazada'}`
-      });
+    // Si ya está aprobada y viene recommendationId, solo actualizar el vínculo
+    if (requestData.status === 'approved') {
+      if (!recommendationId) {
+        return res.status(400).json({ success: false, message: 'La solicitud ya fue aprobada' });
+      }
+      const profId = requestData.approvedProfessionalId;
+      if (!profId) {
+        return res.status(400).json({ success: false, message: 'No se encontró el profesional vinculado a esta solicitud' });
+      }
+      const recDoc = await db.collection('recommendations').doc(recommendationId).get();
+      if (!recDoc.exists) {
+        return res.status(404).json({ success: false, message: 'Recomendación no encontrada' });
+      }
+      // Desvincular recomendación anterior si existe
+      const profDoc = await db.collection('professionals').doc(profId).get();
+      if (profDoc.exists && profDoc.data().recommendationId) {
+        await db.collection('recommendations').doc(profDoc.data().recommendationId).update({ professionalId: null, updatedAt: new Date() });
+      }
+      await db.collection('professionals').doc(profId).update({ recommendationId, updatedAt: new Date() });
+      await db.collection('recommendations').doc(recommendationId).update({ professionalId: profId, updatedAt: new Date() });
+      await db.collection('serviceRequests').doc(requestId).update({ recommendationId, updatedAt: new Date() });
+      console.log(`✅ [ADMIN] Recomendado ${recommendationId} vinculado al profesional ${profId} (re-asignación)`);
+      return res.json({ success: true, message: 'Recomendado vinculado correctamente', data: { requestId, professionalId: profId, recommendationId } });
+    }
+
+    if (requestData.status === 'rejected') {
+      return res.status(400).json({ success: false, message: 'La solicitud fue rechazada' });
     }
     
     // Crear profesional/servicio en la colección professionals (perfil para productos, NO consultas)
@@ -46822,10 +47629,23 @@ app.post('/api/admin/service-requests/:requestId/reject', authenticateToken, isA
     
     const requestData = requestDoc.data();
     
-    if (requestData.status !== 'pending') {
+    // Si ya estaba aprobada, revocar perfil profesional
+    if (requestData.status === 'approved') {
+      if (requestData.userId) {
+        await db.collection('users').doc(requestData.userId).update({
+          professionalProfile: admin.firestore.FieldValue.delete(),
+          updatedAt: new Date()
+        });
+        await auth.setCustomUserClaims(requestData.userId, { professionalProfile: null });
+        console.log(`🔒 [ADMIN] Perfil profesional revocado al rechazar solicitud: ${requestData.userId}`);
+      }
+      if (requestData.approvedProfessionalId) {
+        await db.collection('professionals').doc(requestData.approvedProfessionalId).update({ status: 'suspended', updatedAt: new Date() });
+      }
+    } else if (requestData.status !== 'pending') {
       return res.status(400).json({
         success: false,
-        message: `La solicitud ya fue ${requestData.status === 'approved' ? 'aprobada' : 'rechazada'}`
+        message: `La solicitud ya fue rechazada`
       });
     }
     
