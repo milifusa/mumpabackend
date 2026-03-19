@@ -15218,7 +15218,7 @@ app.post('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req
       active = true,
       startDate,
       endDate,
-      recipes
+      recipeIds
     } = req.body;
 
     const { countryId, cityId } = req.body;
@@ -15308,36 +15308,21 @@ app.post('/api/admin/nutrition/sponsors', authenticateToken, isAdmin, async (req
 
     const sponsorRef = await db.collection('nutrition_sponsors').add(sponsorData);
 
-    // Crear recetas adjuntas si se proporcionaron
-    let createdRecipes = [];
-    if (Array.isArray(recipes) && recipes.length > 0) {
-      const recipePromises = recipes.map(r => {
-        const recipeData = {
+    // Vincular recetas existentes al sponsor si se proporcionaron IDs
+    const linkedRecipeIds = Array.isArray(recipeIds) ? recipeIds : [];
+    if (linkedRecipeIds.length > 0) {
+      const batch = db.batch();
+      linkedRecipeIds.forEach(rid => {
+        batch.update(db.collection('nutrition_sponsor_recipes').doc(rid), {
           sponsorId: sponsorRef.id,
           sponsorName: brandName,
-          name: r.name || '',
-          description: r.description || null,
-          mealType: ['breakfast','lunch','dinner','snack'].includes(r.mealType) ? r.mealType : 'lunch',
-          ageAppropriate: r.ageAppropriate !== false,
-          prepTime: parseInt(r.prepTime, 10) || 0,
-          cookTime: parseInt(r.cookTime, 10) || 0,
-          servings: parseInt(r.servings, 10) || 2,
-          difficulty: r.difficulty || 'fácil',
-          ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(i => typeof i === 'string' ? { item: i, quantity: '' } : { item: String(i.item || ''), quantity: String(i.quantity || '') }) : [],
-          instructions: Array.isArray(r.instructions) ? r.instructions : [],
-          nutritionalInfo: (r.nutritionalInfo && typeof r.nutritionalInfo === 'object') ? { calories: String(r.nutritionalInfo.calories || '-'), protein: String(r.nutritionalInfo.protein || '-'), carbs: String(r.nutritionalInfo.carbs || '-'), fat: String(r.nutritionalInfo.fat || '-') } : { calories: '-', protein: '-', carbs: '-', fat: '-' },
-          tips: Array.isArray(r.tips) ? r.tips : [],
-          allergens: Array.isArray(r.allergens) ? r.allergens : [],
-          active: r.active !== false,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        };
-        return db.collection('nutrition_sponsor_recipes').add(recipeData).then(ref => ({ id: ref.id, ...recipeData }));
+        });
       });
-      createdRecipes = await Promise.all(recipePromises);
+      await batch.commit();
     }
 
-    res.json({ success: true, message: 'Sponsor creado', data: { id: sponsorRef.id, ...sponsorData, recipes: createdRecipes } });
+    res.json({ success: true, message: 'Sponsor creado', data: { id: sponsorRef.id, ...sponsorData, recipeIds: linkedRecipeIds } });
 
   } catch (error) {
     console.error('❌ [ADMIN] Error creando sponsor de nutrición:', error);
@@ -15371,7 +15356,7 @@ app.put('/api/admin/nutrition/sponsors/:sponsorId', authenticateToken, isAdmin, 
       active,
       startDate,
       endDate,
-      recipes
+      recipeIds
     } = req.body;
 
     if (ctaType && !['external', 'product', 'article'].includes(ctaType)) {
@@ -15451,36 +15436,20 @@ app.put('/api/admin/nutrition/sponsors/:sponsorId', authenticateToken, isAdmin, 
     const updatedDoc = await sponsorRef.get();
     const updatedSponsorData = updatedDoc.data();
 
-    // Agregar recetas nuevas si se proporcionaron (no reemplaza las existentes)
-    let addedRecipes = [];
-    if (Array.isArray(recipes) && recipes.length > 0) {
-      const recipePromises = recipes.map(r => {
-        const recipeData = {
+    // Vincular recetas existentes al sponsor si se proporcionaron IDs
+    if (Array.isArray(recipeIds) && recipeIds.length > 0) {
+      const batch = db.batch();
+      recipeIds.forEach(rid => {
+        batch.update(db.collection('nutrition_sponsor_recipes').doc(rid), {
           sponsorId,
           sponsorName: updatedSponsorData.brandName || null,
-          name: r.name || '',
-          description: r.description || null,
-          mealType: ['breakfast','lunch','dinner','snack'].includes(r.mealType) ? r.mealType : 'lunch',
-          ageAppropriate: r.ageAppropriate !== false,
-          prepTime: parseInt(r.prepTime, 10) || 0,
-          cookTime: parseInt(r.cookTime, 10) || 0,
-          servings: parseInt(r.servings, 10) || 2,
-          difficulty: r.difficulty || 'fácil',
-          ingredients: Array.isArray(r.ingredients) ? r.ingredients.map(i => typeof i === 'string' ? { item: i, quantity: '' } : { item: String(i.item || ''), quantity: String(i.quantity || '') }) : [],
-          instructions: Array.isArray(r.instructions) ? r.instructions : [],
-          nutritionalInfo: (r.nutritionalInfo && typeof r.nutritionalInfo === 'object') ? { calories: String(r.nutritionalInfo.calories || '-'), protein: String(r.nutritionalInfo.protein || '-'), carbs: String(r.nutritionalInfo.carbs || '-'), fat: String(r.nutritionalInfo.fat || '-') } : { calories: '-', protein: '-', carbs: '-', fat: '-' },
-          tips: Array.isArray(r.tips) ? r.tips : [],
-          allergens: Array.isArray(r.allergens) ? r.allergens : [],
-          active: r.active !== false,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        };
-        return db.collection('nutrition_sponsor_recipes').add(recipeData).then(ref => ({ id: ref.id, ...recipeData }));
+        });
       });
-      addedRecipes = await Promise.all(recipePromises);
+      await batch.commit();
     }
 
-    res.json({ success: true, message: 'Sponsor actualizado', data: { id: updatedDoc.id, ...updatedSponsorData, addedRecipes } });
+    res.json({ success: true, message: 'Sponsor actualizado', data: { id: updatedDoc.id, ...updatedSponsorData } });
 
   } catch (error) {
     console.error('❌ [ADMIN] Error actualizando sponsor de nutrición:', error);
