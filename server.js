@@ -43359,13 +43359,12 @@ async function matchSponsorToRecipe(recipe, userId) {
     const keywords = Array.isArray(bestMatch.targetKeywords) ? bestMatch.targetKeywords : [];
 
     // Reemplazar keywords en el texto de la receta con el nombre de la marca
+    // Reemplazar todos los keywords en un solo pase para evitar doble sustitución
+    const escapedKws = keywords.map(kw => kw.replace(/[.*+?^${}()|[\]\]/g, '\\$&'));
+    const kwPattern = escapedKws.length > 0 ? new RegExp(escapedKws.join('|'), 'gi') : null;
     const rep = (text) => {
-      if (!text || !brandName) return text;
-      let r = text;
-      for (const kw of keywords) {
-        r = r.replace(new RegExp(kw, 'gi'), brandName);
-      }
-      return r;
+      if (!text || !brandName || !kwPattern) return text;
+      return text.replace(kwPattern, brandName);
     };
 
     const enrichedRecipe = {
