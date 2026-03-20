@@ -15060,6 +15060,140 @@ Usa principalmente los ingredientes que el usuario indicó. Puedes sugerir 1-2 i
   }
 });
 
+// ============================================================================
+// NUTRICIÓN - RECETAS FAVORITAS
+// Colección: nutrition_recipe_favorites
+// ============================================================================
+
+// Guardar receta como favorita
+app.post('/api/nutrition/recipes/favorites', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { recipeId, recipeData, source = 'ai-generated' } = req.body;
+
+    // Si viene recipeId (receta de sponsor), solo guardar la referencia
+    // Si viene recipeData completo (receta generada por IA), guardar el objeto
+    if (!recipeId && !recipeData) {
+      return res.status(400).json({ success: false, message: 'Debe enviar recipeId o recipeData' });
+    }
+
+    // Verificar si ya está en favoritos
+    const existing = await db.collection('nutrition_recipe_favorites')
+      .where('userId', '==', userId)
+      .where(recipeId ? 'recipeId' : 'recipeData.id', '==', recipeId || recipeData?.id)
+      .limit(1)
+      .get();
+
+    if (!existing.empty) {
+      return res.status(409).json({ success: false, message: 'La receta ya está en favoritos' });
+    }
+
+    const favoriteData = {
+      userId,
+      source: ['ai-generated', 'sponsor', 'from-ingredients'].includes(source) ? source : 'ai-generated',
+      recipeId: recipeId || null,
+      recipeData: recipeId ? null : (recipeData || null),
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const ref = await db.collection('nutrition_recipe_favorites').add(favoriteData);
+    res.json({ success: true, message: 'Receta guardada en favoritos', data: { id: ref.id, ...favoriteData } });
+  } catch (error) {
+    console.error('❌ [NUTRITION] Error guardando favorito:', error);
+    res.status(500).json({ success: false, message: 'Error guardando favorito', error: error.message });
+  }
+});
+
+// Obtener favoritos del usuario
+app.get('/api/nutrition/recipes/favorites', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { page = 1, limit = 20 } = req.query;
+
+    const snapshot = await db.collection('nutrition_recipe_favorites')
+      .where('userId', '==', userId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const favorites = snapshot.docs.map(doc => ({ favoriteId: doc.id, ...doc.data() }));
+
+    // Enriquecer los que tienen recipeId con los datos completos de la receta
+    const enriched = await Promise.all(favorites.map(async fav => {
+      if (fav.recipeId) {
+        const recDoc = await db.collection('nutrition_sponsor_recipes').doc(fav.recipeId).get();
+        return { ...fav, recipeData: recDoc.exists ? { id: recDoc.id, ...recDoc.data() } : null };
+      }
+      return fav;
+    }));
+
+    const total = enriched.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const paginated = enriched.slice(startIndex, startIndex + parseInt(limit));
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, totalPages: Math.ceil(total / parseInt(limit)) }
+    });
+  } catch (error) {
+    console.error('❌ [NUTRITION] Error obteniendo favoritos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo favoritos', error: error.message });
+  }
+});
+
+// Eliminar receta de favoritos
+app.delete('/api/nutrition/recipes/favorites/:favoriteId', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { favoriteId } = req.params;
+
+    const ref = db.collection('nutrition_recipe_favorites').doc(favoriteId);
+    const doc = await ref.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Favorito no encontrado' });
+    }
+    if (doc.data().userId !== userId) {
+      return res.status(403).json({ success: false, message: 'Sin permiso' });
+    }
+
+    await ref.delete();
+    res.json({ success: true, message: 'Receta eliminada de favoritos' });
+  } catch (error) {
+    console.error('❌ [NUTRITION] Error eliminando favorito:', error);
+    res.status(500).json({ success: false, message: 'Error eliminando favorito', error: error.message });
+  }
+});
+
+// Verificar si una receta está en favoritos
+app.get('/api/nutrition/recipes/favorites/check', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { recipeId, recipeDataId } = req.query;
+
+    if (!recipeId && !recipeDataId) {
+      return res.status(400).json({ success: false, message: 'Envía recipeId o recipeDataId' });
+    }
+
+    const field = recipeId ? 'recipeId' : 'recipeData.id';
+    const value = recipeId || recipeDataId;
+
+    const snapshot = await db.collection('nutrition_recipe_favorites')
+      .where('userId', '==', userId)
+      .where(field, '==', value)
+      .limit(1)
+      .get();
+
+    const isFavorite = !snapshot.empty;
+    const favoriteId = isFavorite ? snapshot.docs[0].id : null;
+
+    res.json({ success: true, data: { isFavorite, favoriteId } });
+  } catch (error) {
+    console.error('❌ [NUTRITION] Error verificando favorito:', error);
+    res.status(500).json({ success: false, message: 'Error verificando favorito', error: error.message });
+  }
+});
+
 // Sponsors activos de nutrición
 app.get('/api/nutrition/sponsors/active', authenticateToken, async (req, res) => {
   try {
