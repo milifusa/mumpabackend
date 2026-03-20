@@ -37458,6 +37458,364 @@ app.post('/api/medications/reminders/:reminderId/taken', authenticateToken, (req
 // ============================================================================
 const activitiesController = require('./controllers/activitiesController');
 
+
+// ============================================================================
+// ACTIVIDADES - ALTO IMPACTO
+// ============================================================================
+
+// 1. HISTORIAL DE ACTIVIDADES REALIZADAS
+// POST /api/children/:childId/activities/history — registrar actividad hecha
+app.post('/api/children/:childId/activities/history', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { activity, rating, notes } = req.body;
+
+    if (!activity || !activity.title) {
+      return res.status(400).json({ success: false, message: 'activity.title es requerido' });
+    }
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    const childData = childDoc.data();
+    if (childData.parentId !== uid && !(Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid))) {
+      return res.status(403).json({ success: false, message: 'Sin permiso para este hijo' });
+    }
+
+    const record = {
+      userId: uid,
+      childId,
+      activity: {
+        title: activity.title || '',
+        description: activity.description || null,
+        category: activity.category || null,
+        intensity: activity.intensity || null,
+        duration: activity.duration || null,
+        developmentBenefit: activity.developmentBenefit || null,
+        materials: Array.isArray(activity.materials) ? activity.materials : []
+      },
+      rating: rating !== undefined ? Math.min(5, Math.max(1, parseInt(rating))) : null,
+      notes: notes || null,
+      completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const ref = await db.collection('activity_history').add(record);
+    res.json({ success: true, message: 'Actividad registrada', data: { id: ref.id, ...record } });
+  } catch (error) {
+    console.error('❌ [ACTIVITIES] Error registrando historial:', error);
+    res.status(500).json({ success: false, message: 'Error registrando actividad', error: error.message });
+  }
+});
+
+// GET /api/children/:childId/activities/history — ver historial
+app.get('/api/children/:childId/activities/history', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+    const { page = 1, limit = 20, category } = req.query;
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    const childData = childDoc.data();
+    if (childData.parentId !== uid && !(Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid))) {
+      return res.status(403).json({ success: false, message: 'Sin permiso' });
+    }
+
+    let query = db.collection('activity_history')
+      .where('childId', '==', childId)
+      .orderBy('completedAt', 'desc');
+
+    const snapshot = await query.get();
+    let records = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    if (category) records = records.filter(r => r.activity?.category === category);
+
+    const total = records.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const paginated = records.slice(startIndex, startIndex + parseInt(limit));
+
+    res.json({
+      success: true,
+      data: paginated,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, totalPages: Math.ceil(total / parseInt(limit)) }
+    });
+  } catch (error) {
+    console.error('❌ [ACTIVITIES] Error obteniendo historial:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo historial', error: error.message });
+  }
+});
+
+// DELETE /api/activities/history/:historyId — eliminar registro
+app.delete('/api/activities/history/:historyId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const ref = db.collection('activity_history').doc(req.params.historyId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Registro no encontrado' });
+    if (doc.data().userId !== uid) return res.status(403).json({ success: false, message: 'Sin permiso' });
+    await ref.delete();
+    res.json({ success: true, message: 'Registro eliminado' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error eliminando registro', error: error.message });
+  }
+});
+
+// 2. ACTIVIDADES FAVORITAS
+// POST /api/activities/favorites — guardar actividad favorita
+app.post('/api/activities/favorites', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { activity, childId } = req.body;
+
+    if (!activity || !activity.title) {
+      return res.status(400).json({ success: false, message: 'activity.title es requerido' });
+    }
+
+    // Verificar duplicado por título
+    const existing = await db.collection('activity_favorites')
+      .where('userId', '==', uid)
+      .where('activity.title', '==', activity.title)
+      .limit(1).get();
+
+    if (!existing.empty) {
+      return res.status(409).json({ success: false, message: 'Esta actividad ya está en favoritos', data: { id: existing.docs[0].id } });
+    }
+
+    const record = {
+      userId: uid,
+      childId: childId || null,
+      activity: {
+        title: activity.title || '',
+        description: activity.description || null,
+        category: activity.category || null,
+        intensity: activity.intensity || null,
+        duration: activity.duration || null,
+        developmentBenefit: activity.developmentBenefit || null,
+        materials: Array.isArray(activity.materials) ? activity.materials : []
+      },
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    const ref = await db.collection('activity_favorites').add(record);
+    res.json({ success: true, message: 'Actividad guardada en favoritos', data: { id: ref.id, ...record } });
+  } catch (error) {
+    console.error('❌ [ACTIVITIES] Error guardando favorito:', error);
+    res.status(500).json({ success: false, message: 'Error guardando favorito', error: error.message });
+  }
+});
+
+// GET /api/activities/favorites — listar favoritos
+app.get('/api/activities/favorites', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { category } = req.query;
+
+    const snapshot = await db.collection('activity_favorites')
+      .where('userId', '==', uid)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    let records = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (category) records = records.filter(r => r.activity?.category === category);
+
+    res.json({ success: true, data: records, total: records.length });
+  } catch (error) {
+    console.error('❌ [ACTIVITIES] Error obteniendo favoritos:', error);
+    res.status(500).json({ success: false, message: 'Error obteniendo favoritos', error: error.message });
+  }
+});
+
+// DELETE /api/activities/favorites/:favoriteId — eliminar favorito
+app.delete('/api/activities/favorites/:favoriteId', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const ref = db.collection('activity_favorites').doc(req.params.favoriteId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ success: false, message: 'Favorito no encontrado' });
+    if (doc.data().userId !== uid) return res.status(403).json({ success: false, message: 'Sin permiso' });
+    await ref.delete();
+    res.json({ success: true, message: 'Favorito eliminado' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error eliminando favorito', error: error.message });
+  }
+});
+
+// Verificar si actividad está en favoritos
+app.get('/api/activities/favorites/check', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { title } = req.query;
+    if (!title) return res.status(400).json({ success: false, message: 'title es requerido' });
+
+    const snapshot = await db.collection('activity_favorites')
+      .where('userId', '==', uid)
+      .where('activity.title', '==', title)
+      .limit(1).get();
+
+    const isFavorite = !snapshot.empty;
+    res.json({ success: true, data: { isFavorite, favoriteId: isFavorite ? snapshot.docs[0].id : null } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Error verificando favorito', error: error.message });
+  }
+});
+
+// 3. ACTIVIDADES CON FILTROS POR CATEGORÍA
+// GET /api/activities/suggestions/:childId?category=motor&intensity=baja&maxDuration=15
+// (se añade filtro al endpoint existente via middleware — ver controlador)
+
+// 4. ALERTAS DE DESARROLLO — hitos nuevos por nueva etapa de edad
+// GET /api/children/:childId/milestones/age-alerts — hitos relevantes para la edad actual
+app.get('/api/children/:childId/milestones/age-alerts', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    const childData = childDoc.data();
+    if (childData.parentId !== uid && !(Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid))) {
+      return res.status(403).json({ success: false, message: 'Sin permiso' });
+    }
+
+    const birthDate = childData.birthDate?.toDate?.() || new Date(childData.birthDate);
+    const now = new Date();
+    const ageMonths = Math.floor((now - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+
+    // Hitos de esta semana (recién entró en el rango)
+    const milestonesSnap = await db.collection('milestones').where('isActive', '==', true).get();
+    const allMilestones = milestonesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Progreso actual
+    const progressSnap = await db.collection('children').doc(childId).collection('milestoneProgress').get();
+    const completedIds = new Set(progressSnap.docs.map(d => d.data().milestoneId));
+
+    // Hitos que SÍ corresponden a esta edad y NO están completados
+    const currentMilestones = allMilestones.filter(m =>
+      m.ageMonthsMin <= ageMonths && m.ageMonthsMax >= ageMonths && !completedIds.has(m.id)
+    );
+
+    // Hitos próximos (siguiente mes)
+    const upcomingMilestones = allMilestones.filter(m =>
+      m.ageMonthsMin > ageMonths && m.ageMonthsMin <= ageMonths + 2 && !completedIds.has(m.id)
+    );
+
+    // Hitos "tardíos" — ya pasó el rango y no se completaron
+    const lateMilestones = allMilestones.filter(m =>
+      m.ageMonthsMax < ageMonths && !completedIds.has(m.id)
+    ).slice(0, 5);
+
+    const hasAlerts = currentMilestones.length > 0 || lateMilestones.length > 0;
+
+    res.json({
+      success: true,
+      data: {
+        ageMonths,
+        ageDisplay: `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}`,
+        hasAlerts,
+        alerts: {
+          current: currentMilestones.map(m => ({
+            id: m.id, title: m.title, categoryId: m.categoryId,
+            ageRange: `${m.ageMonthsMin}-${m.ageMonthsMax} meses`,
+            tips: m.tips || null, imageUrl: m.imageUrl || null
+          })),
+          upcoming: upcomingMilestones.map(m => ({
+            id: m.id, title: m.title, categoryId: m.categoryId,
+            startsAt: `${m.ageMonthsMin} meses`
+          })),
+          late: lateMilestones.map(m => ({
+            id: m.id, title: m.title, categoryId: m.categoryId,
+            expectedBy: `${m.ageMonthsMax} meses`
+          }))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error generando alertas:', error);
+    res.status(500).json({ success: false, message: 'Error generando alertas', error: error.message });
+  }
+});
+
+// 5. DASHBOARD DE PROGRESO VISUAL (semáforo por categoría)
+// GET /api/children/:childId/milestones/dashboard
+app.get('/api/children/:childId/milestones/dashboard', authenticateToken, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { childId } = req.params;
+
+    const childDoc = await db.collection('children').doc(childId).get();
+    if (!childDoc.exists) return res.status(404).json({ success: false, message: 'Hijo no encontrado' });
+    const childData = childDoc.data();
+    if (childData.parentId !== uid && !(Array.isArray(childData.sharedWith) && childData.sharedWith.includes(uid))) {
+      return res.status(403).json({ success: false, message: 'Sin permiso' });
+    }
+
+    const birthDate = childData.birthDate?.toDate?.() || new Date(childData.birthDate);
+    const ageMonths = Math.floor((new Date() - birthDate) / (1000 * 60 * 60 * 24 * 30.44));
+
+    const [categoriesSnap, milestonesSnap, progressSnap] = await Promise.all([
+      db.collection('milestoneCategories').where('isActive', '==', true).orderBy('order').get(),
+      db.collection('milestones').where('isActive', '==', true).get(),
+      db.collection('children').doc(childId).collection('milestoneProgress').get()
+    ]);
+
+    const progressMap = {};
+    progressSnap.docs.forEach(d => { progressMap[d.data().milestoneId] = d.data(); });
+
+    const allMilestones = milestonesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const ageMilestones = allMilestones.filter(m => m.ageMonthsMin <= ageMonths + 1 && m.ageMonthsMax >= ageMonths - 2);
+
+    const categories = categoriesSnap.docs.map(catDoc => {
+      const cat = { id: catDoc.id, ...catDoc.data() };
+      const catMilestones = ageMilestones.filter(m => m.categoryId === cat.id);
+      const completed = catMilestones.filter(m => progressMap[m.id]?.completed).length;
+      const total = catMilestones.length;
+      const rate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+      // Semáforo: verde ≥80%, amarillo ≥50%, rojo <50%
+      const status = rate >= 80 ? 'green' : rate >= 50 ? 'yellow' : 'red';
+      const statusLabel = rate >= 80 ? 'En camino' : rate >= 50 ? 'En progreso' : 'Necesita atención';
+
+      return {
+        id: cat.id,
+        name: cat.name,
+        icon: cat.icon,
+        color: cat.color,
+        total,
+        completed,
+        completionRate: rate,
+        status,
+        statusLabel,
+        nextMilestone: catMilestones.find(m => !progressMap[m.id]?.completed)
+          ? { id: catMilestones.find(m => !progressMap[m.id]?.completed).id, title: catMilestones.find(m => !progressMap[m.id]?.completed).title }
+          : null
+      };
+    }).filter(c => c.total > 0);
+
+    const totalAll = ageMilestones.length;
+    const completedAll = ageMilestones.filter(m => progressMap[m.id]?.completed).length;
+    const overallRate = totalAll > 0 ? Math.round((completedAll / totalAll) * 100) : 0;
+
+    res.json({
+      success: true,
+      data: {
+        child: { id: childId, name: childData.name, ageMonths, ageDisplay: `${ageMonths} ${ageMonths === 1 ? 'mes' : 'meses'}` },
+        overall: {
+          total: totalAll,
+          completed: completedAll,
+          completionRate: overallRate,
+          status: overallRate >= 80 ? 'green' : overallRate >= 50 ? 'yellow' : 'red',
+          statusLabel: overallRate >= 80 ? 'Excelente progreso' : overallRate >= 50 ? 'Buen progreso' : 'Requiere seguimiento'
+        },
+        categories
+      }
+    });
+  } catch (error) {
+    console.error('❌ [MILESTONES] Error generando dashboard:', error);
+    res.status(500).json({ success: false, message: 'Error generando dashboard', error: error.message });
+  }
+});
+
 // Obtener sugerencias de actividades basadas en edad y ventanas de vigilia
 app.get('/api/activities/suggestions/:childId', authenticateToken, (req, res) => {
   activitiesController.getActivitySuggestions(req, res);
