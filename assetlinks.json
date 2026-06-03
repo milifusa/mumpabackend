@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.munpa.app",
+      "sha256_cert_fingerprints": [
+        "42:2F:C1:61:FC:AA:F6:DA:2D:AD:73:F3:49:12:B0:03:DA:4B:C8:3C:66:59:97:9A:8D:48:E8:F7:B7:00:CA:7E"
+      ]
+    }
+  }
+]

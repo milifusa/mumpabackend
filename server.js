@@ -253,6 +253,7 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const OpenAI = require('openai');
 const { format } = require('date-fns');
+const assetLinks = require('./assetlinks.json');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -384,6 +385,11 @@ const upload = multer({
 
 // Middleware para manejar peticiones OPTIONS (preflight)
 app.options('*', cors());
+
+// Android App Links / Digital Asset Links
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.json(assetLinks);
+});
 
 // Middleware de logging (ligero por defecto)
 app.use((req, res, next) => {
