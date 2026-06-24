@@ -1947,6 +1947,7 @@ app.post('/api/auth/signup', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+    const normalizedEmail = String(email || '').trim().toLowerCase();
 
     if (!auth) {
       return res.status(500).json({
@@ -1957,10 +1958,17 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    console.log('🔐 Intentando login para:', email);
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email y contraseña son requeridos'
+      });
+    }
+
+    console.log('🔐 Intentando login para:', normalizedEmail);
 
     // Buscar usuario por email
-    const userRecord = await auth.getUserByEmail(email);
+    const userRecord = await auth.getUserByEmail(normalizedEmail);
     console.log('✅ Usuario encontrado:', userRecord.uid);
     
     // Verificar que el usuario esté activo
@@ -2012,6 +2020,15 @@ app.post('/api/auth/login', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error en login:', error);
+    if (error.code === 'auth/user-not-found') {
+      return res.status(404).json({
+        success: false,
+        message: 'No existe una cuenta registrada con este email',
+        code: error.code,
+        firebaseStatus: firebaseStatus
+      });
+    }
+
     res.status(401).json({
       success: false,
       message: 'Credenciales inválidas',
@@ -51270,33 +51287,41 @@ app.get('/api/admin/consultations/stats', authenticateToken, isAdmin, async (req
       // Por tipo
       stats.byType[data.type] = (stats.byType[data.type] || 0) + 1;
       
+      const request = data.request || {};
+      const pricing = data.consultationPricing || data.pricing || {};
+      const payment = data.payment || {};
+      const schedule = data.schedule || {};
+      const finalPrice = Number(pricing.finalPrice) || 0;
+      const isFree = pricing.isFree === true || finalPrice === 0;
+
       // Por urgencia
-      stats.byUrgency[data.request.urgency] = (stats.byUrgency[data.request.urgency] || 0) + 1;
+      const urgency = request.urgency || 'normal';
+      stats.byUrgency[urgency] = (stats.byUrgency[urgency] || 0) + 1;
       
       // Revenue
-      if (data.consultationPricing.isFree) {
+      if (isFree) {
         stats.revenue.free += 1;
-      } else if (data.payment.status === 'completed') {
-        stats.revenue.completed += data.consultationPricing.finalPrice;
+      } else if (payment.status === 'completed') {
+        stats.revenue.completed += finalPrice;
       } else {
-        stats.revenue.pending += data.consultationPricing.finalPrice;
+        stats.revenue.pending += finalPrice;
       }
-      stats.revenue.total += data.consultationPricing.finalPrice || 0;
+      stats.revenue.total += finalPrice;
       
       // Cupones
-      if (data.consultationPricing.couponCode) {
+      if (pricing.couponCode) {
         stats.couponsUsed++;
       }
       
       // Fotos
-      if (data.request.photos && data.request.photos.length > 0) {
+      if (Array.isArray(request.photos) && request.photos.length > 0) {
         stats.consultationsWithPhotos++;
       }
       
       // Tiempo de respuesta
-      if (data.schedule.acceptedAt && data.schedule.requestedAt) {
-        const requested = data.schedule.requestedAt.toDate?.() || new Date(data.schedule.requestedAt);
-        const accepted = data.schedule.acceptedAt.toDate?.() || new Date(data.schedule.acceptedAt);
+      if (schedule.acceptedAt && schedule.requestedAt) {
+        const requested = schedule.requestedAt.toDate?.() || new Date(schedule.requestedAt);
+        const accepted = schedule.acceptedAt.toDate?.() || new Date(schedule.acceptedAt);
         const responseTime = (accepted - requested) / (1000 * 60); // minutos
         totalResponseTime += responseTime;
         consultationsWithResponse++;
@@ -51362,7 +51387,10 @@ app.get('/api/admin/consultations/revenue', authenticateToken, isAdmin, async (r
     
     snapshot.forEach(doc => {
       const data = doc.data();
-      const paidAt = data.payment.paidAt?.toDate?.() || new Date(data.payment.paidAt);
+      const payment = data.payment || {};
+      const pricing = data.consultationPricing || data.pricing || {};
+      const paidAt = payment.paidAt?.toDate?.() || new Date(payment.paidAt);
+      const finalPrice = Number(pricing.finalPrice) || 0;
       
       let periodKey;
       if (period === 'day') {
@@ -51381,11 +51409,11 @@ app.get('/api/admin/consultations/revenue', authenticateToken, isAdmin, async (r
         };
       }
       
-      revenueByPeriod[periodKey].revenue += data.consultationPricing.finalPrice;
+      revenueByPeriod[periodKey].revenue += finalPrice;
       revenueByPeriod[periodKey].consultations += 1;
       revenueByPeriod[periodKey].byType[data.type] += 1;
       
-      totalRevenue += data.consultationPricing.finalPrice;
+      totalRevenue += finalPrice;
       totalConsultations += 1;
     });
     
@@ -51500,10 +51528,13 @@ app.get('/api/admin/consultations', authenticateToken, isAdmin, async (req, res)
     };
     
     consultations.forEach(c => {
+      const pricing = c.consultationPricing || c.pricing || {};
+      const payment = c.payment || {};
+
       stats.byStatus[c.status] = (stats.byStatus[c.status] || 0) + 1;
       stats.byType[c.type] = (stats.byType[c.type] || 0) + 1;
-      if (c.payment.status === 'completed') {
-        stats.totalRevenue += c.pricing.finalPrice || 0;
+      if (payment.status === 'completed') {
+        stats.totalRevenue += Number(pricing.finalPrice) || 0;
       }
     });
     
@@ -51959,4 +51990,3 @@ app.use('*', (req, res) => {
     method: req.method
   });
 });
-

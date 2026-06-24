@@ -64,13 +64,21 @@ const authController = {
   async login(req, res) {
     try {
       const { email, password } = req.body;
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+
+      if (!normalizedEmail || !password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email y contraseña son requeridos'
+        });
+      }
 
       // Firebase Auth maneja la autenticación automáticamente
       // En un entorno real, el cliente debería usar Firebase Auth SDK
       // Este endpoint es principalmente para verificar credenciales
       
       // Buscar usuario por email
-      const userRecord = await auth.getUserByEmail(email);
+      const userRecord = await auth.getUserByEmail(normalizedEmail);
       
       // Verificar que el usuario esté activo
       const userDoc = await db.collection('users').doc(userRecord.uid).get();
@@ -98,6 +106,14 @@ const authController = {
 
     } catch (error) {
       console.error('Error en login:', error);
+      if (error.code === 'auth/user-not-found') {
+        return res.status(404).json({
+          success: false,
+          message: 'No existe una cuenta registrada con este email',
+          code: error.code
+        });
+      }
+
       res.status(401).json({
         success: false,
         message: 'Credenciales inválidas',
