@@ -32,6 +32,10 @@
     {
       "path": "/api/cron/deactivate-expired-sponsors",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/monthly-registration-reminder",
+      "schedule": "0 9 15 * *"
     }
   ]
 }

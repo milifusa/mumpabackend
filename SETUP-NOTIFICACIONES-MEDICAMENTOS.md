@@ -51,9 +51,13 @@ El cron se ejecutará automáticamente. Verifica los logs:
 ### Opción 2: Probar manualmente (Recomendado)
 
 ```bash
-# Reemplaza YOUR_SECRET_HERE con tu CRON_SECRET
+# Opción 1: Authorization Bearer (Vercel lo envía así)
 curl -X GET https://api.munpa.online/api/cron/process-medication-notifications \
   -H "Authorization: Bearer YOUR_SECRET_HERE"
+
+# Opción 2: x-cron-secret (alternativa si Bearer falla)
+curl -X GET https://api.munpa.online/api/cron/process-medication-notifications \
+  -H "x-cron-secret: YOUR_SECRET_HERE"
 ```
 
 **Respuesta esperada:**
@@ -159,6 +163,12 @@ firebase firestore:indexes:create \
 
 ### Problema: No se envían notificaciones
 
+**Probar push manualmente:**
+```bash
+curl -X POST https://api.munpa.online/api/notifications/test-medication-reminder \
+  -H "Authorization: Bearer TU_TOKEN"
+```
+
 **Verificar:**
 
 1. ¿Usuario tiene tokens FCM?
@@ -167,13 +177,17 @@ firebase firestore:indexes:create \
    // Campo: fcmTokens (array)
    ```
 
-2. ¿La notificación está en la ventana?
+2. ¿La app usa Expo? Los tokens pueden ser `ExponentPushToken[...]` y el cron ya los soporta (usa `sendPushNotification` que envía Expo + FCM).
+
+3. ¿La notificación está en la ventana?
    ```javascript
    // Ventana: 2 horas atrás hasta 20 min adelante
    scheduledFor >= (now - 2 horas) && scheduledFor <= (now + 20 min)
    ```
 
-3. ¿El campo `sent` es `false`?
+4. ¿El campo `sent` es `false`?
+
+5. ¿Timezone correcto? Si no se envía `timezone` al crear el medicamento, se usa `America/Guayaquil`. Si el medicamento se creó antes con UTC, las horas estarían mal. Edita el medicamento y guarda de nuevo para recalcular con el timezone correcto.
 
 ### Problema: Notificaciones duplicadas
 

@@ -35207,16 +35207,23 @@ const DAILY_REMINDERS = {
   vaccines: [
     { ageMonths: 0, daysBefore: 3, title: '💉 Vacunas del recién nacido', message: 'En unos días tu bebé debe recibir BCG y Hepatitis B. ¡No olvides agendar tu cita!' },
     { ageMonths: 2, daysBefore: 7, title: '💉 Vacunas de los 2 meses', message: 'La próxima semana tu bebé debe recibir: Pentavalente, Rotavirus y Neumocócica. ¡Recuerda agendar!' },
+    { ageMonths: 2, daysBefore: 5, title: '💉 Vacunas en 5 días', message: 'En 5 días tu bebé debe recibir: Pentavalente, Rotavirus y Neumocócica. ¡Agenda tu cita!' },
     { ageMonths: 2, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca vacunas de los 2 meses! Pentavalente, Rotavirus y Neumocócica.' },
     { ageMonths: 4, daysBefore: 7, title: '💉 Vacunas de los 4 meses', message: 'La próxima semana tu bebé debe recibir su segunda dosis de: Pentavalente, Rotavirus y Neumocócica.' },
+    { ageMonths: 4, daysBefore: 5, title: '💉 Vacunas en 5 días', message: 'En 5 días: segunda dosis de Pentavalente, Rotavirus y Neumocócica. ¡Confirma tu cita!' },
     { ageMonths: 4, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca la segunda dosis de vacunas! Pentavalente, Rotavirus y Neumocócica.' },
     { ageMonths: 6, daysBefore: 7, title: '💉 Vacunas de los 6 meses', message: 'La próxima semana: tercera dosis de Pentavalente y segunda de Rotavirus. ¡Agenda tu cita!' },
+    { ageMonths: 6, daysBefore: 5, title: '💉 Vacunas en 5 días', message: 'En 5 días: tercera dosis de Pentavalente y segunda de Rotavirus. ¡Confirma tu cita!' },
     { ageMonths: 6, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca vacunas! Tercera dosis de Pentavalente y segunda de Rotavirus.' },
     { ageMonths: 7, daysBefore: 7, title: '💉 Vacuna de Influenza', message: 'La próxima semana tu bebé debe recibir la primera dosis de Influenza estacional.' },
+    { ageMonths: 7, daysBefore: 5, title: '💉 Vacuna de Influenza en 5 días', message: 'En 5 días toca la primera dosis de Influenza estacional. ¡Agenda tu cita!' },
     { ageMonths: 12, daysBefore: 7, title: '💉 Vacunas del primer año', message: 'La próxima semana: SRP (Sarampión, Rubéola, Parotiditis) y Neumocócica de refuerzo. ¡Un año de protección!' },
+    { ageMonths: 12, daysBefore: 5, title: '💉 Vacunas del año en 5 días', message: 'En 5 días: SRP y Neumocócica de refuerzo. ¡Confirma tu cita del primer año!' },
     { ageMonths: 12, daysBefore: 1, title: '💉 Vacunas mañana', message: '¡Mañana toca vacunas del año! SRP y Neumocócica de refuerzo.' },
     { ageMonths: 18, daysBefore: 7, title: '💉 Vacunas de los 18 meses', message: 'La próxima semana: Pentavalente de refuerzo. ¡Mantén al día su cartilla!' },
-    { ageMonths: 24, daysBefore: 7, title: '💉 Vacunas de los 2 años', message: 'La próxima semana tu pequeño debe recibir su refuerzo anual de Influenza.' }
+    { ageMonths: 18, daysBefore: 5, title: '💉 Vacunas de los 18 meses en 5 días', message: 'En 5 días: Pentavalente de refuerzo. ¡Confirma tu cita!' },
+    { ageMonths: 24, daysBefore: 7, title: '💉 Vacunas de los 2 años', message: 'La próxima semana tu pequeño debe recibir su refuerzo anual de Influenza.' },
+    { ageMonths: 24, daysBefore: 5, title: '💉 Vacunas de los 2 años en 5 días', message: 'En 5 días: refuerzo anual de Influenza. ¡Agenda tu cita!' }
   ],
   
   // Consejos según edad
@@ -35400,17 +35407,18 @@ function getDailyReminder(ageInMonths, ageInDays) {
 const getUpcomingScheduledVaccineReminder = async (childId, childName) => {
   if (!db) return null;
   const now = new Date();
-  const targetDate = new Date(now);
-  targetDate.setDate(targetDate.getDate() + 7);
-  const startOfDay = new Date(targetDate);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(targetDate);
-  endOfDay.setHours(23, 59, 59, 999);
+  // Buscar vacunas en los próximos 1-5 días
+  const startDate = new Date(now);
+  startDate.setDate(startDate.getDate() + 1);
+  startDate.setHours(0, 0, 0, 0);
+  const endDate = new Date(now);
+  endDate.setDate(endDate.getDate() + 5);
+  endDate.setHours(23, 59, 59, 999);
 
   const snapshot = await db.collection('children').doc(childId)
     .collection('vaccines')
-    .where('scheduledDate', '>=', startOfDay)
-    .where('scheduledDate', '<=', endOfDay)
+    .where('scheduledDate', '>=', startDate)
+    .where('scheduledDate', '<=', endDate)
     .orderBy('scheduledDate', 'asc')
     .limit(1)
     .get();
@@ -35420,11 +35428,19 @@ const getUpcomingScheduledVaccineReminder = async (childId, childName) => {
   if (vaccineDoc.status === 'applied') return null;
   const name = vaccineDoc.name || 'vacuna';
   const childLabel = childName || 'tu bebé';
+  const scheduledDate = vaccineDoc.scheduledDate?.toDate?.() || new Date(vaccineDoc.scheduledDate);
+  const daysUntil = Math.round((scheduledDate - now) / (1000 * 60 * 60 * 24));
+  let message;
+  if (daysUntil <= 1) {
+    message = `Mañana ${childLabel} tiene la vacuna ${name}. No olvides la cita.`;
+  } else {
+    message = `En ${daysUntil} días ${childLabel} tiene la vacuna ${name}. ¡No olvides la cita!`;
+  }
   return {
     type: 'vaccine',
     priority: 1,
     title: '💉 Vacuna próxima',
-    message: `En una semana ${childLabel} tiene la vacuna ${name}.`
+    message
   };
 };
 
@@ -44724,6 +44740,136 @@ app.post('/api/test/send-birthday-email', async (req, res) => {
   } catch (error) {
     console.error('❌ [TEST] Error:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// ============================================================================
+// CRON: RECORDATORIO MENSUAL DEL 15 - Registrar medicamentos/vacunas
+// Si el usuario no ha registrado medicamentos este mes, recordarle el día 15
+// ============================================================================
+app.get('/api/cron/monthly-registration-reminder', authenticateCron, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: 'Base de datos no disponible' });
+    }
+
+    console.log('📅 [MONTHLY-15] Iniciando recordatorio mensual del día 15...');
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    let sent = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    const usersSnapshot = await db.collection('users').get();
+    console.log(`👥 [MONTHLY-15] Total usuarios: ${usersSnapshot.docs.length}`);
+
+    for (const userDoc of usersSnapshot.docs) {
+      try {
+        const userData = userDoc.data();
+        const userId = userDoc.id;
+
+        // Saltar si no tiene tokens FCM
+        if (!userData.fcmTokens || userData.fcmTokens.length === 0) {
+          skipped++;
+          continue;
+        }
+
+        // Verificar si tiene hijos
+        const childrenSnapshot = await db.collection('children')
+          .where('parentId', '==', userId)
+          .limit(1)
+          .get();
+
+        if (childrenSnapshot.empty) {
+          skipped++;
+          continue;
+        }
+
+        const childName = childrenSnapshot.docs[0].data().name || 'tu bebé';
+
+        // Verificar si ya registró medicamentos este mes
+        const medThisMonthSnapshot = await db.collection('medications')
+          .where('userId', '==', userId)
+          .where('createdAt', '>=', startOfMonth)
+          .limit(1)
+          .get();
+
+        if (!medThisMonthSnapshot.empty) {
+          // Ya registró este mes, no molestar
+          skipped++;
+          continue;
+        }
+
+        // Verificar si ya se envió este recordatorio este mes
+        const reminderSentSnapshot = await db.collection('notifications')
+          .where('userId', '==', userId)
+          .where('type', '==', 'monthly_registration_reminder')
+          .where('createdAt', '>=', startOfMonth)
+          .limit(1)
+          .get();
+
+        if (!reminderSentSnapshot.empty) {
+          skipped++;
+          continue;
+        }
+
+        // Verificar si tiene vacunas pendientes este mes
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        const childId = childrenSnapshot.docs[0].id;
+        const vaccineSnapshot = await db.collection('children').doc(childId)
+          .collection('vaccines')
+          .where('scheduledDate', '>=', now)
+          .where('scheduledDate', '<=', endOfMonth)
+          .where('status', '!=', 'applied')
+          .limit(1)
+          .get();
+
+        let title, body;
+        if (!vaccineSnapshot.empty) {
+          const vaccineName = vaccineSnapshot.docs[0].data().name || 'vacuna';
+          title = '💉 Vacuna pendiente este mes';
+          body = `${childName} tiene la vacuna ${vaccineName} pendiente este mes. ¡No olvides registrarla!`;
+        } else {
+          title = '📋 Recordatorio mensual';
+          body = `¿${childName} ha tomado algún medicamento este mes? Regístralo para hacer seguimiento en Mumpa.`;
+        }
+
+        // Enviar push
+        await sendPushNotification(
+          userData.fcmTokens,
+          { title, body },
+          { type: 'monthly_registration_reminder', screen: 'MedicationScreen' }
+        );
+
+        // Guardar en notifications
+        await db.collection('notifications').add({
+          userId,
+          type: 'monthly_registration_reminder',
+          title,
+          body,
+          data: { screen: 'MedicationScreen' },
+          read: false,
+          createdAt: new Date()
+        });
+
+        sent++;
+        console.log(`✅ [MONTHLY-15] Recordatorio enviado a ${userId} (${childName})`);
+
+      } catch (userErr) {
+        errors++;
+        console.error(`❌ [MONTHLY-15] Error con usuario ${userDoc.id}:`, userErr.message);
+      }
+    }
+
+    console.log(`📊 [MONTHLY-15] Resultado: ${sent} enviados, ${skipped} omitidos, ${errors} errores`);
+    res.json({ success: true, data: { sent, skipped, errors } });
+
+  } catch (error) {
+    console.error('❌ [MONTHLY-15] Error general:', error);
+    res.status(500).json({ success: false, message: 'Error en recordatorio mensual', error: error.message });
   }
 });
 
