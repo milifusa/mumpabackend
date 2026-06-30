@@ -130,7 +130,7 @@ firebase firestore:indexes:create \
 ### Comportamiento:
 
 1. **Usuario crea medicamento** → Se programan recordatorios con `sent: false`
-2. **Cada 10 minutos** → Cron busca notificaciones en ventana de 20 min
+2. **Cada 10 minutos** → Cron busca notificaciones desde 2 horas atrás hasta 20 minutos adelante
 3. **Si falta < 2 min** → Se envía push y se marca `sent: true`
 4. **Después de enviar** → Se programa follow-up automático (2 horas después)
 
@@ -167,9 +167,10 @@ firebase firestore:indexes:create \
    // Campo: fcmTokens (array)
    ```
 
-2. ¿La notificación está en el futuro?
+2. ¿La notificación está en la ventana?
    ```javascript
-   scheduledFor >= now
+   // Ventana: 2 horas atrás hasta 20 min adelante
+   scheduledFor >= (now - 2 horas) && scheduledFor <= (now + 20 min)
    ```
 
 3. ¿El campo `sent` es `false`?

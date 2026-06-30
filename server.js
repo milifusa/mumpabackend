@@ -37000,23 +37000,29 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
     
     const now = new Date();
     const twentyMinutesFromNow = new Date(now.getTime() + 20 * 60 * 1000);
-    const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
     
-    // Buscar notificaciones pendientes: desde 30 min atrás (recuperar vencidas) hasta 20 min adelante
+    // Buscar por rango de fecha y filtrar sent en memoria:
+    // - evita depender de un índice compuesto
+    // - recupera recordatorios antiguos que fueron creados sin sent: false
     const pendingSnapshot = await db
       .collection('scheduled_med_notifications')
-      .where('scheduledFor', '>=', thirtyMinutesAgo)
+      .where('scheduledFor', '>=', twoHoursAgo)
       .where('scheduledFor', '<=', twentyMinutesFromNow)
-      .where('sent', '==', false)
-      .limit(100)
+      .orderBy('scheduledFor', 'asc')
+      .limit(500)
       .get();
 
-    console.log(`📦 [CRON] Encontradas ${pendingSnapshot.size} notificaciones pendientes`);
+    const pendingDocs = pendingSnapshot.docs.filter(doc => doc.data().sent !== true);
+
+    console.log(`📦 [CRON] Encontradas ${pendingDocs.length}/${pendingSnapshot.size} notificaciones pendientes`);
 
     let sentCount = 0;
     let scheduledCount = 0;
     let errorCount = 0;
     let noTokensCount = 0;
+    let retryCount = 0;
+    let skippedSentCount = pendingSnapshot.size - pendingDocs.length;
 
     // Helper para programar follow-up
     const scheduleMedicationFollowup = async (notif, originalDocId) => {
@@ -37067,14 +37073,27 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
       }
     };
 
-    for (const doc of pendingSnapshot.docs) {
+    for (const doc of pendingDocs) {
       try {
         const notif = doc.data();
-        const scheduledTime = notif.scheduledFor.toDate();
+        const scheduledTime = notif.scheduledFor?.toDate
+          ? notif.scheduledFor.toDate()
+          : new Date(notif.scheduledFor);
+        if (Number.isNaN(scheduledTime.getTime())) {
+          console.log(`⚠️ [CRON] scheduledFor inválido en ${doc.id}`);
+          await doc.ref.update({
+            sent: true,
+            failed: true,
+            failReason: 'Invalid scheduledFor',
+            sentAt: now
+          });
+          errorCount++;
+          continue;
+        }
         const minutesUntil = (scheduledTime - now) / 1000 / 60;
 
         // Si falta menos de 2 minutos, enviar ahora
-        if (minutesUntil < 2) {
+        if (minutesUntil <= 2) {
           console.log(`📤 [CRON] Enviando notificación (falta ${minutesUntil.toFixed(1)} min): ${notif.title}`);
           
           // Obtener tokens FCM del usuario
@@ -37097,10 +37116,9 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
           if (tokens.length === 0) {
             console.log(`⚠️ [CRON] Usuario sin tokens FCM: ${notif.userId}`);
             await doc.ref.update({ 
-              sent: true, 
               failed: true, 
               failReason: 'No FCM tokens',
-              sentAt: now
+              lastAttemptAt: now
             });
             noTokensCount++;
             continue;
@@ -37109,15 +37127,37 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
           // Enviar notificación push (usa sendPushNotification para soportar Expo + FCM)
           try {
             const data = Object.entries(notif.data || {}).reduce((acc, [key, val]) => {
-              acc[key] = String(val);
+              if (val !== undefined && val !== null) acc[key] = String(val);
               return acc;
             }, {});
-            const pushResult = await sendPushNotification(tokens, {
-              title: notif.title,
-              body: notif.body
-            }, data);
+            const pushResult = await sleepNotificationsController.sendPushToTokens({
+              tokens,
+              notification: {
+                title: notif.title,
+                body: notif.body
+              },
+              data,
+              android: {
+                priority: 'high',
+                notification: {
+                  sound: 'default',
+                  channelId: 'medication_reminders'
+                }
+              },
+              apns: {
+                headers: {
+                  'apns-priority': '10'
+                },
+                payload: {
+                  aps: {
+                    sound: 'default',
+                    badge: 1
+                  }
+                }
+              }
+            });
 
-            if (!pushResult.success || (pushResult.successCount || 0) === 0) {
+            if ((pushResult.successCount || 0) === 0) {
               throw new Error(pushResult.message || pushResult.error || 'No se pudo enviar a ningún dispositivo');
             }
 
@@ -37139,7 +37179,9 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
             await doc.ref.update({ 
               sent: true, 
               sentAt: now,
-              sentToTokens: deliveredCount
+              sentToTokens: deliveredCount,
+              failed: false,
+              failReason: null
             });
             
             sentCount++;
@@ -37153,11 +37195,11 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
           } catch (sendError) {
             console.error('❌ [CRON] Error enviando push:', sendError);
             await doc.ref.update({ 
-              sent: true, 
               failed: true, 
               failReason: sendError.message,
-              sentAt: now
+              lastAttemptAt: now
             });
+            retryCount++;
             errorCount++;
           }
 
@@ -37179,11 +37221,14 @@ app.get('/api/cron/process-medication-notifications', async (req, res) => {
       scheduled: scheduledCount,
       errors: errorCount,
       noTokens: noTokensCount,
-      total: pendingSnapshot.size,
+      retryable: retryCount,
+      skippedAlreadySent: skippedSentCount,
+      total: pendingDocs.length,
+      scanned: pendingSnapshot.size,
       timestamp: now.toISOString()
     };
 
-    console.log(`✅ [CRON] Resumen: ${sentCount} enviados, ${scheduledCount} programados, ${errorCount} errores, ${noTokensCount} sin tokens`);
+    console.log(`✅ [CRON] Resumen: ${sentCount} enviados, ${scheduledCount} programados, ${errorCount} errores, ${noTokensCount} sin tokens, ${retryCount} reintentables`);
 
     res.json(summary);
 
@@ -37215,6 +37260,17 @@ app.get('/api/cron/recipe-daily-reminder', async (req, res) => {
     if (authHeader !== `Bearer ${expectedSecret}` && cronSecretHeader !== expectedSecret) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
+
+    console.log('⏸️ [CRON] Push diario de recetas desactivado');
+    return res.json({
+      success: true,
+      disabled: true,
+      message: 'Push diario de recetas desactivado',
+      sent: 0,
+      skipped: 0,
+      errors: 0,
+      timestamp: new Date().toISOString()
+    });
 
     if (!db || !openai) {
       return res.status(503).json({

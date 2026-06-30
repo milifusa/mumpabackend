@@ -231,6 +231,5 @@ Notas:
 - `times` debe ser siempre `HH:mm` (24h).
 - `scheduleDays` controla cuántos días se programan por adelantado (1–60).
 - Para intervalos, usa `repeatEveryMinutes` + `startTime` + `endTime` (mínimo 5 min).
-- El cron existente procesa recordatorios cada ejecución:  
-  `/api/sleep/notifications/process-scheduled`
-
+- El cron de medicamentos procesa recordatorios cada 10 minutos:
+  `/api/cron/process-medication-notifications`
